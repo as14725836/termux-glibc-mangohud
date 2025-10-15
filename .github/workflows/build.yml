@@ -46,8 +46,6 @@ jobs:
             --prefix=/data/data/com.termux/files/usr/glibc \
             --libdir=lib \
             -Dbuildtype=release \
-            -Dgles=true \
-            -Dvulkan=true \
             -Dglibcxx_asserts=false \
             -Duse_system_spdlog=disabled \
             -Dappend_libdir_mangohud=true \
