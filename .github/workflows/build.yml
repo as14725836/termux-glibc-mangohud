@@ -19,7 +19,6 @@ jobs:
         id: get_version
         run: |
           cd MangoHud || git clone https://github.com/flightlessmango/MangoHud.git && cd MangoHud
-          # 尝试用 git 标签，如果没有就用最近提交的短哈希
           if git describe --tags --abbrev=0 >/dev/null 2>&1; then
             VERSION=$(git describe --tags --abbrev=0)
           else
@@ -45,6 +44,36 @@ jobs:
           pip install --upgrade meson ninja mako
           meson --version
           ninja --version
+
+      - name: 应用 CPU 频率 fallback 补丁
+        run: |
+          cd MangoHud
+          SRC_FILE="src/sysinfo/linux.cpp"
+          if [ -f "$SRC_FILE" ]; then
+            echo "🔧 修改 $SRC_FILE 以增加 /proc/cpuinfo fallback..."
+            sed -i '/int get_cpu_freq(int core)/,/return freq;/c\
+int get_cpu_freq(int core) {\
+    int freq = 0;\
+    std::ifstream file("/sys/devices/system/cpu/cpu" + std::to_string(core) + "/cpufreq/scaling_cur_freq");\
+    if(file.is_open()) { file >> freq; freq /= 1000; return freq; }\
+    std::ifstream cpuinfo("/proc/cpuinfo");\
+    if(cpuinfo.is_open()) {\
+        std::string line;\
+        int core_index=-1;\
+        while(std::getline(cpuinfo, line)) {\
+            if(line.find("processor") != std::string::npos) core_index++;\
+            if(core_index==core && line.find("cpu MHz") != std::string::npos) {\
+                std::istringstream iss(line.substr(line.find(":")+1));\
+                iss >> freq;\
+                return freq;\
+            }\
+        }\
+    }\
+    return 0;\
+}' "$SRC_FILE"
+          else
+            echo "⚠️ 找不到 $SRC_FILE"
+          fi
 
       - name: 构建 MangoHud（Termux glibc 版本）
         run: |
