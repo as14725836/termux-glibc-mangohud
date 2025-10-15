@@ -7,6 +7,9 @@ on:
 permissions:
   contents: write  # 允许 GITHUB_TOKEN 创建 Release
 
+env:
+  VERSION: v0.9.0  # 🔹 必须指定一个版本号
+
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
@@ -23,7 +26,7 @@ jobs:
             pkg-config meson libx11-dev \
             libxext-dev libxrandr-dev libxinerama-dev \
             libxdamage-dev libxfixes-dev libdrm-dev \
-            libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+            libgl1-mesa-dev libwayland-dev libxkbcommon-dev patchelf
 
       - name: 升级 Meson 和 Ninja 到最新版本
         run: |
