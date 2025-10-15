@@ -18,23 +18,16 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
-      - name: 更新软件源并检查依赖包是否存在
-        run: |
-          sudo apt-get update
-          echo "🔍 检查关键依赖包是否存在..."
-          apt show libgl1-mesa-dev || echo "⚠️ libgl1-mesa-dev 未找到"
-          apt show libx11-dev || echo "⚠️ libx11-dev 未找到"
-          apt show libxext-dev || echo "⚠️ libxext-dev 未找到"
-          apt show libdrm-dev || echo "⚠️ libdrm-dev 未找到"
-
       - name: 安装基础依赖
         run: |
+          sudo apt-get update
           sudo apt-get install -y \
             build-essential glslang-tools python3-pip git \
             pkg-config meson libx11-dev \
             libxext-dev libxrandr-dev libxinerama-dev \
             libxdamage-dev libxfixes-dev libdrm-dev \
             libgl1-mesa-dev libwayland-dev libxkbcommon-dev patchelf
+          sudo apt show libgl1-mesa-dev libx11-dev libxext-dev libdrm-dev
 
       - name: 升级 Meson 和 Ninja 到最新版本
         run: |
@@ -64,7 +57,7 @@ jobs:
             -Dwith_xnvctrl=disabled \
             -Dwith_x11=enabled \
             -Dwith_wayland=enabled \
-            -Dwith_dbus=disabled \
+            -Dwith_dbus=enabled \
             -Dloglevel=info \
             -Dmangoapp=false \
             -Dmangohudctl=false \
@@ -74,6 +67,17 @@ jobs:
             -Dwith_fex=false
           ninja -C build -j$(nproc)
           ninja -C build install
+
+      - name: 修正 MangoHud 安装路径中的 \$LIB
+        run: |
+          ROOT=/data/data/com.termux/files/usr/glibc
+          if [ -f "$ROOT/bin/mangohud" ]; then
+            echo "🔧 修正 $ROOT/bin/mangohud 中的路径..."
+            sed -i 's|/\\$LIB|/lib|g' "$ROOT/bin/mangohud"
+            grep MANGOHUD_LIB_NAME "$ROOT/bin/mangohud" || true
+          else
+            echo "⚠️ 找不到 $ROOT/bin/mangohud 文件"
+          fi
 
       - name: 对 glibc 下的 ELF 可执行文件应用 patchelf
         run: |
