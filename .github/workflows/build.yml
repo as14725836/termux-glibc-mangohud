@@ -23,7 +23,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential glslang-tools python3-pip git \
-            pkg-config meson libx11-dev \
+            pkg-config meson libdbus-1-dev libx11-dev \
             libxext-dev libxrandr-dev libxinerama-dev \
             libxdamage-dev libxfixes-dev libdrm-dev \
             libgl1-mesa-dev libwayland-dev libxkbcommon-dev patchelf
