@@ -18,9 +18,17 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
-      - name: 安装基础依赖
+      - name: 更新软件源并检查依赖包是否存在
         run: |
           sudo apt-get update
+          echo "🔍 检查关键依赖包是否存在..."
+          apt show libgl1-mesa-dev || echo "⚠️ libgl1-mesa-dev 未找到"
+          apt show libx11-dev || echo "⚠️ libx11-dev 未找到"
+          apt show libxext-dev || echo "⚠️ libxext-dev 未找到"
+          apt show libdrm-dev || echo "⚠️ libdrm-dev 未找到"
+
+      - name: 安装基础依赖
+        run: |
           sudo apt-get install -y \
             build-essential glslang-tools python3-pip git \
             pkg-config meson libx11-dev \
@@ -51,7 +59,6 @@ jobs:
             -Dbuildtype=release \
             -Dglibcxx_asserts=false \
             -Duse_system_spdlog=disabled \
-            -Dappend_libdir_mangohud=true \
             -Dinclude_doc=false \
             -Dwith_nvml=disabled \
             -Dwith_xnvctrl=disabled \
