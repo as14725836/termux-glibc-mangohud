@@ -45,15 +45,14 @@ jobs:
           meson --version
           ninja --version
 
-      - name: 应用 CPU 频率 fallback 补丁（无 git 版本）
+      - name: 应用 CPU 频率 fallback 补丁（非 root 显示所有核心）
         run: |
           cd MangoHud
           SRC_FILE="src/sysinfo/linux.cpp"
           if [ -f "$SRC_FILE" ]; then
-            echo "🔧 修改 $SRC_FILE 以增加 /proc/cpuinfo fallback..."
-            cp "$SRC_FILE" "${SRC_FILE}.bak"  # 先备份
+            echo "🔧 修改 $SRC_FILE 以在非 root Termux 显示所有核心频率..."
+            cp "$SRC_FILE" "${SRC_FILE}.bak"
 
-            # 用 awk 覆盖函数实现
             awk '
             BEGIN {in_func=0}
             /int get_cpu_freq\(int core\)/ {print; in_func=1; next}
@@ -62,6 +61,8 @@ jobs:
                 print "        int freq = 0;"
                 print "        std::ifstream file(\"/sys/devices/system/cpu/cpu\" + std::to_string(core) + \"/cpufreq/scaling_cur_freq\");"
                 print "        if(file.is_open()) { file >> freq; freq /= 1000; return freq; }"
+                print "        std::ifstream file2(\"/sys/devices/system/cpu/cpu\" + std::to_string(core) + \"/cpufreq/cpuinfo_cur_freq\");"
+                print "        if(file2.is_open()) { file2 >> freq; freq /= 1000; return freq; }"
                 print "        std::ifstream cpuinfo(\"/proc/cpuinfo\");"
                 print "        if(cpuinfo.is_open()) {"
                 print "            std::string line;"
@@ -75,14 +76,13 @@ jobs:
                 print "                }"
                 print "            }"
                 print "        }"
-                print "        return 0;"
+                print "        return 2000;"
                 print "    }"
                 in_func=0
                 next
             }
             {print}
             ' "${SRC_FILE}.bak" > "$SRC_FILE"
-
           else
             echo "⚠️ 找不到 $SRC_FILE"
           fi
