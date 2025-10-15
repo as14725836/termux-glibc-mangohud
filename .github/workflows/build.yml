@@ -45,32 +45,44 @@ jobs:
           meson --version
           ninja --version
 
-      - name: 应用 CPU 频率 fallback 补丁
+      - name: 应用 CPU 频率 fallback 补丁（无 git 版本）
         run: |
           cd MangoHud
           SRC_FILE="src/sysinfo/linux.cpp"
           if [ -f "$SRC_FILE" ]; then
             echo "🔧 修改 $SRC_FILE 以增加 /proc/cpuinfo fallback..."
-            sed -i '/int get_cpu_freq(int core)/,/return freq;/c\
-int get_cpu_freq(int core) {\
-    int freq = 0;\
-    std::ifstream file("/sys/devices/system/cpu/cpu" + std::to_string(core) + "/cpufreq/scaling_cur_freq");\
-    if(file.is_open()) { file >> freq; freq /= 1000; return freq; }\
-    std::ifstream cpuinfo("/proc/cpuinfo");\
-    if(cpuinfo.is_open()) {\
-        std::string line;\
-        int core_index=-1;\
-        while(std::getline(cpuinfo, line)) {\
-            if(line.find("processor") != std::string::npos) core_index++;\
-            if(core_index==core && line.find("cpu MHz") != std::string::npos) {\
-                std::istringstream iss(line.substr(line.find(":")+1));\
-                iss >> freq;\
-                return freq;\
-            }\
-        }\
-    }\
-    return 0;\
-}' "$SRC_FILE"
+            cp "$SRC_FILE" "${SRC_FILE}.bak"  # 先备份
+
+            # 用 awk 覆盖函数实现
+            awk '
+            BEGIN {in_func=0}
+            /int get_cpu_freq\(int core\)/ {print; in_func=1; next}
+            in_func && /return freq;/ {
+                print "    {"
+                print "        int freq = 0;"
+                print "        std::ifstream file(\"/sys/devices/system/cpu/cpu\" + std::to_string(core) + \"/cpufreq/scaling_cur_freq\");"
+                print "        if(file.is_open()) { file >> freq; freq /= 1000; return freq; }"
+                print "        std::ifstream cpuinfo(\"/proc/cpuinfo\");"
+                print "        if(cpuinfo.is_open()) {"
+                print "            std::string line;"
+                print "            int core_index=-1;"
+                print "            while(std::getline(cpuinfo, line)) {"
+                print "                if(line.find(\"processor\") != std::string::npos) core_index++;"
+                print "                if(core_index==core && line.find(\"cpu MHz\") != std::string::npos) {"
+                print "                    std::istringstream iss(line.substr(line.find(\":\")+1));"
+                print "                    iss >> freq;"
+                print "                    return freq;"
+                print "                }"
+                print "            }"
+                print "        }"
+                print "        return 0;"
+                print "    }"
+                in_func=0
+                next
+            }
+            {print}
+            ' "${SRC_FILE}.bak" > "$SRC_FILE"
+
           else
             echo "⚠️ 找不到 $SRC_FILE"
           fi
