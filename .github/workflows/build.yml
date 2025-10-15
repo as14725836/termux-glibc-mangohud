@@ -36,12 +36,6 @@ jobs:
         run: |
           git clone https://github.com/flightlessmango/MangoHud.git
           cd MangoHud
-          git checkout main
-          git pull origin main
-          DEV_HASH=$(git rev-parse --short HEAD)
-          VERSION="dev-${DEV_HASH}"
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-          echo "使用开发版本: ${VERSION}"
 
       - name: 构建 MangoHud（Termux glibc 版本）
         run: |
