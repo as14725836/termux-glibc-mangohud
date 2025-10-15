@@ -7,9 +7,6 @@ on:
 permissions:
   contents: write  # 允许 GITHUB_TOKEN 创建 Release
 
-env:
-  VERSION: v0.9.0  # 🔹 必须指定一个版本号
-
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
@@ -17,6 +14,19 @@ jobs:
     steps:
       - name: 检出源码
         uses: actions/checkout@v4
+
+      - name: 获取源码版本号
+        id: get_version
+        run: |
+          cd MangoHud || git clone https://github.com/flightlessmango/MangoHud.git && cd MangoHud
+          # 尝试用 git 标签，如果没有就用最近提交的短哈希
+          if git describe --tags --abbrev=0 >/dev/null 2>&1; then
+            VERSION=$(git describe --tags --abbrev=0)
+          else
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "Detected version: $VERSION"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: 安装基础依赖
         run: |
@@ -35,11 +45,6 @@ jobs:
           pip install --upgrade meson ninja mako
           meson --version
           ninja --version
-
-      - name: 克隆 MangoHud 源码（开发版本）
-        run: |
-          git clone https://github.com/flightlessmango/MangoHud.git
-          cd MangoHud
 
       - name: 构建 MangoHud（Termux glibc 版本）
         run: |
@@ -105,7 +110,7 @@ jobs:
       - name: 打包整个 glibc 文件夹（开发版本）
         run: |
           cd /data/data/com.termux/files/usr
-          TAR_NAME="termux-glibc-mangohud-${VERSION}.tar.gz"
+          TAR_NAME="termux-glibc-mangohud-${{ env.VERSION }}.tar.gz"
           tar -czvf /home/runner/${TAR_NAME} glibc
           echo "TAR_NAME=${TAR_NAME}" >> $GITHUB_ENV
 
