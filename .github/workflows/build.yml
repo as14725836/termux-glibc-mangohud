@@ -1,0 +1,125 @@
+name: Build MangoHud (aarch64, Termux glibc)
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: write  # 允许 GITHUB_TOKEN 创建 Release
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 安装基础依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential python3-pip git \
+            pkg-config meson ninja libx11-dev \
+            libxext-dev libxrandr-dev libxinerama-dev \
+            libxdamage-dev libxfixes-dev libdrm-dev \
+            libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+
+      - name: 升级 Meson 和 Ninja 到最新版本
+        run: |
+          pip install --upgrade pip
+          pip install --upgrade meson ninja
+          meson --version
+          ninja --version
+
+      - name: 克隆 MangoHud 源码（开发版本）
+        run: |
+          git clone https://github.com/flightlessmango/MangoHud.git
+          cd MangoHud
+          git checkout main
+          git pull origin main
+          DEV_HASH=$(git rev-parse --short HEAD)
+          VERSION="dev-${DEV_HASH}"
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "使用开发版本: ${VERSION}"
+
+      - name: 构建 MangoHud（Termux glibc 版本）
+        run: |
+          cd MangoHud
+          sudo mkdir -p /data/data/com.termux/files/usr/glibc
+          sudo chmod -R 777 /data
+          meson setup build \
+            --prefix=/data/data/com.termux/files/usr/glibc \
+            --libdir=lib \
+            -Dbuildtype=release \
+            -Dgles=true \
+            -Dvulkan=true \
+            -Dglibcxx_asserts=false \
+            -Duse_system_spdlog=disabled \
+            -Dappend_libdir_mangohud=true \
+            -Dinclude_doc=false \
+            -Dwith_nvml=disabled \
+            -Dwith_xnvctrl=disabled \
+            -Dwith_x11=enabled \
+            -Dwith_wayland=enabled \
+            -Dwith_dbus=disabled \
+            -Dloglevel=info \
+            -Dmangoapp=false \
+            -Dmangohudctl=false \
+            -Dtests=disabled \
+            -Dmangoplot=enabled \
+            -Ddynamic_string_tokens=true \
+            -Dwith_fex=false
+          ninja -C build -j$(nproc)
+          ninja -C build install
+
+      - name: 对 glibc 下的 ELF 可执行文件应用 patchelf
+        run: |
+          INTERP=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1
+          ROOT=/data/data/com.termux/files/usr/glibc
+          echo "✅ 修补 bin 目录..."
+          if [ -d "$ROOT/bin" ]; then
+            for f in "$ROOT/bin/"*; do
+              if file "$f" | grep -q 'ELF.*executable'; then
+                echo "Patching: $f"
+                patchelf --set-interpreter "$INTERP" "$f" || true
+              fi
+            done
+          fi
+          echo "✅ 修补 lib 目录..."
+          if [ -d "$ROOT/lib" ]; then
+            for f in "$ROOT/lib/"*; do
+              if file "$f" | grep -q 'ELF'; then
+                echo "Patching: $f"
+                patchelf --set-interpreter "$INTERP" "$f" || true
+              fi
+            done
+          fi
+
+      - name: 打包整个 glibc 文件夹（开发版本）
+        run: |
+          cd /data/data/com.termux/files/usr
+          TAR_NAME="termux-glibc-mangohud-${VERSION}.tar.gz"
+          tar -czvf /home/runner/${TAR_NAME} glibc
+          echo "TAR_NAME=${TAR_NAME}" >> $GITHUB_ENV
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.TAR_NAME }}
+          path: /home/runner/${{ env.TAR_NAME }}
+
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: MangoHud ${{ env.VERSION }} (aarch64, Termux glibc)
+          files: /home/runner/${{ env.TAR_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 输出完成信息
+        run: |
+          echo "✅ MangoHud 构建完成"
+          echo "📦 输出文件: ${{ env.TAR_NAME }}"
+          echo "🔖 版本号: ${{ env.VERSION }}"
