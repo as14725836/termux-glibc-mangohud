@@ -159,6 +159,7 @@ jobs:
             -Dbuildtype=release \
             -Dwith_x11=enabled \
             -Dwith_wayland=enabled \
+            -Dwith_xnvctrl=disabled \
             -Dwith_dbus=enabled \
             -Dmangoplot=enabled \
             -Dmangoapp=false \
