@@ -13,7 +13,7 @@ env:
   LAST_COMMIT_FILE: last_mangohud_commit.txt
 
 jobs:
-  build:
+  build: 
     runs-on: ubuntu-24.04-arm
 
     steps:
@@ -54,13 +54,16 @@ jobs:
           echo "没有新提交，终止 workflow。"
           exit 0
 
-      # 🧭 克隆 MangoHud 源码并获取信息
-      - name: 获取源码信息
-        id: get_version
+      # 🧭 克隆 MangoHud 源码
+      - name: Clone MangoHud source
         run: |
           git clone --depth=1 $REPO_URL MangoHud
+
+      # 🔖 获取源码版本号
+      - name: 获取源码版本号
+        id: get_version
+        run: |
           cd MangoHud
-          git fetch --tags
           if git describe --tags --abbrev=0 >/dev/null 2>&1; then
             VERSION=$(git describe --tags --abbrev=0)
           else
@@ -194,9 +197,10 @@ jobs:
       - name: 打包构建产物
         run: |
           cd /data/data/com.termux/files/usr
-          TAR_NAME="termux-glibc-mangohud-${{ env.VERSION }}.tar.gz"
+          TAR_NAME="termux-glibc-mangohud-${{ env.VERSION }}-aarch64.tar.gz"
           tar -czvf /home/runner/$TAR_NAME glibc
           echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
+          echo "📦 打包完成: $TAR_NAME"
 
       # ☁️ 上传产物
       - name: 上传构建产物
@@ -212,12 +216,33 @@ jobs:
           tag_name: ${{ env.VERSION }}
           name: MangoHud ${{ env.VERSION }} (aarch64, Termux glibc)
           body: |
-            ✅ **构建完成！**
-            🔖 版本号: `${{ env.VERSION }}`
-            👤 作者: `${{ env.AUTHOR }}`
-            🧬 提交: `${{ env.COMMIT }}`
-            🕓 构建时间: `${{ env.BUILD_TIME }}`
-            📦 文件名: `${{ env.TAR_NAME }}`
+            ## MangoHud ${{ env.VERSION }} for Termux (aarch64 glibc)
+
+            ### 📋 构建信息
+            - **版本号**: `${{ env.VERSION }}`
+            - **架构**: aarch64
+            - **环境**: Termux glibc
+            - **作者**: `${{ env.AUTHOR }}`
+            - **提交**: `${{ env.COMMIT }}`
+            - **构建时间**: `${{ env.BUILD_TIME }}`
+
+            ### 📦 文件信息
+            - **文件名**: `${{ env.TAR_NAME }}`
+            - **包含**: 完整的 MangoHud 安装文件
+
+            ### 🛠️ 构建特性
+            - ✅ 支持 X11
+            - ✅ 支持 Wayland
+            - ✅ 支持 DBus
+            - ✅ 启用 MangoPlot
+            - ✅ Termux 无 root CPU 频率检测补丁
+            - ❌ 禁用 XNVCtrl (NVIDIA GPU 统计)
+            - ❌ 禁用 MangoApp
+            - ❌ 禁用 MangoHudctl
+
+            ### 📥 使用方法
+            1. 下载并解压到 Termux 的 `/data/data/com.termux/files/usr/` 目录
+            2. 运行 `mangohud` 命令使用
           files: /home/runner/${{ env.TAR_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
