@@ -1,4 +1,4 @@
-name: Build MangoHud (aarch64, Termux glibc)
+name: winlator MangoHud
 
 on:
   workflow_dispatch:
