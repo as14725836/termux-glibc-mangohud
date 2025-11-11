@@ -79,13 +79,9 @@ jobs:
           pip install --upgrade pip
           pip install --upgrade meson ninja mako
 
-      - name: 应用 Termux 无 root CPU 补丁
-        run: |
-          cd MangoHud
-          SRC_FILE="src/sysinfo/linux.cpp"
-          cp "$SRC_FILE" "${SRC_FILE}.bak"
-          # 补丁略，保持你原来的内容
-          echo "补丁已跳过（保持原样）"
+      # ✅ 已移除补丁步骤
+      - name: 跳过补丁
+        run: echo "No patches applied (clean upstream build)."
 
       - name: 构建 MangoHud
         run: |
@@ -107,17 +103,13 @@ jobs:
           ninja -C build -j$(nproc)
           ninja -C build install
 
+      # ✅ 修复：解释器路径使用 Winlator glibc 正确位置
       - name: 修补 ELF 可执行文件解释器路径
         run: |
           ROOT=/data/data/com.winlator/files/rootfs/usr
-          INTERP="/usr/lib/ld-linux-aarch64.so.1"
-          for dir in "$ROOT/bin" "$ROOT/lib"; do
-            [ -d "$dir" ] || continue
-            for f in "$dir"/*; do
-              if file "$f" | grep -q 'ELF'; then
-                patchelf --set-interpreter "$INTERP" "$f" || true
-              fi
-            done
+          INTERP="/data/data/com.winlator/files/rootfs/usr/lib/ld-linux-aarch64.so.1"
+          for f in $(find "$ROOT" -type f -exec file {} \; | grep ELF | cut -d: -f1); do
+            patchelf --set-interpreter "$INTERP" "$f" 2>/dev/null || true
           done
 
       - name: 打包构建产物
@@ -138,7 +130,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION }}
-          name: MangoHud ${{ env.VERSION }} (aarch64, Termux glibc)
+          name: MangoHud ${{ env.VERSION }} (aarch64, Winlator)
           files: /home/runner/${{ env.TAR_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
