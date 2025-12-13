@@ -202,7 +202,7 @@ jobs:
           echo "BUILD_NAME=wine-${BUILD_VERSION}-64bit-$WINE_BRANCH" >> $GITHUB_ENV
           
           echo "生成 configure 脚本..."
-          ./autogen.sh
+          #./autogen.sh
           
           mkdir -p build-64bit
           cd build-64bit
