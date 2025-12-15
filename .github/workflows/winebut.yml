@@ -1,3 +1,4 @@
+
 name: Wine 无bootBuilder
 
 on:
@@ -221,13 +222,13 @@ jobs:
           if [ ! -f autogen.sh ]; then
             echo "创建 autogen.sh 脚本..."
             cat > autogen.sh << 'EOF'
-    #!/bin/sh
-    # Wine autogen script
-    aclocal
-    autoheader
-    automake --add-missing
-    autoconf
-    EOF
+#!/bin/sh
+# Wine autogen script
+aclocal
+autoheader
+automake --add-missing
+autoconf
+EOF
             chmod +x autogen.sh
           fi
           
