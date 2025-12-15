@@ -115,6 +115,19 @@ jobs:
             gstreamer1.0-* \
             libmpg123-dev \
             libopenal-dev
+            
+      - name: 安装 Wine 构建缺失的依赖
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            libopencl-dev \
+            libavcodec-dev libavformat-dev libavutil-dev \
+            libcapi20-dev \
+            libkrb5-dev \
+            libgnutls28-dev \
+            libsmbclient-dev \
+            libldap2-dev \
+            libosmesa6-dev
               
       - name: 设置中文语言环境
         run: |
@@ -202,7 +215,9 @@ jobs:
           echo "BUILD_NAME=wine-${BUILD_VERSION}-64bit-$WINE_BRANCH" >> $GITHUB_ENV
           
           echo "生成 configure 脚本..."
-          #./autogen.sh
+          ./tools/make_requests
+          autoreconf -fiv
+          chmod +x autogen.sh
           
           mkdir -p build-64bit
           cd build-64bit
@@ -230,23 +245,18 @@ jobs:
             --disable-winemenubuilder \
             --disable-win16 \
             --disable-tests \
-            --without-ldap \
             --without-oss \
             --without-cups \
             --without-dbus \
             --without-coreaudio \
             --without-gphoto \
-            --without-osmesa \
             --without-sane \
-            --without-pcap \
             --without-pcsclite \
             --without-udev \
             --without-unwind \
             --without-usb \
             --without-v4l2 \
             --without-wayland
-            
-          ./autogen.sh
             
           echo "开始构建支持 Vulkan 和完整 GStreamer 的 64位 Wine..."
           make -j$(nproc)
@@ -327,3 +337,4 @@ jobs:
             ${{ github.workspace }}/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
