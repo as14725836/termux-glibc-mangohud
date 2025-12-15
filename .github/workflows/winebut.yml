@@ -246,6 +246,8 @@ jobs:
             --without-v4l2 \
             --without-wayland
             
+          ./autogen.sh
+            
           echo "开始构建支持 Vulkan 和完整 GStreamer 的 64位 Wine..."
           make -j$(nproc)
           make install
