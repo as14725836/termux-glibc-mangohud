@@ -218,7 +218,18 @@ jobs:
           echo "生成 configure 脚本..."
           ./tools/make_requests
           autoreconf -fiv
-          chmod +x autogen.sh
+          if [ ! -f autogen.sh ]; then
+            echo "创建 autogen.sh 脚本..."
+            cat > autogen.sh << 'EOF'
+    #!/bin/sh
+    # Wine autogen script
+    aclocal
+    autoheader
+    automake --add-missing
+    autoconf
+    EOF
+            chmod +x autogen.sh
+          fi
           
           mkdir -p build-64bit
           cd build-64bit
@@ -338,4 +349,3 @@ jobs:
             ${{ github.workspace }}/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
