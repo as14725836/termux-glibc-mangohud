@@ -52,6 +52,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt --fix-broken install -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -y upgrade
           
           BASE_DEPS="\
             debootstrap \
@@ -120,7 +121,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
-            libopencl-dev \
+            ocl-icd-opencl-dev \
             libavcodec-dev libavformat-dev libavutil-dev \
             libcapi20-dev \
             libkrb5-dev \
