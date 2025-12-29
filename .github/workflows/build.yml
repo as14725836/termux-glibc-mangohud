@@ -81,6 +81,15 @@ jobs:
           echo "🔖 提交: $COMMIT"
           echo "🕓 时间: $DATE"
 
+      - name: 修复依赖
+        run: |
+          sudo apt clean
+          sudo apt autoclean
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt update
+          sudo rm /var/lib/apt/lists/lock
+          sudo rm /var/cache/apt/archives/lock
+
       # 📦 安装依赖
       - name: 安装基础依赖
         run: |
