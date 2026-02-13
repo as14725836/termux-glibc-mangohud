@@ -151,12 +151,13 @@ jobs:
           cd $BUILD_DIR/proton
           
           # 克隆 Proton 源码
-          git clone https://github.com/Pipetto-crypto/wine.git
+          git clone https://github.com/wine-mirror/wine.git wine
           cd wine
           
           # 切换到指定的 Proton 分支
           
           git checkout master
+          git pull
           
           # 修复 Termux 路径问题
           echo "修复 Termux 路径问题..."
