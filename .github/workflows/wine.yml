@@ -168,9 +168,7 @@ jobs:
           
           echo "路径修复完成"
           
-          # 生成 configure 脚本
-          echo "生成 configure 脚本..."
-          ./autogen.sh
+          
           
           # 配置和构建真正的 WOW64 Proton
           mkdir -p build-wow64
