@@ -1,53 +1,243 @@
-name: Build Hangover-Wine
+name: Build Hangover-Wine for Termux
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * 0'
+
+env:
+  PKG_VERSION: "11.0"
+  PKG_REVISION: "1"
 
 jobs:
   build:
+    name: Build Hangover-Wine
     runs-on: ubuntu-22.04
+    
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    
-    - name: Build in Docker
-      run: |
-        # 直接运行 Termux Docker 容器
-        docker run --rm \
-          --user root \
-          -v $PWD:/workspace \
-          -w /workspace \
-          termux/termux-docker:aarch64 \
-          /bin/bash -c "
-            # 安装基础工具
-            apt update && apt install -y termux-keyring termux-tools git sed
-            
-            # 克隆 termux-packages
-            git clone https://github.com/termux/termux-packages
-            cd termux-packages
-            
-            # 修改 hangover 配置，禁用 GStreamer
-            sed -i 's/--with-gstreamer/--without-gstreamer/' packages/hangover-wine/build.sh
-            
-            # 显示修改后的配置（调试用）
-            grep -A5 'TERMUX_PKG_EXTRA_CONFIGURE_ARGS' packages/hangover-wine/build.sh
-            
-            # 构建包
-            ./build-package.sh -a aarch64 -I hangover-wine
-          "
-    
-    - name: Upload .deb package
-      uses: actions/upload-artifact@v4
-      with:
-        name: hangover-wine-aarch64
-        path: |
-          termux-packages/debs/*hangover*.deb
-        retention-days: 30
-    
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: termux-packages/debs/*.deb
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build in ARM64 container
+        run: |
+          cat > build-script.sh << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          echo "=== Starting build in ARM64 container ==="
+          
+          # 更新包列表
+          apt update
+          apt upgrade -y
+          
+          # 安装构建依赖
+          apt install -y \
+            autoconf \
+            automake \
+            bison \
+            clang \
+            curl \
+            flex \
+            gettext \
+            git \
+            libtool \
+            make \
+            ninja-build \
+            pkg-config \
+            python3 \
+            python3-mako \
+            tar \
+            xz-utils \
+            patchelf \
+            strace \
+            mingw-w64 \
+            mingw-w64-tools \
+            dpkg \
+            dpkg-dev \
+            wget
+          
+          # 创建目录结构
+          mkdir -p /build/{cache,hangover-source,host-build,install-root,dll-extract}
+          mkdir -p /data/data/com.termux/files/usr/{bin,opt}
+          
+          # 安装 llvm-mingw
+          cd /build
+          LLVM_MINGW_VERSION="20250319"
+          wget https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_VERSION/llvm-mingw-$LLVM_MINGW_VERSION-ucrt-ubuntu-20.04-x86_64.tar.xz
+          tar -xf llvm-mingw-$LLVM_MINGW_VERSION-ucrt-ubuntu-20.04-x86_64.tar.xz
+          export PATH="/build/llvm-mingw-$LLVM_MINGW_VERSION-ucrt-ubuntu-20.04-x86_64/bin:$PATH"
+          
+          # 下载 Hangover 源码
+          cd /build
+          wget https://github.com/AndreRH/wine/archive/refs/tags/hangover-${PKG_VERSION}.tar.gz -O wine-hangover.tar.gz
+          wget https://github.com/AndreRH/hangover/releases/download/hangover-${PKG_VERSION}/hangover_${PKG_VERSION}_ubuntu2004_focal_arm64.tar -O hangover-dlls.tar
+          
+          # 解压源码
+          tar -xzf wine-hangover.tar.gz -C /build/hangover-source --strip-components=1
+          
+          # 设置环境变量
+          export TERMUX_PREFIX=/data/data/com.termux/files/usr
+          export TERMUX_PKG_MAKE_PROCESSES=$(nproc)
+          export CPPFLAGS=""
+          export CFLAGS=""
+          export CXXFLAGS=""
+          export LDFLAGS="-landroid-spawn -Wl,--rosegment"
+          
+          # Host build (wine-tools)
+          cd /build/host-build
+          /build/hangover-source/configure \
+            --without-x \
+            --disable-tests
+          make -j$TERMUX_PKG_MAKE_PROCESSES __tooldeps__ nls/all
+          
+          # Configure Hangover
+          cd /build/hangover-source
+          ./configure \
+            ac_cv_header_linux_userfaultfd_h=no \
+            enable_wineandroid_drv=no \
+            enable_tools=yes \
+            --prefix=$TERMUX_PREFIX/opt/hangover-wine \
+            --exec-prefix=$TERMUX_PREFIX/opt/hangover-wine \
+            --libdir=$TERMUX_PREFIX/opt/hangover-wine/lib \
+            --with-wine-tools=/build/host-build \
+            --enable-nls \
+            --disable-tests \
+            --without-alsa \
+            --without-capi \
+            --without-coreaudio \
+            --without-cups \
+            --without-dbus \
+            --without-ffmpeg \
+            --with-fontconfig \
+            --with-freetype \
+            --without-gettext \
+            --with-gettextpo=no \
+            --without-gphoto \
+            --with-gnutls \
+            --with-gstreamer \
+            --without-inotify \
+            --with-krb5 \
+            --with-mingw=clang \
+            --without-netapi \
+            --without-opencl \
+            --with-opengl \
+            --without-osmesa \
+            --without-oss \
+            --without-pcap \
+            --without-pcsclite \
+            --with-pthread \
+            --with-pulse \
+            --without-sane \
+            --with-sdl \
+            --without-udev \
+            --without-unwind \
+            --without-usb \
+            --without-v4l2 \
+            --with-vulkan \
+            --with-xcomposite \
+            --with-xcursor \
+            --with-xfixes \
+            --without-xinerama \
+            --with-xinput \
+            --with-xinput2 \
+            --with-xrandr \
+            --with-xrender \
+            --without-xshape \
+            --without-xshm \
+            --without-xxf86vm \
+            --enable-archs=i386,aarch64,arm64ec
+          
+          # Build Hangover
+          make -j$TERMUX_PKG_MAKE_PROCESSES
+          
+          # Install Hangover
+          make install DESTDIR=/build/install-root
+          
+          # Create wrapper script
+          mkdir -p /build/install-root$TERMUX_PREFIX/bin
+          cat > /build/install-root$TERMUX_PREFIX/bin/hangover-wine << 'SCRIPT'
+          #!/data/data/com.termux/files/usr/bin/env sh
+          exec /data/data/com.termux/files/usr/opt/hangover-wine/bin/wine "$@"
+          SCRIPT
+          chmod +x /build/install-root$TERMUX_PREFIX/bin/hangover-wine
+          
+          # Install FEX DLLs
+          cd /build/dll-extract
+          tar -xf /build/hangover-dlls.tar
+          find . -name "*.deb" -exec ar -x {} \;
+          find . -name "data.tar.xz" -exec tar -xf {} \;
+          
+          for dll in wowbox64 libwow64fex libarm64ecfex; do
+            if [ -f usr/lib/wine/aarch64-windows/${dll}.dll ]; then
+              mkdir -p /build/install-root$TERMUX_PREFIX/opt/hangover-wine/lib/wine/aarch64-windows/
+              cp usr/lib/wine/aarch64-windows/${dll}.dll /build/install-root$TERMUX_PREFIX/opt/hangover-wine/lib/wine/aarch64-windows/
+            fi
+          done
+          
+          # Package artifacts
+          cd /build
+          mkdir -p /github/workspace/release
+          
+          # Create tar.gz
+          cd /build/install-root
+          tar -czf /github/workspace/release/hangover-wine-${PKG_VERSION}-aarch64.tar.gz *
+          
+          # Create .deb package
+          cd /github/workspace
+          mkdir -p deb-pkg/DEBIAN
+          mkdir -p deb-pkg/data/data/com.termux/files
+          
+          cp -r /build/install-root/data/data/com.termux/files/* deb-pkg/data/data/com.termux/files/
+          
+          cat > deb-pkg/DEBIAN/control << CONTROL
+          Package: hangover-wine
+          Version: ${PKG_VERSION}-${PKG_REVISION}
+          Architecture: aarch64
+          Maintainer: GitHub Actions <actions@github.com>
+          Depends: fontconfig, freetype, krb5, libandroid-spawn, libc++, libgmp, libgnutls, libxcb, libxcomposite, libxcursor, libxfixes, libxrender, opengl, pulseaudio, sdl2, vulkan-loader, xorg-xrandr
+          Description: A compatibility layer for running Windows programs (Hangover fork)
+          Homepage: https://github.com/AndreRH/hangover
+          CONTROL
+          
+          dpkg-deb --build deb-pkg release/hangover-wine_${PKG_VERSION}-${PKG_REVISION}_aarch64.deb
+          
+          echo "=== Build completed successfully ==="
+          ls -la /github/workspace/release/
+          EOF
+          
+          chmod +x build-script.sh
+          
+          docker run --rm \
+            --platform linux/arm64 \
+            --user root \
+            -v $PWD:/github/workspace \
+            -w /github/workspace \
+            -e PKG_VERSION=${{ env.PKG_VERSION }} \
+            -e PKG_REVISION=${{ env.PKG_REVISION }} \
+            arm64v8/ubuntu:22.04 \
+            /bin/bash -c "./build-script.sh"
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hangover-wine-aarch64-${{ env.PKG_VERSION }}
+          path: |
+            release/*.tar.gz
+            release/*.deb
+          retention-days: 30
+      
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/*.tar.gz
+            release/*.deb
