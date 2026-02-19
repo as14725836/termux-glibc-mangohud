@@ -1,0 +1,309 @@
+name: Build Hangover-Wine for Termux
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'build.sh'
+      - '.github/workflows/build-hangover.yml'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 0 * * 0'  # 每周自动构建
+  release:
+    types: [ published ]  # 发布新版本时自动构建
+
+env:
+  PKG_VERSION: "11.0"  # 可手动更新版本
+  PKG_REVISION: "1"
+
+jobs:
+  build:
+    name: Build for ${{ matrix.arch }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64]  # 只构建 aarch64，因为脚本排除了其他架构
+        include:
+          - arch: aarch64
+            target: aarch64-linux-android
+            container: termux/termux-docker:aarch64
+    
+    container:
+      image: ${{ matrix.container }}
+      options: --user root
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup Termux environment
+      run: |
+        # 更新包列表
+        apt update
+        apt upgrade -y
+        
+        # 安装构建依赖
+        apt install -y \
+          autoconf \
+          automake \
+          bison \
+          clang \
+          curl \
+          flex \
+          gettext \
+          git \
+          libtool \
+          make \
+          ninja-build \
+          pkg-config \
+          python3 \
+          python3-mako \
+          tar \
+          xz-utils \
+          patchelf \
+          strace
+        
+        # 安装交叉编译工具
+        apt install -y \
+          mingw-w64 \
+          mingw-w64-tools
+    
+    - name: Setup Termux build scripts
+      run: |
+        # 克隆 Termux 包仓库（用于构建工具）
+        git clone --depth=1 https://github.com/termux/termux-packages
+        export PATH=$PATH:$PWD/termux-packages/scripts
+        
+        # 设置 Termux 环境变量
+        export TERMUX_ARCH=${{ matrix.arch }}
+        export TERMUX_PREFIX=/data/data/com.termux/files/usr
+        
+        # 创建必要的目录
+        mkdir -p $TERMUX_PKG_CACHEDIR
+        mkdir -p $TERMUX_PREFIX/bin
+        mkdir -p $TERMUX_PREFIX/opt
+    
+    - name: Install llvm-mingw toolchain
+      run: |
+        LLVM_MINGW_VERSION="20250319"
+        LLVM_MINGW_URL="https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_VERSION/llvm-mingw-$LLVM_MINGW_VERSION-ucrt-ubuntu-20.04-x86_64.tar.xz"
+        
+        curl -L -o llvm-mingw.tar.xz $LLVM_MINGW_URL
+        tar -xf llvm-mingw.tar.xz
+        mv llvm-mingw-*-ucrt-ubuntu-20.04-x86_64 /opt/llvm-mingw
+        export PATH="/opt/llvm-mingw/bin:$PATH"
+        
+        # 验证安装
+        echo "PATH=/opt/llvm-mingw/bin:$PATH" >> $GITHUB_ENV
+    
+    - name: Download Hangover sources
+      run: |
+        # 下载 Wine/Hangover 源码
+        WINE_URL="https://github.com/AndreRH/wine/archive/refs/tags/hangover-${{ env.PKG_VERSION }}.tar.gz"
+        curl -L -o wine-hangover.tar.gz $WINE_URL
+        
+        # 下载预编译的 FEX DLLs
+        HANGOVER_DLL_URL="https://github.com/AndreRH/hangover/releases/download/hangover-${{ env.PKG_VERSION }}/hangover_${{ env.PKG_VERSION }}_ubuntu2004_focal_arm64.tar"
+        curl -L -o hangover-dlls.tar $HANGOVER_DLL_URL
+        
+        # 解压源码
+        mkdir -p $TERMUX_PKG_SRCDIR
+        tar -xzf wine-hangover.tar.gz -C $TERMUX_PKG_SRCDIR --strip-components=1
+        
+        # 验证 SHA256（可选）
+        echo "9915e4de1a75c98cc6e4ecf9da5853dcda09459046f576f953b1e9c3859ac3f5  wine-hangover.tar.gz" | sha256sum -c
+        echo "f4ebd8b5a339e9f4d53f0dff26fdd4202a486ce89a8e8de05aabc3f5d40fe6e0  hangover-dlls.tar" | sha256sum -c
+    
+    - name: Setup environment variables
+      run: |
+        # 设置构建环境变量
+        export TERMUX_PKG_CACHEDIR=$PWD/cache
+        export TERMUX_PKG_SRCDIR=$PWD/hangover-source
+        export TERMUX_PKG_HOSTBUILD_DIR=$PWD/host-build
+        export TERMUX_PREFIX=/data/data/com.termux/files/usr
+        export TERMUX_PKG_MAKE_PROCESSES=$(nproc)
+        
+        # 设置编译器标志
+        export CPPFLAGS=""
+        export CFLAGS=""
+        export CXXFLAGS=""
+        export LDFLAGS="-landroid-spawn -Wl,--rosegment"
+        
+        # 导出到环境
+        echo "TERMUX_PKG_CACHEDIR=$TERMUX_PKG_CACHEDIR" >> $GITHUB_ENV
+        echo "TERMUX_PKG_SRCDIR=$TERMUX_PKG_SRCDIR" >> $GITHUB_ENV
+        echo "TERMUX_PKG_HOSTBUILD_DIR=$TERMUX_PKG_HOSTBUILD_DIR" >> $GITHUB_ENV
+        echo "TERMUX_PREFIX=$TERMUX_PREFIX" >> $GITHUB_ENV
+        echo "TERMUX_PKG_MAKE_PROCESSES=$(nproc)" >> $GITHUB_ENV
+        echo "CPPFLAGS=$CPPFLAGS" >> $GITHUB_ENV
+        echo "CFLAGS=$CFLAGS" >> $GITHUB_ENV
+        echo "CXXFLAGS=$CXXFLAGS" >> $GITHUB_ENV
+        echo "LDFLAGS=$LDFLAGS" >> $GITHUB_ENV
+    
+    - name: Host build (wine-tools)
+      run: |
+        mkdir -p $TERMUX_PKG_HOSTBUILD_DIR
+        cd $TERMUX_PKG_HOSTBUILD_DIR
+        
+        # 配置 host 构建
+        $TERMUX_PKG_SRCDIR/configure \
+          --without-x \
+          --disable-tests
+        
+        # 编译 host 工具
+        make -j$TERMUX_PKG_MAKE_PROCESSES __tooldeps__ nls/all
+    
+    - name: Configure Hangover
+      run: |
+        cd $TERMUX_PKG_SRCDIR
+        
+        # 配置参数（从原始脚本转换）
+        ./configure \
+          ac_cv_header_linux_userfaultfd_h=no \
+          enable_wineandroid_drv=no \
+          enable_tools=yes \
+          --prefix=$TERMUX_PREFIX/opt/hangover-wine \
+          --exec-prefix=$TERMUX_PREFIX/opt/hangover-wine \
+          --libdir=$TERMUX_PREFIX/opt/hangover-wine/lib \
+          --with-wine-tools=$TERMUX_PKG_HOSTBUILD_DIR \
+          --enable-nls \
+          --disable-tests \
+          --without-alsa \
+          --without-capi \
+          --without-coreaudio \
+          --without-cups \
+          --without-dbus \
+          --without-ffmpeg \
+          --with-fontconfig \
+          --with-freetype \
+          --without-gettext \
+          --with-gettextpo=no \
+          --without-gphoto \
+          --with-gnutls \
+          --with-gstreamer \
+          --without-inotify \
+          --with-krb5 \
+          --with-mingw=clang \
+          --without-netapi \
+          --without-opencl \
+          --with-opengl \
+          --without-osmesa \
+          --without-oss \
+          --without-pcap \
+          --without-pcsclite \
+          --with-pthread \
+          --with-pulse \
+          --without-sane \
+          --with-sdl \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --with-vulkan \
+          --with-xcomposite \
+          --with-xcursor \
+          --with-xfixes \
+          --without-xinerama \
+          --with-xinput \
+          --with-xinput2 \
+          --with-xrandr \
+          --with-xrender \
+          --without-xshape \
+          --without-xshm \
+          --without-xxf86vm \
+          --enable-archs=i386,aarch64,arm64ec
+    
+    - name: Build Hangover
+      run: |
+        cd $TERMUX_PKG_SRCDIR
+        make -j$TERMUX_PKG_MAKE_PROCESSES
+    
+    - name: Install Hangover
+      run: |
+        cd $TERMUX_PKG_SRCDIR
+        make install DESTDIR=$PWD/install-root
+        
+        # 创建包装脚本
+        mkdir -p install-root$TERMUX_PREFIX/bin
+        cat > install-root$TERMUX_PREFIX/bin/hangover-wine << 'EOF'
+        #!/data/data/com.termux/files/usr/bin/env sh
+        exec /data/data/com.termux/files/usr/opt/hangover-wine/bin/wine "$@"
+        EOF
+        chmod +x install-root$TERMUX_PREFIX/bin/hangover-wine
+    
+    - name: Install FEX DLLs
+      run: |
+        # 解压并安装 FEX DLLs
+        mkdir -p dll-extract
+        cd dll-extract
+        
+        # 这里需要根据实际下载的文件名调整
+        tar -xf $GITHUB_WORKSPACE/hangover-dlls.tar
+        
+        # 查找并安装 .deb 文件
+        find . -name "*.deb" -exec ar -x {} \;
+        
+        # 安装 DLLs
+        for dll in wowbox64 libwow64fex libarm64ecfex; do
+          find . -name "data.tar.xz" -exec tar -xf {} \;
+          if [ -f usr/lib/wine/aarch64-windows/${dll}.dll ]; then
+            mkdir -p install-root$TERMUX_PREFIX/opt/hangover-wine/lib/wine/aarch64-windows/
+            cp usr/lib/wine/aarch64-windows/${dll}.dll install-root$TERMUX_PREFIX/opt/hangover-wine/lib/wine/aarch64-windows/
+          fi
+        done
+    
+    - name: Package build artifacts
+      run: |
+        # 创建发布包
+        mkdir -p release
+        
+        # 创建 tar.gz 包
+        cd install-root
+        tar -czf ../release/hangover-wine-${{ env.PKG_VERSION }}-${{ matrix.arch }}.tar.gz *
+        
+        # 创建 Termux .deb 包结构
+        cd $GITHUB_WORKSPACE
+        mkdir -p deb-pkg/DEBIAN
+        mkdir -p deb-pkg/data/data/com.termux/files
+        
+        # 复制文件到 deb 结构
+        cp -r install-root/data/data/com.termux/files/* deb-pkg/data/data/com.termux/files/
+        
+        # 创建 control 文件
+        cat > deb-pkg/DEBIAN/control << EOF
+        Package: hangover-wine
+        Version: ${{ env.PKG_VERSION }}-${{ env.PKG_REVISION }}
+        Architecture: ${{ matrix.arch }}
+        Maintainer: GitHub Actions <actions@github.com>
+        Depends: fontconfig, freetype, krb5, libandroid-spawn, libc++, libgmp, libgnutls, libxcb, libxcomposite, libxcursor, libxfixes, libxrender, opengl, pulseaudio, sdl2, vulkan-loader, xorg-xrandr
+        Description: A compatibility layer for running Windows programs (Hangover fork)
+        Homepage: https://github.com/AndreRH/hangover
+        EOF
+        
+        # 构建 .deb 包
+        dpkg-deb --build deb-pkg release/hangover-wine_${{ env.PKG_VERSION }}-${{ env.PKG_REVISION }}_${{ matrix.arch }}.deb
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: hangover-wine-${{ matrix.arch }}-${{ env.PKG_VERSION }}
+        path: |
+          release/*.tar.gz
+          release/*.deb
+        retention-days: 30
+    
+    - name: Upload to release
+      if: github.event_name == 'release'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: release/hangover-wine_${{ env.PKG_VERSION }}-${{ env.PKG_REVISION }}_${{ matrix.arch }}.deb
+        asset_name: hangover-wine_${{ env.PKG_VERSION }}-${{ env.PKG_REVISION }}_${{ matrix.arch }}.deb
+        asset_content_type: application/vnd.debian.binary-package
