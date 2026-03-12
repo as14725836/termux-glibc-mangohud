@@ -1,627 +1,456 @@
-name: Wine and Proton 无bootBuilder
-
+name: Wine ARM64 WOW64 构建（基于 llvm-mingw，Debian 12 容器）
 on:
   schedule:
-    # Proton 构建 - 每月1号和15号
-    - cron: '0 0 1,15 * *'
-    # Wine 构建 - 每月5号和20号
     - cron: '0 2 5,20 * *'
   workflow_dispatch:
     inputs:
-      build_type:
-        description: '选择构建类型'
-        required: true
-        default: 'proton'
-        type: choice
-        options:
-        - proton
-        - wine-wow64
-      proton_branch:
-        description: 'Proton 分支 (仅 Proton 构建)'
-        required: false
-        default: 'proton_10.0'
-        type: choice
-        options:
-        - proton_10.0
-        - proton_9.0
-        - experimental_10.0
-        - bleeding-edge
       wine_branch:
-        description: 'Wine 分支 (仅 Wine 构建)'
+        description: 'Wine 分支'
         required: false
         default: 'staging'
         type: choice
         options:
-        - vanilla
-        - staging
-        - staging-tkg
-        - staging-tkg-fsync
+          - vanilla
+          - staging
+          - staging-tkg
+          - staging-tkg-fsync
       wine_version:
-        description: 'Wine 版本 (仅 Wine 构建)'
+        description: 'Wine 版本 (例如 9.22，或 latest)'
         required: false
         default: 'latest'
         type: string
 
 env:
-  USE_CCACHE: true
+  LLVMMINGW_DATE: 20251202
+  LLVMMINGW_NAME: llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64
   BUILD_DIR: /tmp/build_wine
+  WINE64_DIR: /opt/wine64
+  WINE_SOURCE_DIR: /opt/wine-src
+  DEBIAN_FRONTEND: noninteractive
 
 permissions:
-  contents: write  # 允许 GITHUB_TOKEN 创建 Release
+  contents: write
 
 jobs:
-  build-proton:
-    runs-on: ubuntu-24.04
-    if: github.event.inputs.build_type == 'proton' || (github.event_name == 'schedule' && github.event.schedule == '0 0 1,15 * *')
-    timeout-minutes: 180
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: 安装构建依赖
-        run: |
-          sudo apt update
-          # 先修复损坏的依赖
-          sudo apt --fix-broken install -y
-          
-          # 基础构建依赖
-          BASE_DEPS="\
-            debootstrap \
-            perl \
-            git \
-            wget \
-            xz-utils \
-            bubblewrap \
-            autoconf \
-            flex \
-            bison \
-            gcc-multilib \
-            g++-multilib \
-            libx11-dev \
-            libxext-dev \
-            libxi-dev \
-            libxrandr-dev \
-            libxcursor-dev \
-            libxcomposite-dev \
-            libxdamage-dev \
-            libxfixes-dev \
-            libxxf86vm-dev \
-            libxrender-dev \
-            libxinerama-dev \
-            libgl-dev \
-            libsdl2-dev \
-            libglu-dev \
-            libosmesa6-dev \
-            libfreetype6-dev \
-            libfontconfig1-dev \
-            libpcap-dev \
-            libdbus-1-dev \
-            libssl-dev \
-            libasound2-dev \
-            libpulse-dev \
-            libudev-dev \
-            libcups2-dev \
-            libjpeg-dev \
-            libpng-dev \
-            libtiff-dev \
-            libxml2-dev \
-            libvulkan-dev \
-            vulkan-tools \
-            libvulkan1 \
-            mesa-vulkan-drivers \
-            mingw-w64 \
-            gettext \
-            libgettextpo-dev \
-            locales \
-            language-pack-zh-hans"
-          
-          sudo apt install -y $BASE_DEPS
-      - name: 安装多媒体和音频依赖
-        run: |
-            sudo apt update
-            # 安装完整的 GStreamer
-            sudo apt install -y \
-              libunwind-dev \
-              libgstreamer1.0-dev \
-              libgstreamer-plugins-base1.0-dev \
-              gstreamer1.0-* \
-              libmpg123-dev \
-              libopenal-dev
-      - name: 构建 Proton WOW64 版本
-        run: |
-          set -e
-          
-          echo "开始构建 Proton WOW64 版本..."
-          echo "分支: ${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
-          
-          
-          # 清理并创建构建目录
-          rm -rf $BUILD_DIR/proton
-          mkdir -p $BUILD_DIR/proton
-          cd $BUILD_DIR/proton
-          
-          # 克隆 Proton 源码
-          git clone https://gitlab.winehq.org/wine/wine.git wine
-          cd wine
-          
-          # 切换到指定的 Proton 分支
-          
-          git checkout master
-          git pull
-          
-          # 修复 Termux 路径问题
-          echo "修复 Termux 路径问题..."
-          find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
-          find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          
-          echo "路径修复完成"
-          
-          
-          
-          # 配置和构建真正的 WOW64 Proton
-          mkdir -p build-wow64
-          cd build-wow64
-          
-          
-          # 配置真正的 WOW64 Proton，启用 Vulkan 和完整 GStreamer 支持
-          ../configure \
-            --enable-win64 \
-            --prefix=/tmp/wine-install-proton \
-            --with-x \
-            --with-vulkan \
-            --with-alsa \
-            --with-pulse \
-            --with-freetype \
-            --with-fontconfig \
-            --with-gstreamer \
-            --with-gettext \
-            --with-sdl \
-            --enable-nls \
-            --disable-winemenubuilder \
-            --disable-win16 \
-            --disable-tests \
-            --without-ldap \
-            --without-capi \
-            --without-oss \
-            --without-cups \
-            --without-dbus \
-            --without-coreaudio \
-            --without-gphoto \
-            --without-osmesa \
-            --without-sane \
-            --without-pcap \
-            --without-pcsclite \
-            --without-udev \
-            --without-unwind \
-            --without-usb \
-            --without-v4l2 \
-            --without-wayland
-          # 构建真正的 WOW64 Proton
-          echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Proton..."
-          make -j$(nproc)
-          make install
-          
-          cd ../..
-          
-          # 获取版本信息
-          VERSION_PROTON=$(cd wine && git describe --tags --abbrev=0 2>/dev/null || echo "$PROTON_BRANCH")
-          COMMIT_HASH=$(cd wine && git rev-parse --short HEAD)
-          PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
-          echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
-          echo "BUILD_NAME=proton-${PROTON_VERSION}-wow64" >> $GITHUB_ENV
-      - name: 准备打包
-        run: |
-          # 创建打包目录
-          PACKAGE_NAME="${{ env.BUILD_NAME }}"
-          mkdir -p wine-package/$PACKAGE_NAME
-          
-          # 复制 Wine 安装文件
-          echo "复制 Wine 文件到 $PACKAGE_NAME..."
-          cp -r /tmp/wine-install-proton/* wine-package/$PACKAGE_NAME/
-      - name: 创建打包文件
-        run: |
-          PACKAGE_NAME="${{ env.BUILD_NAME }}"
-          
-          echo "最终文件结构:"
-          find wine-package -type f | sort | head -20
-          
-          # 使用 tar.xz 格式打包
-          tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
-          
-          echo "打包完成:"
-          ls -lh *.tar.xz
-      - name: Generate checksums
-        run: |
-          cd $GITHUB_WORKSPACE
-          sha256sum *.tar.xz > checksums.txt
-          cat checksums.txt
-      - name: Upload Proton artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Proton-${{ github.event.inputs.proton_branch || 'proton_10.0' }}-WoW64
-          path: |
-            ${{ github.workspace }}/*.tar.xz
-            ${{ github.workspace }}/checksums.txt
-          retention-days: 30
-
-
   build-wine-wow64:
-    runs-on: ubuntu-24.04
-    if: github.event.inputs.build_type == 'wine-wow64' || (github.event_name == 'schedule' && github.event.schedule == '0 2 5,20 * *')
+    runs-on: ubuntu-latest
+    container:
+      image: debian:12
+      options: --user root
     timeout-minutes: 180
-    
+
     steps:
+      - name: 安装基础工具（用于后续操作）
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            wget \
+            git \
+            curl \
+            gnupg \
+            sudo \
+            xz-utils \
+            g++ \
+            file
+
       - uses: actions/checkout@v4
-      
+
+      # ------------------------------------------------------------
+      # 1. 配置 APT 源（支持 amd64 和 arm64）
+      # ------------------------------------------------------------
+      - name: 配置 APT 源
+        run: |
+          if [ -f /etc/apt/sources.list ]; then
+            cp /etc/apt/sources.list /etc/apt/sources.list.bak
+          else
+            echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list
+            echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list
+            echo "deb http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list
+          fi
+          
+          # 创建多架构源
+          grep -v '^#' /etc/apt/sources.list | sed 's/^deb /deb [arch=amd64] /g' > /tmp/amd64.list
+          sed -e 's/\[arch=amd64\]/[arch=arm64]/g' /tmp/amd64.list > /tmp/arm64.list
+          cat /tmp/amd64.list /tmp/arm64.list > /etc/apt/sources.list
+          
+          dpkg --add-architecture arm64
+          apt-get update
+          apt-get install -y --no-install-recommends hello:arm64 || { echo "arm64 源测试失败"; exit 1; }
+
+      # ------------------------------------------------------------
+      # 2. 安装所有依赖
+      # ------------------------------------------------------------
       - name: 安装构建依赖
         run: |
-          sudo apt update
-          # 先修复损坏的依赖
-          sudo apt --fix-broken install -y
-          
-          # 基础构建依赖
-          BASE_DEPS="\
-            debootstrap \
-            perl \
-            git \
-            wget \
-            xz-utils \
-            bubblewrap \
-            autoconf \
-            flex \
-            bison \
-            gcc-multilib \
-            g++-multilib \
-            libx11-dev \
-            libxext-dev \
-            libxi-dev \
-            libxrandr-dev \
-            libxcursor-dev \
-            libxcomposite-dev \
-            libxdamage-dev \
-            libxfixes-dev \
-            libxxf86vm-dev \
-            libxrender-dev \
-            libxinerama-dev \
-            libgl-dev \
-            libsdl2-dev \
-            libglu-dev \
-            libosmesa6-dev \
+          apt-get install -y --no-install-recommends \
+            binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            ca-certificates nano python3 python3-setuptools clang screen llvm lld wget curl \
+            flex bison nasm \
             libfreetype6-dev \
-            libfontconfig1-dev \
-            libpcap-dev \
-            libdbus-1-dev \
-            libssl-dev \
-            libasound2-dev \
-            libpulse-dev \
-            libudev-dev \
-            libcups2-dev \
-            libjpeg-dev \
-            libpng-dev \
-            libtiff-dev \
-            libxml2-dev \
-            libvulkan-dev \
-            vulkan-tools \
-            libvulkan1 \
-            mesa-vulkan-drivers \
-            mingw-w64 \
-            gettext \
-            libgettextpo-dev \
-            locales \
-            language-pack-zh-hans"
-          
-          sudo apt install -y $BASE_DEPS
-      - name: 安装多媒体和音频依赖
+            libglib2.0-dev \
+            libltdl-dev \
+            libxcb1-dev \
+            libx11-dev \
+            librsvg2-bin \
+            git gettext make automake autoconf pkg-config libtool gtk-doc-tools clang \
+            dpkg-dev \
+            libglib2.0-dev:arm64 \
+            libfreetype6-dev:arm64 \
+            libltdl-dev:arm64 \
+            libxcb1-dev:arm64 \
+            libx11-dev:arm64 \
+            build-essential libc-dev-arm64-cross less libc-devtools libidn2-0:arm64 \
+            libx11-dev libxinerama-dev libfreetype-dev libfontconfig-dev \
+            cmake \
+            libstdc++6-arm64-cross \
+            libstdc++-12-dev-arm64-cross \
+            libepoxy-dev:arm64 \
+            libsdl2-dev:arm64 \
+            ninja-build \
+            dpkg-dev fakeroot debhelper dh-make \
+            libxcursor-dev:arm64 \
+            libxi-dev:arm64 \
+            libxshmfence-dev:arm64 \
+            libxxf86vm-dev:arm64 \
+            libxrandr-dev:arm64 \
+            libxrender-dev:arm64 \
+            libxfixes-dev:arm64 \
+            libxcomposite-dev:arm64 \
+            libdbus-1-dev:arm64 \
+            libsane-dev:arm64 \
+            libusb-1.0-0-dev:arm64 \
+            libv4l-dev:arm64 \
+            libpulse-dev:arm64 \
+            libgstreamer1.0-dev:arm64 \
+            libgstreamer-plugins-base1.0-dev:arm64 \
+            libgstreamer-plugins-bad1.0-dev:arm64 \
+            libudev-dev:arm64 \
+            libunwind-dev:arm64 \
+            libsdl2-dev:arm64 \
+            libfontconfig1-dev:arm64 \
+            libkrb5-dev:arm64 \
+            libvulkan-dev:arm64 \
+            libgl-dev:arm64 \
+            libgnutls28-dev:arm64 \
+            libcups2-dev:arm64 \
+            libxkbcommon-dev:arm64 \
+            libxkbregistry-dev:arm64 \
+            libwayland-dev:arm64
+
+      # ------------------------------------------------------------
+      # 3. 安装 llvm-mingw 交叉编译工具链
+      # ------------------------------------------------------------
+      - name: 下载并安装 llvm-mingw
         run: |
-            sudo apt update
-            # 安装完整的 GStreamer
-            sudo apt install -y \
-              libunwind-dev \
-              libgstreamer1.0-dev \
-              libgstreamer-plugins-base1.0-dev \
-              libgstreamer-plugins-good1.0-dev \
-              libgstreamer-plugins-bad1.0-dev \
-              gstreamer1.0-plugins-base \
-              gstreamer1.0-plugins-good \
-              gstreamer1.0-plugins-bad \
-              gstreamer1.0-plugins-ugly \
-              gstreamer1.0-libav \
-              gstreamer1.0-pulseaudio \
-              gstreamer1.0-alsa \
-              gstreamer1.0-gl \
-              gstreamer1.0-qt5 \
-              gstreamer1.0-gtk3 \
-              libmpg123-dev \
-              libopenal-dev \
-              libfaad-dev \
-              libflac-dev \
-              libvorbis-dev \
-              libx264-dev \
-              libx265-dev \
-              libvpx-dev \
-              libtheora-dev
-    
-      - name: 构建 Wine WOW64 版本
+          mkdir -p /opt
+          cd /opt
+          wget https://github.com/mstorsjo/llvm-mingw/releases/download/${{ env.LLVMMINGW_DATE }}/${{ env.LLVMMINGW_NAME }}.tar.xz
+          tar -xJf ${{ env.LLVMMINGW_NAME }}.tar.xz
+          rm ${{ env.LLVMMINGW_NAME }}.tar.xz
+          echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
+
+      # ------------------------------------------------------------
+      # 4. 设置中文语言环境
+      # ------------------------------------------------------------
+      - name: 设置中文语言环境
+        run: |
+          apt-get install -y locales
+          sed -i '/zh_CN.UTF-8/s/^# //g' /etc/locale.gen
+          locale-gen
+          echo "LANG=zh_CN.UTF-8" >> $GITHUB_ENV
+          echo "LC_ALL=zh_CN.UTF-8" >> $GITHUB_ENV
+
+      # ------------------------------------------------------------
+      # 5. 获取 Wine 源码（分支处理与原工作流一致）
+      # ------------------------------------------------------------
+      - name: 获取 Wine 源码
         run: |
           set -e
+          WINE_BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
+          WINE_VERSION="${{ github.event.inputs.wine_version || 'latest' }}"
           
-          # 设置环境变量
-          export WINE_BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
-          export WINE_VERSION="${{ github.event.inputs.wine_version || 'latest' }}"
-          export BUILD_DIR="/tmp/build_wine_${WINE_BRANCH}_${WINE_VERSION}"
+          mkdir -p ${{ env.WINE_SOURCE_DIR }}
+          cd ${{ env.WINE_SOURCE_DIR }}
           
-          echo "开始构建 Wine WOW64 版本..."
-          echo "分支: $WINE_BRANCH"
-          echo "版本: $WINE_VERSION"
-          
-          # 清理并创建构建目录
-          rm -rf "$BUILD_DIR"
-          mkdir -p "$BUILD_DIR"
-          cd "$BUILD_DIR"
-          
-          # 根据分支获取 Wine 源码
-          if [ "$WINE_BRANCH" = "staging-tkg" ] || [ "$WINE_BRANCH" = "staging-tkg-fsync" ]; then
-            # TKG 系列处理 - 修复目录结构问题
-            echo "处理 TKG 系列分支: $WINE_BRANCH"
-            
-            if [ "$WINE_BRANCH" = "staging-tkg" ]; then
-              git clone https://github.com/Kron4ek/wine-tkg.git wine-tkg
-              SOURCE_DIR="wine-tkg"
-            else
-              git clone https://github.com/Kron4ek/wine-tkg.git wine-tkg -b fsync
-              SOURCE_DIR="wine-tkg"
-            fi
-            
-            cd "$SOURCE_DIR"
-            
-            # 检查对应的版本标签或分支
-            if [ "$WINE_VERSION" != "latest" ]; then
-              if git checkout "$WINE_VERSION" 2>/dev/null || git checkout "wine-$WINE_VERSION" 2>/dev/null; then
-                echo "成功切换到版本 $WINE_VERSION"
-              else
-                echo "使用默认分支"
-                git checkout master
+          case "$WINE_BRANCH" in
+            staging-tkg|staging-tkg-fsync)
+              echo "处理 TKG 系列分支: $WINE_BRANCH"
+              git clone https://github.com/Kron4ek/wine-tkg.git source
+              cd source
+              if [ "$WINE_BRANCH" = "staging-tkg-fsync" ]; then
+                git checkout fsync
               fi
-            fi
-            
-            # TKG 版本获取方式
-            if [ -f "VERSION" ]; then
-              WINE_VERSION_ACTUAL="$(cat VERSION | tail -c +14)"
-              echo "从 VERSION 文件获取版本: $WINE_VERSION_ACTUAL"
-            else
-              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
-              echo "从 git 标签获取版本: $WINE_VERSION_ACTUAL"
-            fi
-            
-            COMMIT_HASH=$(git rev-parse --short HEAD)
-            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${WINE_BRANCH}-wow64"
-            
-            echo "TKG 构建信息:"
-            echo "  - 版本: $WINE_VERSION_ACTUAL"
-            echo "  - 分支: $WINE_BRANCH"
-            echo "  - 提交: $COMMIT_HASH"
-            echo "  - 构建名称: $BUILD_NAME"
-            
-          elif [ "$WINE_BRANCH" = "staging" ]; then
-            # 原有的 staging 分支处理
-            echo "处理 Staging 分支"
-            git clone https://github.com/wine-mirror/wine.git wine
-            SOURCE_DIR="wine"
-            cd "$SOURCE_DIR"
-            
-            # 关闭 detached HEAD 建议
-            git config advice.detachedHead false
-            
-            if [ "$WINE_VERSION" != "latest" ]; then
-              git checkout "wine-$WINE_VERSION"
-            fi
-            WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
-            COMMIT_HASH=$(git rev-parse --short HEAD)
-            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-staging-wow64"
-            
-            # 修复：从 wine-X.Y 格式中提取纯版本号
-            PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
-            echo "提取的纯版本号: $PURE_VERSION"
-            
-            # 使用正确的版本格式：vX.Y 而不是 wine-X.Y
-            STAGING_VERSION="v${PURE_VERSION}"
-            echo "尝试下载 staging 补丁版本: $STAGING_VERSION"
-            
-            # 下载并应用 staging 补丁 - 修复版本格式
-            wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" || \
-            wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/v${PURE_VERSION}.tar.gz"
-            
-            if [ -f "wine-staging-${PURE_VERSION}.tar.gz" ]; then
-              tar -xzf "wine-staging-${PURE_VERSION}.tar.gz"
-              
-              # 应用 staging 补丁 - 修复目录名检查逻辑
-              echo "查找解压后的 staging 目录..."
-              ls -la
-              
-              # 根据 build-wine-test.yml 的正确逻辑
-              if [ -d "wine-staging-${PURE_VERSION}" ]; then
-                echo "找到目录: wine-staging-${PURE_VERSION}"
-                cd "wine-staging-${PURE_VERSION}/staging"
-                chmod +x patchinstall.py
-                ./patchinstall.py --all --destdir=../../
-                cd "../.."
-              elif [ -d "wine-staging-v${PURE_VERSION}" ]; then
-                echo "找到目录: wine-staging-v${PURE_VERSION}"
-                cd "wine-staging-v${PURE_VERSION}/staging"
-                chmod +x patchinstall.py
-                ./patchinstall.py --all --destdir=../../
-                cd "../.."
-              elif [ -d "wine-staging-${STAGING_VERSION}" ]; then
-                echo "找到目录: wine-staging-${STAGING_VERSION}"
-                cd "wine-staging-${STAGING_VERSION}/staging"
-                chmod +x patchinstall.py
-                ./patchinstall.py --all --destdir=../../
-                cd "../.."
+              if [ "$WINE_VERSION" != "latest" ]; then
+                git checkout "$WINE_VERSION" 2>/dev/null || git checkout "wine-$WINE_VERSION" 2>/dev/null || echo "使用默认分支"
+              fi
+              if [ -f "VERSION" ]; then
+                WINE_VERSION_ACTUAL="$(cat VERSION | tail -c +14)"
               else
-                echo "警告: 未找到预期的 staging 目录结构，尝试自动查找..."
-                # 尝试查找任何包含 staging 的目录
+                WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
+              fi
+              ;;
+            staging)
+              echo "处理 Staging 分支"
+              git clone https://github.com/afeimod/wine-arm.git source
+              cd source
+              git config advice.detachedHead false
+              if [ "$WINE_VERSION" != "latest" ]; then
+                git checkout "wine-$WINE_VERSION"
+              fi
+              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
+              PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
+              STAGING_VERSION="v${PURE_VERSION}"
+              wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" || \
+              wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/v${PURE_VERSION}.tar.gz"
+              if [ -f "wine-staging-${PURE_VERSION}.tar.gz" ]; then
+                tar -xzf "wine-staging-${PURE_VERSION}.tar.gz"
                 STAGING_DIR=$(find . -maxdepth 1 -type d -name "*staging*" | head -1)
                 if [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR/staging" ]; then
-                  echo "找到 staging 目录: $STAGING_DIR"
                   cd "$STAGING_DIR/staging"
                   chmod +x patchinstall.py
                   ./patchinstall.py --all --destdir=../../
-                  cd "../.."
+                  cd ../..
                 else
-                  echo "❌ 错误：无法找到 staging 补丁目录，跳过补丁应用"
-                  echo "当前目录内容:"
-                  ls -la
+                  echo "警告: 未找到 staging 补丁目录，跳过补丁应用"
                 fi
+              else
+                echo "警告: 无法下载 staging 补丁，继续构建无补丁版本"
               fi
-            else
-              echo "警告: 无法下载 staging 补丁，继续构建无补丁版本"
-            fi
-            
-          elif [ "$WINE_BRANCH" = "vanilla" ]; then
-            # 原有的 vanilla 分支处理
-            echo "处理 Vanilla 分支"
-            git clone https://github.com/wine-mirror/wine.git wine
-            SOURCE_DIR="wine"
-            cd "$SOURCE_DIR"
-            
-            # 关闭 detached HEAD 建议
-            git config advice.detachedHead false
-            
-            if [ "$WINE_VERSION" != "latest" ]; then
-              git checkout "wine-$WINE_VERSION"
-            fi
-            WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
-            COMMIT_HASH=$(git rev-parse --short HEAD)
-            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-vanilla-wow64"
-            
-          else
-            echo "未知的 Wine 分支: $WINE_BRANCH"
-            exit 1
-          fi
+              ;;
+            vanilla)
+              echo "处理 Vanilla 分支"
+              git clone https://github.com/afeimod/wine-arm.git source
+              cd source
+              git config advice.detachedHead false
+              if [ "$WINE_VERSION" != "latest" ]; then
+                git checkout "wine-$WINE_VERSION"
+              fi
+              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
+              ;;
+            *)
+              echo "未知的 Wine 分支: $WINE_BRANCH"
+              exit 1
+              ;;
+          esac
           
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-${WINE_BRANCH}-arm64-wow64"
           echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
-          echo "当前源码目录: $(pwd)"
-          echo "构建名称: $BUILD_NAME"
-          
-          # 修复 Termux 路径问题
-          echo "修复 Termux 路径问题..."
-          find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
-          find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          
+          echo "WINE_VERSION_ACTUAL=$WINE_VERSION_ACTUAL" >> $GITHUB_ENV
+          echo "源码准备完成，构建名称: $BUILD_NAME"
+
+      # ------------------------------------------------------------
+      # 6. 修复 Termux 路径问题
+      # ------------------------------------------------------------
+      - name: 修复 Termux 路径问题
+        run: |
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; 2>/dev/null | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g' 2>/dev/null || true
+          find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
+          find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
+          find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
+          find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
-          
-          # 根据版本选择修复方式
-          # 从 WINE_VERSION_ACTUAL 中提取纯数字版本号
-          PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
+
+      # ------------------------------------------------------------
+      # 7. 应用 mfplat 补丁
+      # ------------------------------------------------------------
+      - name: 应用 mfplat 补丁
+        run: |
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          PURE_VERSION=$(echo "${{ env.WINE_VERSION_ACTUAL }}" | sed 's/^wine-//')
           VERSION_MAJOR=$(echo "$PURE_VERSION" | cut -d. -f1)
           VERSION_MINOR=$(echo "$PURE_VERSION" | cut -d. -f2)
           
-          echo "Wine 版本: $WINE_VERSION_ACTUAL"
-          echo "纯版本号: $PURE_VERSION"
-          echo "主版本: $VERSION_MAJOR, 次版本: $VERSION_MINOR"
-          
-          # 判断版本是否 >= 9.10
           if [ "$VERSION_MAJOR" -gt 9 ] || [ "$VERSION_MAJOR" -eq 9 -a "$VERSION_MINOR" -ge 10 ]; then
-            echo "使用 9.10+ 版本的修复方式 (wine_do_not_create_dxgi_manager2.patch)"
-            wget https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
+            echo "应用 9.10+ 补丁 (wine_do_not_create_dxgi_manager2.patch)"
+            wget -q https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
             if [ -f "dlls/mfplat/main.c" ]; then
-              echo "找到目标文件 dlls/mfplat/main.c，准备应用补丁..."
-              if patch -p1 < wine_do_not_create_dxgi_manager2.patch; then
-                echo "✅ 补丁应用成功"
-              else
-                echo "❌ 补丁应用失败"
-                exit 1
-              fi
+              patch -p1 < wine_do_not_create_dxgi_manager2.patch || { echo "补丁应用失败"; exit 1; }
             else
-              echo "❌ 错误：目标文件 dlls/mfplat/main.c 不存在"
+              echo "错误: dlls/mfplat/main.c 不存在"
               exit 1
             fi
           else
-            echo "使用 9.10 以下版本的修复方式 (fix_wine9.2_mfplat.sh)"
-            wget -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
+            echo "应用 9.10 以下补丁 (fix_wine9.2_mfplat.sh)"
+            wget -q -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
             chmod +x fix_wine9.2_mfplat.sh
             ./fix_wine9.2_mfplat.sh
-            echo "✅ 9.10 以下版本修复完成"
+          fi
+
+      # ------------------------------------------------------------
+      # 8. 生成 configure 脚本
+      # ------------------------------------------------------------
+      - name: 生成 configure 脚本
+        run: |
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          if [ ! -f "configure" ]; then
+            ./autogen.sh
+          fi
+
+      # ------------------------------------------------------------
+      # 9. 构建 native wine64（x86_64）用于生成交叉编译工具 - 修复版本
+      # ------------------------------------------------------------
+      - name: 构建 native wine64 工具
+        run: |
+          mkdir -p ${{ env.WINE64_DIR }}
+          cd ${{ env.WINE64_DIR }}
+          
+          # 复制源码到构建目录
+          cp -r ${{ env.WINE_SOURCE_DIR }}/source .
+          cd source
+          
+          # 清理可能存在的旧构建文件
+          make distclean 2>/dev/null || true
+          
+          # 为本机构建配置
+          ./configure \
+            --enable-win64 \
+            --disable-tests \
+            --without-x \
+            --without-freetype \
+            --without-vulkan \
+            --without-alsa \
+            --without-pulse \
+            --prefix=/opt/wine-tools-native
+          
+          # 只编译必要的工具
+          make __tooldeps__ -j$(nproc)
+          
+          # 确保工具被正确编译
+          if [ ! -f tools/winebuild/winebuild ] || [ ! -f tools/wrc/wrc ] || [ ! -f tools/widl/widl ]; then
+            echo "错误: 工具编译不完整"
+            exit 1
           fi
           
-          # 配置和构建真正的 WOW64 Wine
-          mkdir -p build-wow64
-          cd build-wow64
+          # 创建工具目录并复制工具
+          mkdir -p /opt/wine-tools-native/bin
+          cp tools/winebuild/winebuild /opt/wine-tools-native/bin/
+          cp tools/wrc/wrc /opt/wine-tools-native/bin/
+          cp tools/widl/widl /opt/wine-tools-native/bin/
           
-          # 配置真正的 WOW64 Wine，启用 Vulkan 和完整 GStreamer 支持
+          # 设置环境变量
+          echo "WINE_TOOLS_PATH=/opt/wine-tools-native/bin" >> $GITHUB_ENV
+          echo "/opt/wine-tools-native/bin" >> $GITHUB_PATH
+          
+          # 验证工具
+          echo "验证 Wine 工具:"
+          ls -la /opt/wine-tools-native/bin/
+
+      # ------------------------------------------------------------
+      # 10. 验证 Wine 工具
+      # ------------------------------------------------------------
+      - name: 验证 Wine 工具
+        run: |
+          export PATH="/opt/wine-tools-native/bin:$PATH"
+          echo "测试 winebuild:"
+          winebuild --version || { echo "winebuild 不可执行"; exit 1; }
+          echo "测试 wrc:"
+          wrc --version || { echo "wrc 不可执行"; exit 1; }
+          echo "测试 widl:"
+          widl -V || { echo "widl 不可执行"; exit 1; }
+
+      # ------------------------------------------------------------
+      # 11. 交叉编译 ARM64 WOW64 - 修复版本
+      # ------------------------------------------------------------
+      - name: 交叉编译 ARM64 WOW64
+        run: |
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          mkdir -p build-arm64
+          cd build-arm64
+          
+          # 设置环境变量
+          export PATH="/opt/${{ env.LLVMMINGW_NAME }}/bin:/opt/wine-tools-native/bin:$PATH"
+          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
+          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+          export CFLAGS="-O2 -pipe"
+          export CXXFLAGS="-O2 -pipe"
+          export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
+          
+          # 配置交叉编译 - 移除不兼容的参数
           ../configure \
-            --enable-win64 \
+            --host=aarch64-linux-gnu \
+            --build=x86_64-linux-gnu \
             --prefix=/tmp/wine-install-wow64 \
-            --with-x \
-            --with-vulkan \
-            --with-alsa \
-            --with-pulse \
-            --with-freetype \
-            --with-fontconfig \
-            --with-gstreamer \
-            --with-gettext \
-            --with-sdl \
-            --enable-nls \
-            --disable-winemenubuilder \
-            --disable-win16 \
+            --with-wine-tools=/opt/wine-tools-native \
+            --enable-archs=arm64ec,aarch64,i386 \
+            --with-mingw=clang \
             --disable-tests \
-            --without-ldap \
-            --without-capi \
-            --without-oss \
-            --without-cups \
-            --without-dbus \
-            --without-coreaudio \
-            --without-gphoto \
-            --without-osmesa \
-            --without-sane \
-            --without-pcap \
-            --without-pcsclite \
-            --without-udev \
-            --without-unwind \
-            --without-usb \
-            --without-v4l2 \
-            --without-wayland
-          # 构建真正的 WOW64 Wine
-          echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
+            --with-vulkan \
+            --with-gstreamer \
+            CC=aarch64-linux-gnu-gcc \
+            CXX=aarch64-linux-gnu-g++
+          
+          # 编译
           make -j$(nproc)
           make install
+
+      # ------------------------------------------------------------
+      # 12. 打包
+      # ------------------------------------------------------------
       - name: 准备打包
         run: |
-          # 创建打包目录
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           mkdir -p wine-package/$PACKAGE_NAME
-          
-          # 复制 Wine 安装文件
-          echo "复制 Wine 文件到 $PACKAGE_NAME..."
           cp -r /tmp/wine-install-wow64/* wine-package/$PACKAGE_NAME/
+
       - name: 创建打包文件
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
-          
-          echo "最终文件结构:"
-          find wine-package -type f | sort | head -20
-          
-          # 使用 tar.xz 格式打包
           tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
-          
-          echo "打包完成:"
           ls -lh *.tar.xz
+
       - name: Generate checksums
         run: |
-          cd $GITHUB_WORKSPACE
           sha256sum *.tar.xz > checksums.txt
           cat checksums.txt
+
       - name: Upload Wine WoW64 artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Wine-${{ github.event.inputs.wine_branch || 'staging' }}-${{ github.event.inputs.wine_version || 'latest' }}-WoW64
+          name: Wine-${{ github.event.inputs.wine_branch || 'staging' }}-${{ github.event.inputs.wine_version || 'latest' }}-ARM64
           path: |
-            ${{ github.workspace }}/*.tar.xz
-            ${{ github.workspace }}/checksums.txt
+            *.tar.xz
+            checksums.txt
           retention-days: 30
+
+      - name: 发布 Wine 到 GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: wine-${{ github.event.inputs.wine_branch || 'staging' }}-${{ github.event.inputs.wine_version || 'latest' }}-arm64
+          name: Wine ${{ github.event.inputs.wine_branch || 'staging' }} ${{ github.event.inputs.wine_version || 'latest' }} (ARM64 WOW64 for Termux)
+          body: |
+            # Wine ${{ github.event.inputs.wine_branch || 'staging' }} ${{ github.event.inputs.wine_version || 'latest' }} - ARM64 WOW64 for Termux
+
+            ## 版本信息
+            - **Wine 分支**: ${{ github.event.inputs.wine_branch || 'staging' }}
+            - **Wine 版本**: ${{ github.event.inputs.wine_version || 'latest' }}
+            - **主机架构**: ARM64 (aarch64)
+            - **目标 Windows 架构**: i386, x86_64, arm64ec (通过 WOW64 模拟)
+            - **平台**: Termux (Android)
+            - **图形 API**: Vulkan 支持已启用
+            - **多媒体**: GStreamer 支持已启用
+            - **工具链**: llvm-mingw + 系统 gcc
+
+            ## 特性
+            ✓ ARM64 原生 Wine 可执行文件
+            ✓ 支持运行 32/64 位 Windows 应用程序
+            ✓ Vulkan 渲染
+            ✓ GStreamer 多媒体后端
+            ✓ 中文环境支持
+            ✓ 应用了关键补丁提升兼容性
+
+            ## 安装说明
+            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置，并设置环境变量。
+
+            ## 构建信息
+            - 构建时间: ${{ github.event.head_commit.timestamp }}
+            - 提交: ${{ github.sha }}
+            - 工作流: ${{ github.workflow }}
+          files: |
+            ${{ github.workspace }}/${{ env.BUILD_NAME }}.tar.xz
+            ${{ github.workspace }}/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
