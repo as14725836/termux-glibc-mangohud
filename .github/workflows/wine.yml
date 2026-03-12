@@ -165,16 +165,11 @@ jobs:
           mkdir -p build-wow64
           cd build-wow64
           
-          export CROSSCC="x86_64-w64-mingw32-gcc"
-          export CROSSCXX="x86_64-w64-mingw32-g++"
-          export CFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
-          export CXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
-          export CROSSCFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
-          export CROSSCXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
+          
           # 配置真正的 WOW64 Proton，启用 Vulkan 和完整 GStreamer 支持
           ../configure \
             --enable-win64 \
-            --enable-archs=i386,x86_64 \
+            --enable-archs=arm64,aarch64 \
             --prefix=/tmp/wine-install-proton \
             --with-x \
             --with-vulkan \
@@ -560,16 +555,10 @@ jobs:
           mkdir -p build-wow64
           cd build-wow64
           
-          export CROSSCC="x86_64-w64-mingw32-gcc"
-          export CROSSCXX="x86_64-w64-mingw32-g++"
-          export CFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
-          export CXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
-          export CROSSCFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
-          export CROSSCXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
           # 配置真正的 WOW64 Wine，启用 Vulkan 和完整 GStreamer 支持
           ../configure \
             --enable-win64 \
-            --enable-archs=i386,x86_64 \
+            --enable-archs=arm64,aarch64 \
             --prefix=/tmp/wine-install-wow64 \
             --with-x \
             --with-vulkan \
