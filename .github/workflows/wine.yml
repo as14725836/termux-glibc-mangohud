@@ -345,11 +345,10 @@ jobs:
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
             --enable-archs=arm64ec,aarch64,i386 \
-            --disable-gstreamer \
             --enable-tools \
             --disable-tests \
             --with-vulkan \
-            --with-gstreamer \
+            --without-gstreamer \
             --host=aarch64-linux-gnu \
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
