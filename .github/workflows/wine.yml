@@ -328,7 +328,7 @@ jobs:
             libtheora-dev
       
             # ------------------------------------------------------------
-            - name: 安装基础工具
+      - name: 安装基础工具
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
