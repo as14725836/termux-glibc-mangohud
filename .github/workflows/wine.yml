@@ -123,7 +123,11 @@ jobs:
             libcups2-dev:arm64 \
             libxkbcommon-dev:arm64 \
             libxkbregistry-dev:arm64 \
+            
             libwayland-dev:arm64
+          sudo apt-get install libgstreamer1.0-dev \
+                     libgstreamer-plugins-base1.0-dev \
+                     libgstreamer-plugins-bad1.0-dev
       # ------------------------------------------------------------
       # 3. 安装 llvm-mingw 交叉编译工具链
       # ------------------------------------------------------------
