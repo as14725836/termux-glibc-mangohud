@@ -1,4 +1,4 @@
-name: Wine 官方arm 构建（基于 llvm-mingw，Debian 12 容器）
+name: Wine 官方arm 构建（基于 llvm-mingw，Ubuntu 24.04）
 
 on:
   schedule:
@@ -33,46 +33,30 @@ permissions:
 
 jobs:
   build-wine-wow64:
-    runs-on: ubuntu-latest
-    container:
-      image: debian:12
-      options: --user root
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        arch: [aarch64]
+      fail-fast: false
     timeout-minutes: 180
 
     steps:
       - name: 安装基础工具
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates wget git curl gnupg sudo xz-utils g++ file
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates wget git curl gnupg xz-utils g++ file
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # 1. 配置 APT 源（支持 amd64 和 arm64）
-      # ------------------------------------------------------------
-      - name: 配置 APT 源
-        run: |
-          if [ -f /etc/apt/sources.list ]; then
-            cp /etc/apt/sources.list /etc/apt/sources.list.bak
-          else
-            echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list
-            echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list
-            echo "deb http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list
-          fi
-          grep -v '^#' /etc/apt/sources.list | sed 's/^deb /deb [arch=amd64] /g' > /tmp/amd64.list
-          sed -e 's/\[arch=amd64\]/[arch=arm64]/g' /tmp/amd64.list > /tmp/arm64.list
-          cat /tmp/amd64.list /tmp/arm64.list > /etc/apt/sources.list
-          dpkg --add-architecture arm64
-          apt-get update
-          apt-get install -y --no-install-recommends hello:arm64 || { echo "arm64 源测试失败"; exit 1; }
-      # ------------------------------------------------------------
-      # 2. 安装所有依赖（完全参照 Dockerfile 的包列表）
+      # 2. 安装所有构建依赖（Ubuntu 24.04 版本）
       # ------------------------------------------------------------
       - name: 安装构建依赖
         run: |
-          apt-get install -y --no-install-recommends \
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
             binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
-            ca-certificates nano python3 python3-setuptools clang screen llvm lld wget curl \
+            ca-certificates nano python3 python3-setuptools clang llvm lld wget curl \
             flex bison nasm \
             libfreetype6-dev \
             libglib2.0-dev \
@@ -80,119 +64,92 @@ jobs:
             libxcb1-dev \
             libx11-dev \
             librsvg2-bin \
-            git gettext make automake autoconf pkg-config libtool gtk-doc-tools clang \
+            git gettext make automake autoconf pkg-config libtool gtk-doc-tools \
             dpkg-dev \
-            libglib2.0-dev:arm64 \
-            libfreetype6-dev:arm64 \
-            libltdl-dev:arm64 \
-            libxcb1-dev:arm64 \
-            libx11-dev:arm64 \
-            build-essential libc-dev-arm64-cross less libc-devtools libidn2-0:arm64 \
-            libx11-dev libxinerama-dev libfreetype-dev libfontconfig-dev \
+            build-essential libc-dev-arm64-cross less \
+            libxinerama-dev libfreetype-dev libfontconfig-dev \
             cmake \
             libstdc++6-arm64-cross \
             libstdc++-12-dev-arm64-cross \
-            libepoxy-dev:arm64 \
-            libsdl2-dev:arm64 \
             ninja-build \
-            dpkg-dev fakeroot debhelper dh-make \
-            libxcursor-dev:arm64 \
-            libxi-dev:arm64 \
-            libxshmfence-dev:arm64 \
-            libxxf86vm-dev:arm64 \
-            libxrandr-dev:arm64 \
-            libxrender-dev:arm64 \
-            libxfixes-dev:arm64 \
-            libxcomposite-dev:arm64 \
-            libdbus-1-dev:arm64 \
-            libsane-dev:arm64 \
-            libusb-1.0-0-dev:arm64 \
-            libv4l-dev:arm64 \
-            libpulse-dev:arm64 \
-            libgstreamer1.0-dev:arm64 \
-            libgstreamer-plugins-base1.0-dev:arm64 \
-            libgstreamer-plugins-bad1.0-dev:arm64 \
-            libudev-dev:arm64 \
-            libunwind-dev:arm64 \
-            libsdl2-dev:arm64 \
-            libfontconfig1-dev:arm64 \
-            libkrb5-dev:arm64 \
-            libvulkan-dev:arm64 \
-            libgl-dev:arm64 \
-            libgnutls28-dev:arm64 \
-            libcups2-dev:arm64 \
-            libxkbcommon-dev:arm64 \
-            libxkbregistry-dev:arm64 \
-            libwayland-dev:arm64
-           
+            fakeroot debhelper dh-make \
+            libunwind-dev \
+            libvulkan-dev \
+            libgl-dev \
+            libgnutls28-dev \
+            libxkbcommon-dev \
+            libwayland-dev
+
       # ------------------------------------------------------------
       # 3. 安装 llvm-mingw 交叉编译工具链
       # ------------------------------------------------------------
       - name: 下载并安装 llvm-mingw
         run: |
-          mkdir -p /opt
+          sudo mkdir -p /opt
           cd /opt
-          wget https://github.com/mstorsjo/llvm-mingw/releases/download/${{ env.LLVMMINGW_DATE }}/${{ env.LLVMMINGW_NAME }}.tar.xz
-          tar -xJf ${{ env.LLVMMINGW_NAME }}.tar.xz
-          rm ${{ env.LLVMMINGW_NAME }}.tar.xz
+          sudo wget https://github.com/mstorsjo/llvm-mingw/releases/download/${{ env.LLVMMINGW_DATE }}/${{ env.LLVMMINGW_NAME }}.tar.xz
+          sudo tar -xJf ${{ env.LLVMMINGW_NAME }}.tar.xz
+          sudo rm ${{ env.LLVMMINGW_NAME }}.tar.xz
           echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
+
       # ------------------------------------------------------------
       # 4. 设置中文语言环境
       # ------------------------------------------------------------
       - name: 设置中文语言环境
         run: |
-          apt-get install -y locales
-          sed -i '/zh_CN.UTF-8/s/^# //g' /etc/locale.gen
-          locale-gen
+          sudo apt-get install -y locales
+          sudo sed -i '/zh_CN.UTF-8/s/^# //g' /etc/locale.gen
+          sudo locale-gen
           echo "LANG=zh_CN.UTF-8" >> $GITHUB_ENV
           echo "LC_ALL=zh_CN.UTF-8" >> $GITHUB_ENV
+
       # ------------------------------------------------------------
-      # 5. 获取 Wine 源码（分支处理与原工作流一致）
+      # 5. 获取 Wine 源码
       # ------------------------------------------------------------
       - name: 获取 Wine 源码
         run: |
           set -e
           WINE_BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
           WINE_VERSION="${{ github.event.inputs.wine_version || 'latest' }}"
-          mkdir -p ${{ env.WINE_SOURCE_DIR }}
+          sudo mkdir -p ${{ env.WINE_SOURCE_DIR }}
           cd ${{ env.WINE_SOURCE_DIR }}
           case "$WINE_BRANCH" in
             staging-tkg|staging-tkg-fsync)
               echo "处理 TKG 系列分支: $WINE_BRANCH"
-              git clone https://github.com/Kron4ek/wine-tkg.git source
+              sudo git clone https://github.com/Kron4ek/wine-tkg.git source
               cd source
               if [ "$WINE_BRANCH" = "staging-tkg-fsync" ]; then
-                git checkout fsync
+                sudo git checkout fsync
               fi
               if [ "$WINE_VERSION" != "latest" ]; then
-                git checkout "$WINE_VERSION" 2>/dev/null || git checkout "wine-$WINE_VERSION" 2>/dev/null || echo "使用默认分支"
+                sudo git checkout "$WINE_VERSION" 2>/dev/null || sudo git checkout "wine-$WINE_VERSION" 2>/dev/null || echo "使用默认分支"
               fi
               if [ -f "VERSION" ]; then
                 WINE_VERSION_ACTUAL="$(cat VERSION | tail -c +14)"
               else
-                WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
+                WINE_VERSION_ACTUAL=$(sudo git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
               fi
               ;;
             staging)
               echo "处理 Staging 分支"
-              git clone https://github.com/afeimod/wine-arm.git source
+              sudo git clone https://github.com/afeimod/wine-arm.git source
               cd source
-              git config advice.detachedHead false
+              sudo git config advice.detachedHead false
               if [ "$WINE_VERSION" != "latest" ]; then
-                git checkout "wine-$WINE_VERSION"
+                sudo git checkout "wine-$WINE_VERSION"
               fi
-              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
+              WINE_VERSION_ACTUAL=$(sudo git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
               PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
               STAGING_VERSION="v${PURE_VERSION}"
-              wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" || \
-              wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/v${PURE_VERSION}.tar.gz"
+              sudo wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" || \
+              sudo wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/v${PURE_VERSION}.tar.gz"
               if [ -f "wine-staging-${PURE_VERSION}.tar.gz" ]; then
-                tar -xzf "wine-staging-${PURE_VERSION}.tar.gz"
-                STAGING_DIR=$(find . -maxdepth 1 -type d -name "*staging*" | head -1)
+                sudo tar -xzf "wine-staging-${PURE_VERSION}.tar.gz"
+                STAGING_DIR=$(sudo find . -maxdepth 1 -type d -name "*staging*" | head -1)
                 if [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR/staging" ]; then
                   cd "$STAGING_DIR/staging"
-                  chmod +x patchinstall.py
-                  ./patchinstall.py --all --destdir=../../
+                  sudo chmod +x patchinstall.py
+                  sudo ./patchinstall.py --all --destdir=../../
                   cd ../..
                 else
                   echo "警告: 未找到 staging 补丁目录，跳过补丁应用"
@@ -203,36 +160,38 @@ jobs:
               ;;
             vanilla)
               echo "处理 Vanilla 分支"
-              git clone https://github.com/GameNative/proton-wine.git source
+              sudo git clone https://github.com/GameNative/proton-wine.git source
               cd source
-              git config advice.detachedHead false
+              sudo git config advice.detachedHead false
               if [ "$WINE_VERSION" != "latest" ]; then
-                git checkout "wine-$WINE_VERSION"
+                sudo git checkout "wine-$WINE_VERSION"
               fi
-              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
+              WINE_VERSION_ACTUAL=$(sudo git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
               ;;
             *)
               echo "未知的 Wine 分支: $WINE_BRANCH"
               exit 1
               ;;
           esac
-          COMMIT_HASH=$(git rev-parse --short HEAD)
+          COMMIT_HASH=$(sudo git rev-parse --short HEAD)
           BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-${WINE_BRANCH}-arm64-wow64"
           echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
           echo "WINE_VERSION_ACTUAL=$WINE_VERSION_ACTUAL" >> $GITHUB_ENV
           echo "源码准备完成，构建名称: $BUILD_NAME"
+
       # ------------------------------------------------------------
       # 6. 修复 Termux 路径问题
       # ------------------------------------------------------------
       - name: 修复 Termux 路径问题
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; 2>/dev/null | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g' 2>/dev/null || true
-          find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
-          find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
-          find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
-          find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
+          sudo find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; 2>/dev/null | xargs sudo sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g' 2>/dev/null || true
+          sudo find server -type f \( -name "*.c" -o -name "*.h" \) -exec sudo sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
+          sudo find . -name "file.c" -exec sudo sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
+          sudo find . -name "loader.c" -exec sudo sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
+          sudo find . -name "server.c" -exec sudo sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
+
       # ------------------------------------------------------------
       # 7. 应用 mfplat 补丁
       # ------------------------------------------------------------
@@ -244,19 +203,20 @@ jobs:
           VERSION_MINOR=$(echo "$PURE_VERSION" | cut -d. -f2)
           if [ "$VERSION_MAJOR" -gt 9 ] || [ "$VERSION_MAJOR" -eq 9 -a "$VERSION_MINOR" -ge 10 ]; then
             echo "应用 9.10+ 补丁 (wine_do_not_create_dxgi_manager2.patch)"
-            wget -q https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
+            sudo wget -q https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
             if [ -f "dlls/mfplat/main.c" ]; then
-              patch -p1 < wine_do_not_create_dxgi_manager2.patch || { echo "补丁应用失败"; exit 1; }
+              sudo patch -p1 < wine_do_not_create_dxgi_manager2.patch || { echo "补丁应用失败"; exit 1; }
             else
               echo "错误: dlls/mfplat/main.c 不存在"
               exit 1
             fi
           else
             echo "应用 9.10 以下补丁 (fix_wine9.2_mfplat.sh)"
-            wget -q -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
-            chmod +x fix_wine9.2_mfplat.sh
-            ./fix_wine9.2_mfplat.sh
+            sudo wget -q -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
+            sudo chmod +x fix_wine9.2_mfplat.sh
+            sudo ./fix_wine9.2_mfplat.sh
           fi
+
       # ------------------------------------------------------------
       # 8. 生成 configure 脚本
       # ------------------------------------------------------------
@@ -264,83 +224,83 @@ jobs:
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
           if [ ! -f "configure" ]; then
-            ./autogen.sh
+            sudo ./autogen.sh
           fi
+
       # ------------------------------------------------------------
-      # 9. 构建 native wine64（严格模仿成功示例，并备份完整 nls 目录）
+      # 9. 构建 native wine64
       # ------------------------------------------------------------
       - name: 构建 native wine64 工具和 NLS（带完整备份）
         run: |
           set -e
-          mkdir -p ${{ env.WINE64_DIR }}
-          cp -r ${{ env.WINE_SOURCE_DIR }}/source ${{ env.WINE64_DIR }}/source
+          sudo mkdir -p ${{ env.WINE64_DIR }}
+          sudo cp -r ${{ env.WINE_SOURCE_DIR }}/source ${{ env.WINE64_DIR }}/source
           cd ${{ env.WINE64_DIR }}
-          mkdir -p amd64
+          sudo mkdir -p amd64
           cd amd64
-          ../source/configure --enable-win64 --prefix=/usr/local
-          make __tooldeps__ -j$(nproc)
+          sudo ../source/configure --enable-win64 --prefix=/usr/local
+          sudo make __tooldeps__ -j$(nproc)
           echo "构建 NLS 目录..."
-          make -C nls
-          # 备份整个 nls 目录（跟随符号链接）
-          mkdir -p /opt/nls-backup
-          cp -aL nls/. /opt/nls-backup/
+          sudo make -C nls
+          # 备份整个 nls 目录
+          sudo mkdir -p /opt/nls-backup
+          sudo cp -aL nls/. /opt/nls-backup/
           echo "nls 目录已完整备份到 /opt/nls-backup"
           ls -la /opt/nls-backup/
+
       # ------------------------------------------------------------
-      # 10. 复制构建目录，跟随符号链接，并验证 NLS（带恢复机制）
+      # 10. 复制构建目录
       # ------------------------------------------------------------
       - name: 复制构建目录并验证 NLS（带恢复机制）
         run: |
           set -e
-          mkdir -p /opt/wine64-native
-          # 检查源文件，若不存在则从备份恢复（备份包含所有 nls 文件）
+          sudo mkdir -p /opt/wine64-native
+          # 检查源文件，若不存在则从备份恢复
           if [ ! -f ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ] && [ ! -L ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ]; then
             echo "警告: 源目录中 nls/locale.nls 不存在，尝试从备份恢复"
             if [ -d /opt/nls-backup ]; then
-              mkdir -p ${{ env.WINE64_DIR }}/amd64/nls
-              cp -af /opt/nls-backup/. ${{ env.WINE64_DIR }}/amd64/nls/
+              sudo mkdir -p ${{ env.WINE64_DIR }}/amd64/nls
+              sudo cp -af /opt/nls-backup/. ${{ env.WINE64_DIR }}/amd64/nls/
               echo "已从备份恢复完整 nls 目录"
             else
               echo "错误: 无法恢复 nls 目录"
               exit 1
             fi
           fi
-          # 复制整个构建目录，使用 -aL 选项（归档且跟随符号链接）
-          cp -aL ${{ env.WINE64_DIR }}/amd64/. /opt/wine64-native/
-          chmod -R +x /opt/wine64-native/tools/*/
-          chmod -R +r /opt/wine64-native/nls
-          # 验证复制后的文件是否为普通文件（不是符号链接）
+          # 复制整个构建目录
+          sudo cp -aL ${{ env.WINE64_DIR }}/amd64/. /opt/wine64-native/
+          sudo chmod -R +x /opt/wine64-native/tools/*/
+          sudo chmod -R +r /opt/wine64-native/nls
+          # 验证复制后的文件
           if [ ! -f /opt/wine64-native/nls/locale.nls ]; then
             echo "警告: 复制后 locale.nls 丢失或为无效符号链接，尝试从备份恢复"
             if [ -d /opt/nls-backup ]; then
-              mkdir -p /opt/wine64-native/nls
-              cp -af /opt/nls-backup/. /opt/wine64-native/nls/
+              sudo mkdir -p /opt/wine64-native/nls
+              sudo cp -af /opt/nls-backup/. /opt/wine64-native/nls/
               echo "已从备份恢复 nls 目录到目标目录"
             else
               echo "错误: 无法恢复 nls 目录"
               exit 1
             fi
           fi
-          echo "复制后 locale.nls 存在，大小: $(wc -c < /opt/wine64-native/nls/locale.nls) 字节"
+          echo "复制后 locale.nls 存在，大小: $(sudo wc -c < /opt/wine64-native/nls/locale.nls) 字节"
+
       # ------------------------------------------------------------
-      # 11. 交叉编译 ARM64 WOW64（使用复制后的目录作为工具目录）
-      #     修改：移除 --with-wine64，仅使用 --with-wine-tools 以强制重新编译 programs
+      # 11. 交叉编译 ARM64 WOW64
       # ------------------------------------------------------------
       - name: 交叉编译 ARM64 WOW64
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          mkdir -p build-arm64
+          sudo mkdir -p build-arm64
           cd build-arm64
           export PATH="/opt/${{ env.LLVMMINGW_NAME }}/bin:$PATH"
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
-          # 根据 rules (4).txt 设置正确的 LDFLAGS，同时保留库搜索路径
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,--dynamic-linker=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 -Wl,-rpath=/data/data/com.termux/files/usr/glibc/lib"
           export WINE_NLS_DIR=/opt/wine64-native/nls
           echo "使用 Wine64 构建目录（作为工具目录）: /opt/wine64-native"
           echo "WINE_NLS_DIR=$WINE_NLS_DIR"
-          # 关键修改：仅使用 --with-wine-tools，不使用 --with-wine64
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
@@ -354,17 +314,18 @@ jobs:
             build_alias=x86_64-linux-gnu \
             --with-wine-tools=/opt/wine64-native \
             CC=aarch64-linux-gnu-gcc
-          make -j$(nproc)
-          make install
-          # 验证安装是否生成 bin 目录（若缺失则报错）
+          sudo make -j$(nproc)
+          sudo make install
+          # 验证安装是否生成 bin 目录
           if [ ! -d /tmp/wine-install-wow64/bin ]; then
             echo "错误: /tmp/wine-install-wow64/bin 目录不存在，安装可能不完整"
             exit 1
           fi
+
       # ------------------------------------------------------------
-      # 12. 全面补全安装目录的运行时文件（增强版：优先从 programs/ 查找）
+      # 12. 全面补全安装目录的运行时文件
       # ------------------------------------------------------------
-      - name: 全面补全安装目录的运行时文件（增强版）
+      - name: 全面补全安装目录的运行时文件
         run: |
           set -e
           TARGET_PREFIX="/tmp/wine-install-wow64"
@@ -373,25 +334,23 @@ jobs:
           NATIVE_NLS_DIR="/opt/wine64-native/nls"
           SOURCE_FONTS_DIR="$SOURCE_DIR/fonts"
           echo "=== 补全 share/wine/nls ==="
-          mkdir -p "$TARGET_PREFIX/share/wine/nls"
+          sudo mkdir -p "$TARGET_PREFIX/share/wine/nls"
           if [ -d "$NATIVE_NLS_DIR" ]; then
-              cp -v "$NATIVE_NLS_DIR"/*.nls "$TARGET_PREFIX/share/wine/nls/" 2>/dev/null || echo "没有找到 .nls 文件，可能已存在"
+              sudo cp -v "$NATIVE_NLS_DIR"/*.nls "$TARGET_PREFIX/share/wine/nls/" 2>/dev/null || echo "没有找到 .nls 文件，可能已存在"
           fi
           if [ ! -f "$TARGET_PREFIX/share/wine/nls/locale.nls" ] && [ -f "/opt/nls-backup/locale.nls" ]; then
-              cp -v "/opt/nls-backup/locale.nls" "$TARGET_PREFIX/share/wine/nls/"
+              sudo cp -v "/opt/nls-backup/locale.nls" "$TARGET_PREFIX/share/wine/nls/"
           fi
           echo "=== 补全 share/wine/fonts ==="
           if [ -d "$SOURCE_FONTS_DIR" ]; then
-              mkdir -p "$TARGET_PREFIX/share/wine/fonts"
-              cp -v "$SOURCE_FONTS_DIR"/*.ttf "$SOURCE_FONTS_DIR"/*.fon "$TARGET_PREFIX/share/wine/fonts/" 2>/dev/null || echo "字体复制完成或无字体文件"
+              sudo mkdir -p "$TARGET_PREFIX/share/wine/fonts"
+              sudo cp -v "$SOURCE_FONTS_DIR"/*.ttf "$SOURCE_FONTS_DIR"/*.fon "$TARGET_PREFIX/share/wine/fonts/" 2>/dev/null || echo "字体复制完成或无字体文件"
           else
               echo "警告: 源码 fonts 目录不存在，跳过字体复制"
           fi
           echo "=== 补全 wine.inf ==="
-          # 查找构建生成的 wine.inf（优先）
-          WINE_INF_SRC=$(find "$BUILD_DIR" -name "wine.inf" -type f 2>/dev/null | head -1)
+          WINE_INF_SRC=$(sudo find "$BUILD_DIR" -name "wine.inf" -type f 2>/dev/null | head -1)
           if [ -z "$WINE_INF_SRC" ]; then
-              # 如果未生成，尝试从源码目录复制原始文件
               if [ -f "$SOURCE_DIR/dlls/wine.inf/wine.inf" ]; then
                   WINE_INF_SRC="$SOURCE_DIR/dlls/wine.inf/wine.inf"
               elif [ -f "$SOURCE_DIR/dlls/wine.inf/wine.inf.in" ]; then
@@ -399,32 +358,29 @@ jobs:
               fi
           fi
           if [ -n "$WINE_INF_SRC" ]; then
-              mkdir -p "$TARGET_PREFIX/share/wine"
-              cp -v "$WINE_INF_SRC" "$TARGET_PREFIX/share/wine/wine.inf"
+              sudo mkdir -p "$TARGET_PREFIX/share/wine"
+              sudo cp -v "$WINE_INF_SRC" "$TARGET_PREFIX/share/wine/wine.inf"
           else
               echo "警告: 未找到 wine.inf 文件"
           fi
           echo "=== 补全关键程序文件 ==="
           BIN_DIR="$TARGET_PREFIX/bin"
-          mkdir -p "$BIN_DIR"
-          # 需要的关键程序列表（包括 wineboot, winecfg, regedit, wineconsole 等）
+          sudo mkdir -p "$BIN_DIR"
           PROGRAMS="wine wineserver wineboot winecfg regedit"
           for prog in $PROGRAMS; do
               if [ -f "$BIN_DIR/$prog" ]; then
                   echo "文件 $BIN_DIR/$prog 已存在"
                   continue
               fi
-              # 优先从 programs/ 子目录查找（用户态程序）
               found=""
               if [[ "$prog" != "wine" && "$prog" != "wineserver" ]]; then
-                  found=$(find "$BUILD_DIR/programs" -type f -name "$prog" -executable 2>/dev/null | head -1)
+                  found=$(sudo find "$BUILD_DIR/programs" -type f -name "$prog" -executable 2>/dev/null | head -1)
               fi
               if [ -z "$found" ]; then
-                  # 全目录搜索（包括 loader/ 等）
-                  found=$(find "$BUILD_DIR" -type f -name "$prog" -executable 2>/dev/null | head -1)
+                  found=$(sudo find "$BUILD_DIR" -type f -name "$prog" -executable 2>/dev/null | head -1)
               fi
               if [ -n "$found" ]; then
-                  cp -v "$found" "$BIN_DIR/"
+                  sudo cp -v "$found" "$BIN_DIR/"
               else
                   echo "错误: 完全未找到 $prog"
                   exit 1
@@ -444,8 +400,9 @@ jobs:
           echo "=== 最终安装目录结构预览 ==="
           ls -la "$TARGET_PREFIX/share/wine/" || true
           ls -la "$TARGET_PREFIX/bin/" || true
+
       # ------------------------------------------------------------
-      # 13. 验证安装目录内容（可选，便于调试）
+      # 13. 验证安装目录内容
       # ------------------------------------------------------------
       - name: 验证安装目录内容
         run: |
@@ -459,6 +416,7 @@ jobs:
             echo "share 目录内容："
             ls -la /tmp/wine-install-wow64/share/
           fi
+
       # ------------------------------------------------------------
       # 14. 打包
       # ------------------------------------------------------------
@@ -467,15 +425,18 @@ jobs:
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           mkdir -p wine-package/$PACKAGE_NAME
           cp -r /tmp/wine-install-wow64/* wine-package/$PACKAGE_NAME/
+
       - name: 创建打包文件
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
           ls -lh *.tar.xz
+
       - name: Generate checksums
         run: |
           sha256sum *.tar.xz > checksums.txt
           cat checksums.txt
+
       - name: Upload Wine WoW64 artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -500,13 +461,11 @@ jobs:
             - **目标 Windows 架构**: i386, x86_64, arm64ec (通过 WOW64 模拟)
             - **平台**: Termux (Android)
             - **图形 API**: Vulkan 支持已启用
-            - **多媒体**: GStreamer 支持已启用
             - **工具链**: llvm-mingw + 系统 gcc
             ## 特性
             ✓ ARM64 原生 Wine 可执行文件
             ✓ 支持运行 32/64 位 Windows 应用程序
             ✓ Vulkan 渲染
-            ✓ GStreamer 多媒体后端
             ✓ 中文环境支持
             ✓ 应用了关键补丁提升兼容性
             ✓ 包含完整的运行时文件：wine.inf、wineboot、wineserver 等所有必要程序
