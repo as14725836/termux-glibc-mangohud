@@ -357,56 +357,7 @@ jobs:
           # 添加ARM64架构并更新
           sudo dpkg --add-architecture arm64
           sudo apt update
-      
-      - name: 安装ARM64基础库
-        run: |
-          # 安装基础arm64库
-          sudo apt install -y \
-            libc6:arm64 \
-            libstdc++6:arm64 \
-            libgcc-s1:arm64
-      
-      - name: 安装ARM64开发库
-        run: |
-          sudo apt install -y \
-            libglib2.0-dev:arm64 \
-            libfreetype6-dev:arm64 \
-            libfontconfig1-dev:arm64 \
-            libx11-dev:arm64 \
-            libxext-dev:arm64 \
-            libxrender-dev:arm64 \
-            libxrandr-dev:arm64 \
-            libxi-dev:arm64 \
-            libxcursor-dev:arm64 \
-            libxfixes-dev:arm64 \
-            libxcomposite-dev:arm64 \
-            libxinerama-dev:arm64 \
-            libxxf86vm-dev:arm64 \
-            libxcb1-dev:arm64 \
-            libdbus-1-dev:arm64 \
-            libasound2-dev:arm64 \
-            libpulse-dev:arm64 \
-            libudev-dev:arm64 \
-            libcups2-dev:arm64 \
-            libvulkan-dev:arm64 \
-            libgl-dev:arm64 \
-            libegl1-mesa-dev:arm64 \
-            libgles2-mesa-dev:arm64 \
-            libsdl2-dev:arm64 \
-            libgstreamer1.0-dev:arm64 \
-            libgstreamer-plugins-base1.0-dev:arm64 \
-            libunwind-dev:arm64 \
-            libgnutls28-dev:arm64 \
-            libxkbcommon-dev:arm64 \
-            libwayland-dev:arm64 \
-            libjpeg-dev:arm64 \
-            libpng-dev:arm64 \
-            libtiff-dev:arm64 \
-            libxml2-dev:arm64 \
-            libssl-dev:arm64 \
-            libpcap-dev:arm64 \
-            || echo "一些ARM64包可能不可用，继续构建..."
-      
+
       - name: 下载并安装 llvm-mingw
         run: |
           mkdir -p /opt
