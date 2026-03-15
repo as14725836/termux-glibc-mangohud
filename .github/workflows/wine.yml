@@ -327,29 +327,16 @@ jobs:
             libvpx-dev \
             libtheora-dev
       
-      - name: 安装ARM64交叉编译工具链
+            # ------------------------------------------------------------
+      - name: 下载并安装 llvm-mingw
         run: |
-          # 安装LLVM MinGW工具链（支持ARM64EC）
-          wget https://github.com/mstorsjo/llvm-mingw/releases/download/20250114/llvm-mingw-20250114-ucrt-ubuntu-24.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20250114-ucrt-ubuntu-24.04-x86_64.tar.xz
-          sudo mv llvm-mingw-20250114-ucrt-ubuntu-24.04-x86_64 /opt/llvm-mingw
-          
-          # 添加到PATH
-          echo "/opt/llvm-mingw/bin" >> $GITHUB_PATH
-          export PATH="/opt/llvm-mingw/bin:$PATH"
-          
-          # 验证安装
-          echo "已安装的编译器:"
-          ls -la /opt/llvm-mingw/bin/*-gcc || true
-          
-          # 测试ARM64EC编译器是否存在
-          if command -v aarch64-w64-mingw32-clang; then
-            echo "✅ ARM64EC编译器可用"
-          else
-            echo "❌ ARM64EC编译器不可用"
-            exit 1
-          fi
-      
+          mkdir -p /opt
+          cd /opt
+          wget https://github.com/mstorsjo/llvm-mingw/releases/download/${{ env.LLVMMINGW_DATE }}/${{ env.LLVMMINGW_NAME }}.tar.xz
+          tar -xJf ${{ env.LLVMMINGW_NAME }}.tar.xz
+          rm ${{ env.LLVMMINGW_NAME }}.tar.xz
+          echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
+  
       - name: 安装ARM64系统库
         run: |
           # 启用ARM64架构
