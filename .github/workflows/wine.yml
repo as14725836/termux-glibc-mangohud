@@ -345,6 +345,7 @@ jobs:
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
             --enable-archs=arm64ec,aarch64,i386 \
+            --without-gstreamer \
             --enable-tools \
             --disable-tests \
             --with-vulkan \
