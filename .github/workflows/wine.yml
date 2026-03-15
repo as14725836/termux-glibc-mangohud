@@ -249,12 +249,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: 安装构建依赖
+      - name: 安装基础依赖
         run: |
           sudo apt update
           sudo apt --fix-broken install -y
           
-          BASE_DEPS="\
+          # 先安装基础工具和amd64库
+          sudo apt install -y \
             debootstrap \
             perl \
             git \
@@ -262,10 +263,29 @@ jobs:
             xz-utils \
             bubblewrap \
             autoconf \
+            automake \
+            libtool \
             flex \
             bison \
             gcc-multilib \
             g++-multilib \
+            pkg-config \
+            cmake \
+            ninja-build \
+            clang \
+            lld \
+            llvm \
+            gettext \
+            libgettextpo-dev \
+            locales \
+            language-pack-zh-hans \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+      
+      - name: 安装X11和图形库 (amd64)
+        run: |
+          sudo apt install -y \
             libx11-dev \
             libxext-dev \
             libxi-dev \
@@ -283,32 +303,12 @@ jobs:
             libosmesa6-dev \
             libfreetype6-dev \
             libfontconfig1-dev \
-            libpcap-dev \
-            libdbus-1-dev \
-            libssl-dev \
-            libasound2-dev \
-            libpulse-dev \
-            libudev-dev \
-            libcups2-dev \
-            libjpeg-dev \
-            libpng-dev \
-            libtiff-dev \
-            libxml2-dev \
             libvulkan-dev \
             vulkan-tools \
-            libvulkan1 \
-            mesa-vulkan-drivers \
-            mingw-w64 \
-            gettext \
-            libgettextpo-dev \
-            locales \
-            language-pack-zh-hans"
-          
-          sudo apt install -y $BASE_DEPS
+            mesa-vulkan-drivers
       
-      - name: 安装多媒体和音频依赖
+      - name: 安装多媒体库 (amd64)
         run: |
-          sudo apt update
           sudo apt install -y \
             libunwind-dev \
             libgstreamer1.0-dev \
@@ -322,31 +322,49 @@ jobs:
             gstreamer1.0-libav \
             gstreamer1.0-pulseaudio \
             gstreamer1.0-alsa \
-            gstreamer1.0-gl \
-            gstreamer1.0-qt5 \
-            gstreamer1.0-gtk3 \
             libmpg123-dev \
             libopenal-dev \
-            libfaad-dev \
-            libflac-dev \
-            libvorbis-dev \
-            libx264-dev \
-            libx265-dev \
-            libvpx-dev \
-            libtheora-dev
+            libpulse-dev \
+            libasound2-dev \
+            libudev-dev \
+            libdbus-1-dev \
+            libssl-dev \
+            libcups2-dev \
+            libjpeg-dev \
+            libpng-dev \
+            libtiff-dev \
+            libxml2-dev \
+            libpcap-dev
       
-      - name: 配置多架构支持
+      - name: 配置ARM64源
         run: |
+          # 备份原sources.list
+          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+          
+          # 创建新的sources.list，添加正确的ARM64源
+          sudo bash -c 'cat > /etc/apt/sources.list << EOF
+       deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
+       deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
+       deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
+       deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
+
+       deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+       deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+       deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted universe multiverse
+       deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+       EOF'
+          
+          # 添加ARM64架构并更新
           sudo dpkg --add-architecture arm64
           sudo apt update
-          
+      
+      - name: 安装ARM64基础库
+        run: |
           # 安装基础arm64库
           sudo apt install -y \
             libc6:arm64 \
             libstdc++6:arm64 \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu
+            libgcc-s1:arm64
       
       - name: 安装ARM64开发库
         run: |
@@ -380,7 +398,14 @@ jobs:
             libunwind-dev:arm64 \
             libgnutls28-dev:arm64 \
             libxkbcommon-dev:arm64 \
-            libwayland-dev:arm64
+            libwayland-dev:arm64 \
+            libjpeg-dev:arm64 \
+            libpng-dev:arm64 \
+            libtiff-dev:arm64 \
+            libxml2-dev:arm64 \
+            libssl-dev:arm64 \
+            libpcap-dev:arm64 \
+            || echo "一些ARM64包可能不可用，继续构建..."
       
       - name: 下载并安装 llvm-mingw
         run: |
