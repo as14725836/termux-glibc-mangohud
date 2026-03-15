@@ -174,7 +174,7 @@ jobs:
               ;;
             staging)
               echo "处理 Staging 分支"
-              git clone https://github.com/wine-mirror/wine.git source
+              git clone https://github.com/GameNative/proton-wine.git source
               cd source
               git config advice.detachedHead false
               if [ "$WINE_VERSION" != "latest" ]; then
