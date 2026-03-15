@@ -53,32 +53,46 @@ jobs:
       # ------------------------------------------------------------
       - name: 安装构建依赖
         run: |
+          # 添加 ARM64 架构支持
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
+          
           sudo apt-get install -y --no-install-recommends \
             binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
             ca-certificates nano python3 python3-setuptools clang llvm lld wget curl \
             flex bison nasm \
-            libfreetype6-dev \
-            libglib2.0-dev \
-            libltdl-dev \
-            libxcb1-dev \
-            libx11-dev \
+            libfreetype6-dev:arm64 \
+            libglib2.0-dev:arm64 \
+            libltdl-dev:arm64 \
+            libxcb1-dev:arm64 \
+            libx11-dev:arm64 \
+            libxext-dev:arm64 \
+            libxrender-dev:arm64 \
+            libxrandr-dev:arm64 \
+            libxfixes-dev:arm64 \
+            libxcomposite-dev:arm64 \
+            libxinerama-dev:arm64 \
+            libxcursor-dev:arm64 \
+            libxi-dev:arm64 \
+            libxdamage-dev:arm64 \
+            libxss-dev:arm64 \
+            libxtst-dev:arm64 \
+            libxxf86vm-dev:arm64 \
             librsvg2-bin \
             git gettext make automake autoconf pkg-config libtool gtk-doc-tools \
             dpkg-dev \
             build-essential libc-dev-arm64-cross less \
-            libxinerama-dev libfreetype-dev libfontconfig-dev \
             cmake \
             libstdc++6-arm64-cross \
             libstdc++-12-dev-arm64-cross \
             ninja-build \
             fakeroot debhelper dh-make \
-            libunwind-dev \
-            libvulkan-dev \
-            libgl-dev \
-            libgnutls28-dev \
-            libxkbcommon-dev \
-            libwayland-dev
+            libunwind-dev:arm64 \
+            libvulkan-dev:arm64 \
+            libgl-dev:arm64 \
+            libgnutls28-dev:arm64 \
+            libxkbcommon-dev:arm64 \
+            libwayland-dev:arm64
 
       # ------------------------------------------------------------
       # 3. 安装 llvm-mingw 交叉编译工具链
