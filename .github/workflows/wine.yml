@@ -569,7 +569,7 @@ jobs:
           # 配置真正的 WOW64 Wine，启用 Vulkan 和完整 GStreamer 支持
           ../configure \
             --enable-win64 \
-            --enable-archs=i386,x86_64 \
+            --enable-archs=arm64ec,aarch64,i386 \
             --prefix=/tmp/wine-install-wow64 \
             --with-x \
             --with-vulkan \
