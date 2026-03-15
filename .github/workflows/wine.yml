@@ -248,27 +248,11 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
-        
-      - name: 配置ARM64源
+              
+      - name: 添加arm64架构
         run: |
-          # 备份原sources.list
-          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-          
-          # 创建新的sources.list，添加正确的ARM64源
-          sudo bash -c 'cat > /etc/apt/sources.list << EOF
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
-          EOF'
-          
-          # 添加ARM64架构并更新
-          sudo dpkg --add-architecture arm64
-          sudo apt update
+         sudo dpkg --add-architecture arm64
+         sudo apt update
       
       - name: 安装ARM64基础库
         run: |
@@ -276,7 +260,7 @@ jobs:
           sudo apt install -y \
             libc6:arm64 \
             libstdc++6:arm64 \
-            libgcc-s1:arm64
+           libgcc-s1:arm64
       
       - name: 安装ARM64开发库
         run: |
