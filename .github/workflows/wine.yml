@@ -51,13 +51,24 @@ jobs:
       # ------------------------------------------------------------
       # 2. 安装所有构建依赖（Ubuntu 24.04 版本）
       # ------------------------------------------------------------
+      # ------------------------------------------------------------
+# 2. 安装所有构建依赖（Ubuntu 24.04 版本）
+# ------------------------------------------------------------
       - name: 安装构建依赖
-        run: |
-          # 添加 ARM64 架构支持
+        run: 
           sudo dpkg --add-architecture arm64
-          sudo apt update && apt upgrade -y
-          
-          sudo apt-get install -y --no-install-recommends \
+  
+          sudo sed -i 's/deb http:\/\/archive.ubuntu.com\/ubuntu\//deb [arch=amd64] http:\/\/archive.ubuntu.com\/ubuntu\//g' /etc/apt/sources.list
+          sudo sed -i 's/deb http:\/\/security.ubuntu.com\/ubuntu\//deb [arch=amd64] http:\/\/security.ubuntu.com\/ubuntu\//g' /etc/apt/sources.list
+ 
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+   
+           sudo apt update
+    
+           sudo apt-get install -y --no-install-recommends \
             binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
             ca-certificates nano python3 python3-setuptools clang llvm lld wget curl \
             flex bison nasm \
