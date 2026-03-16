@@ -55,7 +55,7 @@ jobs:
       - name: 配置 APT 源
         run: |
           if [ -f /etc/apt/sources.list ]; then
-            cp /etc/apt/sources.list /etc/apt/sources.list.bak
+          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
           else
             echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list
             echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list
