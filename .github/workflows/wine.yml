@@ -55,7 +55,7 @@ jobs:
         run: |
           # 添加 ARM64 架构支持
           sudo dpkg --add-architecture arm64
-          sudo apt-get update
+          sudo apt update && apt upgrade -y
           
           sudo apt-get install -y --no-install-recommends \
             binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
