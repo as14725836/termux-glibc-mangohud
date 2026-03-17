@@ -221,18 +221,11 @@ jobs:
           echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
           echo "WINE_VERSION_ACTUAL=$WINE_VERSION_ACTUAL" >> $GITHUB_ENV
           echo "源码准备完成，构建名称: $BUILD_NAME"
-      # ------------------------------------------------------------
-      # 6. 修复 Termux 路径问题
-      # ------------------------------------------------------------
-      - name: 修复 Termux 路径问题
+      # -----------------------------------------------------------
+      - name: 应用 termux-wine.patch 补丁
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; 2>/dev/null | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g' 2>/dev/null || true
-          find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
-          find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
-          find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
-          find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
-          echo "路径修复完成"
+          patch -p1 < termux-wine.patch
       # ------------------------------------------------------------
       # 7. 应用 mfplat 补丁
       # ------------------------------------------------------------
@@ -335,14 +328,14 @@ jobs:
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
           # 根据 rules (4).txt 设置正确的 LDFLAGS，同时保留库搜索路径
-          export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,--dynamic-linker=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 -Wl,-rpath=/data/data/com.termux/files/usr/glibc/lib"
+          export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,--dynamic-linker=/system/bin/linker64 -Wl,-rpath=/system/lib64:/vendor/lib64"
           export WINE_NLS_DIR=/opt/wine64-native/nls
           echo "使用 Wine64 构建目录（作为工具目录）: /opt/wine64-native"
           echo "WINE_NLS_DIR=$WINE_NLS_DIR"
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
-            --enable-archs=aarch64,i386 \
+            --enable-archs=arm64ec,aarch64,i386 \
             --enable-tools \
             --disable-tests \
             --with-vulkan \
