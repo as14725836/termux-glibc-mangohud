@@ -1,4 +1,4 @@
-name: Wine and Proton 无bootBuilder
+name: glibc-Wine and Proton 无bootBuilder
 
 on:
   schedule:
