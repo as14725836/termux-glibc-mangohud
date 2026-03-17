@@ -225,7 +225,7 @@ jobs:
       - name: 应用 termux-wine.patch 补丁
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          patch -p1 < ./termux-wine.patch
+          patch -p1 < ../termux-wine.patch
       # ------------------------------------------------------------
       # 7. 应用 mfplat 补丁
       # ------------------------------------------------------------
