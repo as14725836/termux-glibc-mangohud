@@ -1,0 +1,104 @@
+diff -Naur wine/.git/config /work/wine/.git/config
+--- wine/.git/config	2026-03-14 04:28:01.143223371 +0000
++++ /work/wine/.git/config	2026-03-14 04:34:41.520554800 +0000
+@@ -9,3 +9,4 @@
+ [branch "master"]
+ 	remote = origin
+ 	merge = refs/heads/master
++	vscode-merge-base = origin/master
+diff -Naur wine/dlls/crypt32/unixlib.c /work/wine/dlls/crypt32/unixlib.c
+--- wine/dlls/crypt32/unixlib.c	2026-03-14 04:28:01.383261188 +0000
++++ /work/wine/dlls/crypt32/unixlib.c	2026-03-14 04:38:06.375220400 +0000
+@@ -786,6 +786,7 @@
+  "/usr/local/share/certs/",
+  "/etc/sfw/openssl/certs",
+  "/etc/security/cacerts",  /* Android */
++ "/data/data/com.termux/files/usr/etc/ca-certificates/cacert.pem",
+ };
+ 
+ static void load_root_certs(void)
+diff -Naur wine/dlls/ntdll/unix/server.c /work/wine/dlls/ntdll/unix/server.c
+--- wine/dlls/ntdll/unix/server.c	2026-03-14 04:28:02.075370226 +0000
++++ /work/wine/dlls/ntdll/unix/server.c	2026-03-14 04:39:53.244198200 +0000
+@@ -1307,7 +1307,7 @@
+ #ifdef __ANDROID__  /* there's no /tmp dir on Android */
+     asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
+ #else
+-    asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
++    asprintf( &dir, "/data/data/com.termux/files/usr/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
+ #endif
+     return dir;
+ }
+@@ -1350,7 +1350,7 @@
+     {
+         mkdir( "drive_c", 0777 );
+         symlink( "../drive_c", "dosdevices/c:" );
+-        symlink( "/", "dosdevices/z:" );
++        symlink( "/data/data/com.termux/files/usr/", "dosdevices/z:" );
+     }
+     else if (errno != EEXIST) fatal_perror( "cannot create %s/dosdevices", config_dir );
+ 
+diff -Naur wine/dlls/ntdll/unix/virtual.c /work/wine/dlls/ntdll/unix/virtual.c
+--- wine/dlls/ntdll/unix/virtual.c	2026-03-14 04:28:02.079370855 +0000
++++ /work/wine/dlls/ntdll/unix/virtual.c	2026-03-14 04:40:33.426532700 +0000
+@@ -187,9 +187,9 @@
+ static void *address_space_start = (void *)0x10000;
+ #endif
+ #ifdef _WIN64
+-static void *address_space_limit = (void *)0x7fffffff0000;  /* top of the total available address space */
+-static void *user_space_limit    = (void *)0x7fffffff0000;  /* top of the user address space */
+-static void *working_set_limit   = (void *)0x7fffffff0000;  /* top of the current working set */
++static void *address_space_limit = (void *)0x7fffff0000;  /* top of the total available address space */
++static void *user_space_limit    = (void *)0x7fffff0000;  /* top of the user address space */
++static void *working_set_limit   = (void *)0x7fffff0000;  /* top of the current working set */
+ #else
+ static void *address_space_limit = (void *)0xc0000000;
+ static void *user_space_limit    = (void *)0x7fff0000;
+diff -Naur wine/loader/preloader.c /work/wine/loader/preloader.c
+--- wine/loader/preloader.c	2026-03-14 04:28:03.267558298 +0000
++++ /work/wine/loader/preloader.c	2026-03-14 04:41:23.370116000 +0000
+@@ -1449,7 +1449,7 @@
+         {
+             /* don't warn for low 64k */
+             if (preload_info[i].addr >= (void *)0x10000
+-#ifdef __aarch64__
++#if 1
+                 && preload_info[i].addr < (void *)0x7fffffffff /* ARM64 address space might end here*/
+ #endif
+             )
+diff -Naur wine/programs/winemenubuilder/winemenubuilder.c /work/wine/programs/winemenubuilder/winemenubuilder.c
+--- wine/programs/winemenubuilder/winemenubuilder.c	2026-03-14 04:28:03.591609516 +0000
++++ /work/wine/programs/winemenubuilder/winemenubuilder.c	2026-03-14 04:43:09.288059000 +0000
+@@ -1709,7 +1709,7 @@
+     if (_wgetenv( L"WINE_HOST_XDG_DATA_DIRS" ))
+         dirs = xwcsdup( _wgetenv( L"WINE_HOST_XDG_DATA_DIRS" ));
+     else
+-        dirs = xwcsdup( L"/usr/local/share/:/usr/share/" );
++        dirs = xwcsdup( L"/data/data/com.termux/files/usr/share/:/data/data/com.termux/files/usr/usr/local/share/" );
+ 
+     ret = add_mimes(xdg_data_dir, mime_types);
+     if (ret)
+diff -Naur wine/server/request.c /work/wine/server/request.c
+--- wine/server/request.c	2026-03-14 04:28:03.615613310 +0000
++++ /work/wine/server/request.c	2026-03-14 04:44:00.328342700 +0000
+@@ -643,7 +643,7 @@
+     if (asprintf( &base_dir, "%s/.wineserver", config_dir ) == -1)
+         fatal_error( "out of memory\n" );
+ #else
+-    if (asprintf( &base_dir, "/tmp/.wine-%u", getuid() ) == -1)
++    if (asprintf( &base_dir, "/data/data/com.termux/files/usr/tmp/.wine-%u", getuid() ) == -1)
+         fatal_error( "out of memory\n" );
+ #endif
+     create_dir( base_dir, &st2 );
+diff -Naur wine/server/unicode.c /work/wine/server/unicode.c
+--- wine/server/unicode.c	2026-03-14 04:28:03.619613942 +0000
++++ /work/wine/server/unicode.c	2026-03-14 04:44:56.089860800 +0000
+@@ -327,7 +327,7 @@
+ /* load the case mapping table */
+ struct fd *load_intl_file(void)
+ {
+-    static const char *nls_dirs[] = { NULL, DATADIR "/wine/nls", "/usr/local/share/wine/nls", "/usr/share/wine/nls" };
++    static const char *nls_dirs[] = { NULL, DATADIR "/wine/nls", "/data/data/com.termux/files/usr/local/share/wine/nls", "/data/data/com.termux/files/usr/share/wine/nls" };
+     static const WCHAR nt_pathW[] = {'C',':','\\','w','i','n','d','o','w','s','\\',
+         's','y','s','t','e','m','3','2','\\','l','_','i','n','t','l','.','n','l','s',0};
+     static const struct unicode_str nt_name = { nt_pathW, sizeof(nt_pathW) };
