@@ -165,7 +165,7 @@ jobs:
                 git checkout fsync
               fi
               if [ "$WINE_VERSION" != "latest" ]; then
-                git checkout "$WINE_VERSION" 2>/dev/null || git checkout "wine-$WINE_VERSION" 2>/dev/null || echo "使用默认分支"
+                git checkout "$WINE_VERSION" 2>/dev/null || git checkout "$WINE_VERSION" 2>/dev/null || echo "使用默认分支"
               fi
               if [ -f "VERSION" ]; then
                 WINE_VERSION_ACTUAL="$(cat VERSION | tail -c +14)"
@@ -179,7 +179,7 @@ jobs:
               cd source
               git config advice.detachedHead false
               if [ "$WINE_VERSION" != "latest" ]; then
-                git checkout "wine-$WINE_VERSION"
+                git checkout "$WINE_VERSION"
               fi
               WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
               PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
