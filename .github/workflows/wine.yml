@@ -53,19 +53,21 @@ jobs:
       # ------------------------------------------------------------
       - name: 配置 APT 源
         run: |
-          if [ -f /etc/apt/sources.list ]; then
-            cp /etc/apt/sources.list /etc/apt/sources.list.bak
-          else
-            echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list
-            echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list
-            echo "deb http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list
-          fi
-          grep -v '^#' /etc/apt/sources.list | sed 's/^deb /deb [arch=amd64] /g' > /tmp/amd64.list
-          sed -e 's/\[arch=amd64\]/[arch=arm64]/g' /tmp/amd64.list > /tmp/arm64.list
-          cat /tmp/amd64.list /tmp/arm64.list > /etc/apt/sources.list
-          dpkg --add-architecture arm64
-          apt-get update
-          apt-get install -y --no-install-recommends hello:arm64 || { echo "arm64 源测试失败"; exit 1; }
+            cp /etc/apt/sources.list /etc/apt/sources.list.bak 2>/dev/null || true
+             > /etc/apt/sources.list
+    
+            echo "deb [arch=amd64] http://deb.debian.org/debian bookworm main contrib non-free" >> /etc/apt/sources.list
+            echo "deb [arch=amd64] http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list
+            echo "deb [arch=amd64] http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list
+    
+            echo "deb [arch=arm64] http://deb.debian.org/debian bookworm main contrib non-free" >> /etc/apt/sources.list
+            echo "deb [arch=arm64] http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list
+            echo "deb [arch=arm64] http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list
+    
+            dpkg --add-architecture arm64
+
+            apt-get update
+            apt-get install -y --no-install-recommends hello:arm64 || { echo "arm64 源测试失败"; exit 1; }
       # ------------------------------------------------------------
       # 2. 安装所有依赖（完全参照 Dockerfile 的包列表）
       # ------------------------------------------------------------
