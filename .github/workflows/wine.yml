@@ -228,39 +228,10 @@ jobs:
           meson install -C build
           cd ..
           
-          
-          # ==================== 5. Ugly 插件 ====================
-          echo "=== 5/7 编译 GStreamer Ugly 插件 ==="
-          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-plugins-ugly.git
-          cd gst-plugins-ugly
-          meson setup build \
-            --prefix=$GST_PREFIX \
-            --libdir=lib/aarch64-linux-gnu \
-            -Dtests=disabled \
-            --buildtype=release \
-            --cross-file=$CROSS_FILE
-          meson compile -C build -j$(nproc)
-          meson install -C build
-          cd ..
-          
           # ==================== 6. libav 插件（FFmpeg） ====================
           echo "=== 6/7 编译 GStreamer libav 插件 ==="
           git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-libav.git
           cd gst-libav
-          meson setup build \
-            --prefix=$GST_PREFIX \
-            --libdir=lib/aarch64-linux-gnu \
-            -Dtests=disabled \
-            --buildtype=release \
-            --cross-file=$CROSS_FILE
-          meson compile -C build -j$(nproc)
-          meson install -C build
-          cd ..
-          
-          # ==================== 7. RTSP Server ====================
-          echo "=== 7/7 编译 GStreamer RTSP Server ==="
-          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-rtsp-server.git
-          cd gst-rtsp-server
           meson setup build \
             --prefix=$GST_PREFIX \
             --libdir=lib/aarch64-linux-gnu \
