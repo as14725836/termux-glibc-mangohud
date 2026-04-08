@@ -53,6 +53,8 @@ jobs:
       # ------------------------------------------------------------
       - name: 配置 APT 源
         run: |
+            sudo sed -i 's/#deb-src/deb-src/' /etc/apt/sources.list
+            sudo apt update
             dpkg --add-architecture arm64
 
             apt-get update
