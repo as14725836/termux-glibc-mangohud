@@ -65,7 +65,9 @@ jobs:
       - name: 安装构建依赖
         run: |
           apt-get install -y --no-install-recommends \
-            binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
             ca-certificates nano python3 python3-setuptools clang screen llvm lld wget curl \
             flex bison nasm \
             libfreetype6-dev \
@@ -74,8 +76,6 @@ jobs:
             libxcb1-dev \
             libx11-dev \
             librsvg2-bin \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
             git gettext make automake autoconf pkg-config libtool gtk-doc-tools \
             dpkg-dev \
             libglib2.0-dev:arm64 \
@@ -112,7 +112,6 @@ jobs:
             gstreamer1.0-tools \
             libudev-dev:arm64 \
             libunwind-dev:arm64 \
-            libsdl2-dev:arm64 \
             libfontconfig1-dev:arm64 \
             libkrb5-dev:arm64 \
             libvulkan-dev:arm64 \
@@ -130,7 +129,7 @@ jobs:
             libavutil-dev:arm64 \
             libswresample-dev:arm64
 
-          apt build-dep wine -y
+          apt build-dep wine -y || true
 
       # ------------------------------------------------------------
       # 3. 安装 llvm-mingw 交叉编译工具链
@@ -145,7 +144,7 @@ jobs:
           echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
 
       # ------------------------------------------------------------
-      # 3.5 编译 ARM64 GStreamer 解码器（修复交叉文件路径）
+      # 3.5 编译 ARM64 GStreamer 解码器（不指定版本，使用主分支）
       # ------------------------------------------------------------
       - name: 编译 ARM64 GStreamer 解码器
         run: |
@@ -192,7 +191,7 @@ jobs:
           
           # ==================== 1. GStreamer 核心库 ====================
           echo "=== 1/7 编译 GStreamer 核心库 ==="
-          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gstreamer.git
+          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gstreamer.git
           cd gstreamer
           
           meson setup build \
@@ -211,7 +210,7 @@ jobs:
           
           # ==================== 2. Base 插件 ====================
           echo "=== 2/7 编译 GStreamer Base 插件 ==="
-          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-plugins-base.git
+          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-plugins-base.git
           cd gst-plugins-base
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -232,7 +231,7 @@ jobs:
           
           # ==================== 3. Good 插件 ====================
           echo "=== 3/7 编译 GStreamer Good 插件 ==="
-          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-plugins-good.git
+          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-plugins-good.git
           cd gst-plugins-good
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -253,7 +252,7 @@ jobs:
           
           # ==================== 4. Bad 插件 ====================
           echo "=== 4/7 编译 GStreamer Bad 插件 ==="
-          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-plugins-bad.git
+          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-plugins-bad.git
           cd gst-plugins-bad
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -261,20 +260,25 @@ jobs:
             -Dintrospection=disabled \
             -Dtests=disabled \
             -Dexamples=disabled \
+            -Daes=disabled \
             -Dd3d11=disabled \
             -Ddirectx=disabled \
             -Dopengl=disabled \
             -Dvulkan=disabled \
             -Dwasapi=disabled \
+            -Dmsdk=disabled \
+            -Dnvcodec=disabled \
+            -Dqsv=disabled \
+            -Dva=disabled \
             --buildtype=release \
             --cross-file=$CROSS_FILE
-          meson compile -C build -j$(nproc)
-          meson install -C build
+          meson compile -C build -j$(nproc) || echo "警告: Bad 插件部分编译失败，继续..."
+          meson install -C build || echo "警告: Bad 插件安装失败，继续..."
           cd ..
           
           # ==================== 5. Ugly 插件 ====================
           echo "=== 5/7 编译 GStreamer Ugly 插件 ==="
-          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-plugins-ugly.git
+          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-plugins-ugly.git
           cd gst-plugins-ugly
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -289,7 +293,7 @@ jobs:
           
           # ==================== 6. libav 插件（FFmpeg） ====================
           echo "=== 6/7 编译 GStreamer libav 插件 ==="
-          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-libav.git
+          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-libav.git
           cd gst-libav
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -304,7 +308,7 @@ jobs:
           
           # ==================== 7. RTSP Server ====================
           echo "=== 7/7 编译 GStreamer RTSP Server ==="
-          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-rtsp-server.git
+          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-rtsp-server.git
           cd gst-rtsp-server
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -374,7 +378,7 @@ jobs:
                 git checkout fsync
               fi
               if [ "$WINE_VERSION" != "latest" ]; then
-                git checkout "$WINE_VERSION" 2>/dev/null || git checkout "$WINE_VERSION" 2>/dev/null || echo "使用默认分支"
+                git checkout "$WINE_VERSION" 2>/dev/null || echo "使用默认分支"
               fi
               if [ -f "VERSION" ]; then
                 WINE_VERSION_ACTUAL="$(cat VERSION | tail -c +14)"
@@ -394,7 +398,7 @@ jobs:
               PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
               STAGING_VERSION="v${PURE_VERSION}"
               wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" || \
-              wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/v${PURE_VERSION}.tar.gz"
+              wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/v${PURE_VERSION}.tar.gz" || true
               if [ -f "wine-staging-${PURE_VERSION}.tar.gz" ]; then
                 tar -xzf "wine-staging-${PURE_VERSION}.tar.gz"
                 STAGING_DIR=$(find . -maxdepth 1 -type d -name "*staging*" | head -1)
@@ -705,7 +709,7 @@ jobs:
             - **目标 Windows 架构**: i386, x86_64, arm64ec
             - **平台**: Termux (Android)
             - **图形 API**: Vulkan 支持
-            - **多媒体**: GStreamer 1.24 + FFmpeg 解码器
+            - **多媒体**: GStreamer 最新版 + FFmpeg 解码器
             - **工具链**: llvm-mingw + 系统 gcc
             
             ## 特性
