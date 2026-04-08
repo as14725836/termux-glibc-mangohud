@@ -229,25 +229,6 @@ jobs:
           meson install -C build
           cd ..
           
-          # ==================== 3. Good 插件 ====================
-          echo "=== 3/7 编译 GStreamer Good 插件 ==="
-          git clone https://gitlab.freedesktop.org/gstreamer/gst-plugins-good.git
-          cd gst-plugins-good
-          meson setup build \
-            --prefix=$GST_PREFIX \
-            --libdir=lib/aarch64-linux-gnu \
-            -Dtests=disabled \
-            -Dexamples=disabled \
-            -Dv4l2=disabled \
-            -Dqt5=disabled \
-            -Doss=disabled \
-            -Doss4=disabled \
-            --buildtype=release \
-            --cross-file=$CROSS_FILE
-          meson compile -C build -j$(nproc)
-          meson install -C build
-          cd ..
-          
           # ==================== 4. Bad 插件 ====================
           echo "=== 4/7 编译 GStreamer Bad 插件 ==="
           git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-plugins-bad.git
