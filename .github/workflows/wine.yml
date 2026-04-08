@@ -142,7 +142,7 @@ jobs:
           echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
 
       # ------------------------------------------------------------
-      # 3.5 编译 ARM64 GStreamer 解码器（完整修复版）
+      # 3.5 编译 ARM64 GStreamer 解码器（修复交叉文件路径）
       # ------------------------------------------------------------
       - name: 编译 ARM64 GStreamer 解码器
         run: |
@@ -164,10 +164,9 @@ jobs:
           GST_PREFIX=/opt/gstreamer-arm64/install
           mkdir -p $GST_PREFIX
           
-          cd /opt/gstreamer-arm64
-          
-          # 创建正确的 ARM64 交叉编译文件
-          cat > cross_file_arm64.txt << 'EOF'
+          # 创建固定的交叉编译文件（绝对路径）
+          CROSS_FILE="/opt/gstreamer-arm64/cross_file_arm64.txt"
+          cat > $CROSS_FILE << 'EOF'
           [binaries]
           c = 'aarch64-linux-gnu-gcc'
           cpp = 'aarch64-linux-gnu-g++'
@@ -186,17 +185,12 @@ jobs:
           root_libdir = '/usr/lib/aarch64-linux-gnu'
           EOF
           
+          cd /opt/gstreamer-arm64
+          
           # ==================== 1. GStreamer 核心库 ====================
           echo "=== 1/7 编译 GStreamer 核心库 ==="
           git clone --depth 1 --branch 1.24 https://gitlab.freedesktop.org/gstreamer/gstreamer.git
           cd gstreamer
-          
-          # 修复 libffi 的架构检测问题
-          if [ -d "subprojects/libffi" ]; then
-            echo "修复 libffi 架构检测..."
-            sed -i 's/if host_machine.cpu_family() == '\''x86_64'\''/if host_machine.cpu_family() == '\''aarch64'\'' or host_machine.cpu_family() == '\''x86_64'\''/g' subprojects/libffi/meson.build 2>/dev/null || true
-            sed -i 's/if host_machine.cpu_family() == '\''x86_64'\''/if host_machine.cpu_family() == '\''aarch64'\'' or host_machine.cpu_family() == '\''x86_64'\''/g' subprojects/libffi/src/meson.build 2>/dev/null || true
-          fi
           
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -206,8 +200,7 @@ jobs:
             -Dexamples=disabled \
             -Dgtk_doc=disabled \
             --buildtype=release \
-            --cross-file=cross_file_arm64.txt \
-            -Dlibffi:skip_tests=true
+            --cross-file=$CROSS_FILE
           
           meson compile -C build -j$(nproc)
           meson install -C build
@@ -229,7 +222,7 @@ jobs:
             -Dogg=disabled \
             -Dvorbis=disabled \
             --buildtype=release \
-            --cross-file=../gstreamer/cross_file_arm64.txt
+            --cross-file=$CROSS_FILE
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
@@ -250,7 +243,7 @@ jobs:
             -Doss=disabled \
             -Doss4=disabled \
             --buildtype=release \
-            --cross-file=../gstreamer/cross_file_arm64.txt
+            --cross-file=$CROSS_FILE
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
@@ -271,7 +264,7 @@ jobs:
             -Dvulkan=disabled \
             -Dwasapi=disabled \
             --buildtype=release \
-            --cross-file=../gstreamer/cross_file_arm64.txt
+            --cross-file=$CROSS_FILE
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
@@ -286,7 +279,7 @@ jobs:
             -Dintrospection=disabled \
             -Dtests=disabled \
             --buildtype=release \
-            --cross-file=../gstreamer/cross_file_arm64.txt
+            --cross-file=$CROSS_FILE
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
@@ -301,7 +294,7 @@ jobs:
             -Dintrospection=disabled \
             -Dtests=disabled \
             --buildtype=release \
-            --cross-file=../gstreamer/cross_file_arm64.txt
+            --cross-file=$CROSS_FILE
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
@@ -316,7 +309,7 @@ jobs:
             -Dintrospection=disabled \
             -Dtests=disabled \
             --buildtype=release \
-            --cross-file=../gstreamer/cross_file_arm64.txt
+            --cross-file=$CROSS_FILE
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
