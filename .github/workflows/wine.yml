@@ -74,7 +74,8 @@ jobs:
             libxcb1-dev \
             libx11-dev \
             librsvg2-bin \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
             git gettext make automake autoconf pkg-config libtool gtk-doc-tools \
             dpkg-dev \
             libglib2.0-dev:arm64 \
