@@ -178,7 +178,6 @@ jobs:
             -Dtests=disabled \
             -Dexamples=disabled \
             -Dgtk_doc=disabled \
-            -Dbenchmarks=disabled \
             --buildtype=release \
             --cross-file=/dev/null
           meson compile -C build -j$(nproc)
