@@ -192,7 +192,7 @@ jobs:
           
           # ==================== 1. GStreamer 核心库 ====================
           echo "=== 1/7 编译 GStreamer 核心库 ==="
-          git clone --depth 1 --branch 1.29 https://gitlab.freedesktop.org/gstreamer/gstreamer.git
+          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gstreamer.git
           cd gstreamer
           
           meson setup build \
@@ -211,7 +211,7 @@ jobs:
           
           # ==================== 2. Base 插件 ====================
           echo "=== 2/7 编译 GStreamer Base 插件 ==="
-          git clone --depth 1 --branch 1.29 https://gitlab.freedesktop.org/gstreamer/gst-plugins-base.git
+          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-plugins-base.git
           cd gst-plugins-base
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -232,7 +232,7 @@ jobs:
           
           # ==================== 3. Good 插件 ====================
           echo "=== 3/7 编译 GStreamer Good 插件 ==="
-          git clone --depth 1 --branch 1.29 https://gitlab.freedesktop.org/gstreamer/gst-plugins-good.git
+          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-plugins-good.git
           cd gst-plugins-good
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -253,7 +253,7 @@ jobs:
           
           # ==================== 4. Bad 插件 ====================
           echo "=== 4/7 编译 GStreamer Bad 插件 ==="
-          git clone --depth 1 --branch 1.29 https://gitlab.freedesktop.org/gstreamer/gst-plugins-bad.git
+          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-plugins-bad.git
           cd gst-plugins-bad
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -274,7 +274,7 @@ jobs:
           
           # ==================== 5. Ugly 插件 ====================
           echo "=== 5/7 编译 GStreamer Ugly 插件 ==="
-          git clone --depth 1 --branch 1.29 https://gitlab.freedesktop.org/gstreamer/gst-plugins-ugly.git
+          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-plugins-ugly.git
           cd gst-plugins-ugly
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -289,7 +289,7 @@ jobs:
           
           # ==================== 6. libav 插件（FFmpeg） ====================
           echo "=== 6/7 编译 GStreamer libav 插件 ==="
-          git clone --depth 1 --branch 1.29 https://gitlab.freedesktop.org/gstreamer/gst-libav.git
+          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-libav.git
           cd gst-libav
           meson setup build \
             --prefix=$GST_PREFIX \
@@ -304,7 +304,7 @@ jobs:
           
           # ==================== 7. RTSP Server ====================
           echo "=== 7/7 编译 GStreamer RTSP Server ==="
-          git clone --depth 1 --branch 1.29 https://gitlab.freedesktop.org/gstreamer/gst-rtsp-server.git
+          git clone --depth 1 --branch 1.28.2 https://gitlab.freedesktop.org/gstreamer/gst-rtsp-server.git
           cd gst-rtsp-server
           meson setup build \
             --prefix=$GST_PREFIX \
