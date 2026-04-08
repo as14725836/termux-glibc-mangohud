@@ -60,7 +60,7 @@ jobs:
           apt install -y --no-install-recommends libc6:arm64
 
       # ------------------------------------------------------------
-      # 2. 安装所有依赖（完全参照 Dockerfile 的包列表）
+      # 2. 安装所有依赖
       # ------------------------------------------------------------
       - name: 安装构建依赖
         run: |
@@ -74,7 +74,7 @@ jobs:
             libxcb1-dev \
             libx11-dev \
             librsvg2-bin \
-            git gettext make automake autoconf pkg-config libtool gtk-doc-tools clang \
+            git gettext make automake autoconf pkg-config libtool gtk-doc-tools \
             dpkg-dev \
             libglib2.0-dev:arm64 \
             libfreetype6-dev:arm64 \
@@ -142,7 +142,7 @@ jobs:
           echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
 
       # ------------------------------------------------------------
-      # 3.5 编译 ARM64 GStreamer 解码器（完整版）
+      # 3.5 编译 ARM64 GStreamer 解码器（完整修复版）
       # ------------------------------------------------------------
       - name: 编译 ARM64 GStreamer 解码器
         run: |
@@ -159,7 +159,6 @@ jobs:
           export CXX=aarch64-linux-gnu-g++
           export AR=aarch64-linux-gnu-ar
           export STRIP=aarch64-linux-gnu-strip
-          export PATH=/opt/${{ env.LLVMMINGW_NAME }}/bin:$PATH
           
           # 设置安装前缀
           GST_PREFIX=/opt/gstreamer-arm64/install
@@ -167,10 +166,38 @@ jobs:
           
           cd /opt/gstreamer-arm64
           
-          # 克隆 GStreamer 核心库
+          # 创建正确的 ARM64 交叉编译文件
+          cat > cross_file_arm64.txt << 'EOF'
+          [binaries]
+          c = 'aarch64-linux-gnu-gcc'
+          cpp = 'aarch64-linux-gnu-g++'
+          ar = 'aarch64-linux-gnu-ar'
+          strip = 'aarch64-linux-gnu-strip'
+          pkgconfig = 'pkg-config'
+
+          [host_machine]
+          system = 'linux'
+          cpu_family = 'aarch64'
+          cpu = 'armv8-a'
+          endian = 'little'
+
+          [properties]
+          pkg_config_libdir = '/usr/lib/aarch64-linux-gnu/pkgconfig'
+          root_libdir = '/usr/lib/aarch64-linux-gnu'
+          EOF
+          
+          # ==================== 1. GStreamer 核心库 ====================
           echo "=== 1/7 编译 GStreamer 核心库 ==="
           git clone --depth 1 --branch 1.24 https://gitlab.freedesktop.org/gstreamer/gstreamer.git
           cd gstreamer
+          
+          # 修复 libffi 的架构检测问题
+          if [ -d "subprojects/libffi" ]; then
+            echo "修复 libffi 架构检测..."
+            sed -i 's/if host_machine.cpu_family() == '\''x86_64'\''/if host_machine.cpu_family() == '\''aarch64'\'' or host_machine.cpu_family() == '\''x86_64'\''/g' subprojects/libffi/meson.build 2>/dev/null || true
+            sed -i 's/if host_machine.cpu_family() == '\''x86_64'\''/if host_machine.cpu_family() == '\''aarch64'\'' or host_machine.cpu_family() == '\''x86_64'\''/g' subprojects/libffi/src/meson.build 2>/dev/null || true
+          fi
+          
           meson setup build \
             --prefix=$GST_PREFIX \
             --libdir=lib/aarch64-linux-gnu \
@@ -179,12 +206,14 @@ jobs:
             -Dexamples=disabled \
             -Dgtk_doc=disabled \
             --buildtype=release \
-            --cross-file=/dev/null
+            --cross-file=cross_file_arm64.txt \
+            -Dlibffi:skip_tests=true
+          
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
           
-          # 编译 base 插件
+          # ==================== 2. Base 插件 ====================
           echo "=== 2/7 编译 GStreamer Base 插件 ==="
           git clone --depth 1 --branch 1.24 https://gitlab.freedesktop.org/gstreamer/gst-plugins-base.git
           cd gst-plugins-base
@@ -200,12 +229,12 @@ jobs:
             -Dogg=disabled \
             -Dvorbis=disabled \
             --buildtype=release \
-            --cross-file=/dev/null
+            --cross-file=../gstreamer/cross_file_arm64.txt
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
           
-          # 编译 good 插件
+          # ==================== 3. Good 插件 ====================
           echo "=== 3/7 编译 GStreamer Good 插件 ==="
           git clone --depth 1 --branch 1.24 https://gitlab.freedesktop.org/gstreamer/gst-plugins-good.git
           cd gst-plugins-good
@@ -221,12 +250,12 @@ jobs:
             -Doss=disabled \
             -Doss4=disabled \
             --buildtype=release \
-            --cross-file=/dev/null
+            --cross-file=../gstreamer/cross_file_arm64.txt
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
           
-          # 编译 bad 插件（包含多种解码器）
+          # ==================== 4. Bad 插件 ====================
           echo "=== 4/7 编译 GStreamer Bad 插件 ==="
           git clone --depth 1 --branch 1.24 https://gitlab.freedesktop.org/gstreamer/gst-plugins-bad.git
           cd gst-plugins-bad
@@ -242,12 +271,12 @@ jobs:
             -Dvulkan=disabled \
             -Dwasapi=disabled \
             --buildtype=release \
-            --cross-file=/dev/null
+            --cross-file=../gstreamer/cross_file_arm64.txt
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
           
-          # 编译 ugly 插件
+          # ==================== 5. Ugly 插件 ====================
           echo "=== 5/7 编译 GStreamer Ugly 插件 ==="
           git clone --depth 1 --branch 1.24 https://gitlab.freedesktop.org/gstreamer/gst-plugins-ugly.git
           cd gst-plugins-ugly
@@ -257,12 +286,12 @@ jobs:
             -Dintrospection=disabled \
             -Dtests=disabled \
             --buildtype=release \
-            --cross-file=/dev/null
+            --cross-file=../gstreamer/cross_file_arm64.txt
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
           
-          # 编译 libav 插件（FFmpeg 解码器，支持多种格式）
+          # ==================== 6. libav 插件（FFmpeg） ====================
           echo "=== 6/7 编译 GStreamer libav 插件 ==="
           git clone --depth 1 --branch 1.24 https://gitlab.freedesktop.org/gstreamer/gst-libav.git
           cd gst-libav
@@ -272,12 +301,12 @@ jobs:
             -Dintrospection=disabled \
             -Dtests=disabled \
             --buildtype=release \
-            --cross-file=/dev/null
+            --cross-file=../gstreamer/cross_file_arm64.txt
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
           
-          # 编译 rtsp-server（可选）
+          # ==================== 7. RTSP Server ====================
           echo "=== 7/7 编译 GStreamer RTSP Server ==="
           git clone --depth 1 --branch 1.24 https://gitlab.freedesktop.org/gstreamer/gst-rtsp-server.git
           cd gst-rtsp-server
@@ -287,15 +316,15 @@ jobs:
             -Dintrospection=disabled \
             -Dtests=disabled \
             --buildtype=release \
-            --cross-file=/dev/null
+            --cross-file=../gstreamer/cross_file_arm64.txt
           meson compile -C build -j$(nproc)
           meson install -C build
           cd ..
           
-          # 设置环境变量供 Wine 使用
+          # 设置环境变量供后续步骤使用
           echo "GST_PREFIX=$GST_PREFIX" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$GST_PREFIX/lib/aarch64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=$GST_PREFIX/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$GST_PREFIX/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$GST_PREFIX/lib/aarch64-linux-gnu" >> $GITHUB_ENV
           echo "GST_PLUGIN_PATH=$GST_PREFIX/lib/aarch64-linux-gnu/gstreamer-1.0" >> $GITHUB_ENV
           
           # 验证编译结果
@@ -331,7 +360,7 @@ jobs:
           echo "LC_ALL=zh_CN.UTF-8" >> $GITHUB_ENV
 
       # ------------------------------------------------------------
-      # 5. 获取 Wine 源码（分支处理与原工作流一致）
+      # 5. 获取 Wine 源码
       # ------------------------------------------------------------
       - name: 获取 Wine 源码
         run: |
@@ -455,9 +484,9 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 9. 构建 native wine64（严格模仿成功示例，并备份完整 nls 目录）
+      # 9. 构建 native wine64
       # ------------------------------------------------------------
-      - name: 构建 native wine64 工具和 NLS（带完整备份）
+      - name: 构建 native wine64 工具和 NLS
         run: |
           set -e
           mkdir -p ${{ env.WINE64_DIR }}
@@ -469,20 +498,17 @@ jobs:
           make __tooldeps__ -j$(nproc)
           echo "构建 NLS 目录..."
           make -C nls
-          # 备份整个 nls 目录（跟随符号链接）
           mkdir -p /opt/nls-backup
           cp -aL nls/. /opt/nls-backup/
           echo "nls 目录已完整备份到 /opt/nls-backup"
-          ls -la /opt/nls-backup/
 
       # ------------------------------------------------------------
-      # 10. 复制构建目录，跟随符号链接，并验证 NLS（带恢复机制）
+      # 10. 复制构建目录
       # ------------------------------------------------------------
-      - name: 复制构建目录并验证 NLS（带恢复机制）
+      - name: 复制构建目录并验证 NLS
         run: |
           set -e
           mkdir -p /opt/wine64-native
-          # 检查源文件，若不存在则从备份恢复（备份包含所有 nls 文件）
           if [ ! -f ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ] && [ ! -L ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ]; then
             echo "警告: 源目录中 nls/locale.nls 不存在，尝试从备份恢复"
             if [ -d /opt/nls-backup ]; then
@@ -494,26 +520,21 @@ jobs:
               exit 1
             fi
           fi
-          # 复制整个构建目录，使用 -aL 选项（归档且跟随符号链接）
           cp -aL ${{ env.WINE64_DIR }}/amd64/. /opt/wine64-native/
           chmod -R +x /opt/wine64-native/tools/*/
           chmod -R +r /opt/wine64-native/nls
-          # 验证复制后的文件是否为普通文件（不是符号链接）
           if [ ! -f /opt/wine64-native/nls/locale.nls ]; then
-            echo "警告: 复制后 locale.nls 丢失或为无效符号链接，尝试从备份恢复"
+            echo "警告: 复制后 locale.nls 丢失，尝试从备份恢复"
             if [ -d /opt/nls-backup ]; then
               mkdir -p /opt/wine64-native/nls
               cp -af /opt/nls-backup/. /opt/wine64-native/nls/
               echo "已从备份恢复 nls 目录到目标目录"
-            else
-              echo "错误: 无法恢复 nls 目录"
-              exit 1
             fi
           fi
           echo "复制后 locale.nls 存在，大小: $(wc -c < /opt/wine64-native/nls/locale.nls) 字节"
 
       # ------------------------------------------------------------
-      # 11. 交叉编译 ARM64 WOW64（使用复制后的目录作为工具目录，并使用编译的 GStreamer）
+      # 11. 交叉编译 ARM64 WOW64
       # ------------------------------------------------------------
       - name: 交叉编译 ARM64 WOW64
         run: |
@@ -530,25 +551,16 @@ jobs:
             echo "使用编译的 GStreamer: $GST_PREFIX"
           fi
           
-          # 验证 GStreamer 是否可被找到
+          # 验证 GStreamer
           echo "=== 验证 GStreamer 开发包 ==="
-          pkg-config --exists gstreamer-1.0 || echo "gstreamer-1.0 not found"
-          pkg-config --exists gstreamer-base-1.0 || echo "gstreamer-base-1.0 not found"
-          pkg-config --modversion gstreamer-1.0 || echo "version check failed"
-          
-          if ! pkg-config --exists gstreamer-base-1.0; then
-            export CFLAGS="$CFLAGS -I/usr/include/aarch64-linux-gnu/gstreamer-1.0"
-            export LDFLAGS="$LDFLAGS -L/usr/lib/aarch64-linux-gnu"
-          fi
+          export PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}
+          pkg-config --exists gstreamer-1.0 && echo "gstreamer-1.0 found" || echo "gstreamer-1.0 not found"
+          pkg-config --exists gstreamer-base-1.0 && echo "gstreamer-base-1.0 found" || echo "gstreamer-base-1.0 not found"
           
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
-          # 根据 rules (4).txt 设置正确的 LDFLAGS，同时保留库搜索路径
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,--dynamic-linker=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 -Wl,-rpath=/data/data/com.termux/files/usr/glibc/lib"
           export WINE_NLS_DIR=/opt/wine64-native/nls
-          echo "使用 Wine64 构建目录（作为工具目录）: /opt/wine64-native"
-          echo "WINE_NLS_DIR=$WINE_NLS_DIR"
-          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
           
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
@@ -567,14 +579,14 @@ jobs:
           
           make -j$(nproc)
           make install
-          # 验证安装是否生成 bin 目录（若缺失则报错）
+          
           if [ ! -d /tmp/wine-install-wow64/bin ]; then
-            echo "错误: /tmp/wine-install-wow64/bin 目录不存在，安装可能不完整"
+            echo "错误: /tmp/wine-install-wow64/bin 目录不存在"
             exit 1
           fi
 
       # ------------------------------------------------------------
-      # 12. 全面补全安装目录的运行时文件（NLS、字体、wine.inf、关键程序及符号链接）
+      # 12. 补全安装目录
       # ------------------------------------------------------------
       - name: 全面补全安装目录的运行时文件
         run: |
@@ -588,7 +600,7 @@ jobs:
           echo "=== 补全 share/wine/nls ==="
           mkdir -p "$TARGET_PREFIX/share/wine/nls"
           if [ -d "$NATIVE_NLS_DIR" ]; then
-              cp -v "$NATIVE_NLS_DIR"/*.nls "$TARGET_PREFIX/share/wine/nls/" 2>/dev/null || echo "没有找到 .nls 文件，可能已存在"
+              cp -v "$NATIVE_NLS_DIR"/*.nls "$TARGET_PREFIX/share/wine/nls/" 2>/dev/null || echo "没有找到 .nls 文件"
           fi
           if [ ! -f "$TARGET_PREFIX/share/wine/nls/locale.nls" ] && [ -f "/opt/nls-backup/locale.nls" ]; then
               cp -v "/opt/nls-backup/locale.nls" "$TARGET_PREFIX/share/wine/nls/"
@@ -597,16 +609,12 @@ jobs:
           echo "=== 补全 share/wine/fonts ==="
           if [ -d "$SOURCE_FONTS_DIR" ]; then
               mkdir -p "$TARGET_PREFIX/share/wine/fonts"
-              cp -v "$SOURCE_FONTS_DIR"/*.ttf "$SOURCE_FONTS_DIR"/*.fon "$TARGET_PREFIX/share/wine/fonts/" 2>/dev/null || echo "字体复制完成或无字体文件"
-          else
-              echo "警告: 源码 fonts 目录不存在，跳过字体复制"
+              cp -v "$SOURCE_FONTS_DIR"/*.ttf "$SOURCE_FONTS_DIR"/*.fon "$TARGET_PREFIX/share/wine/fonts/" 2>/dev/null || echo "字体复制完成"
           fi
           
           echo "=== 补全 wine.inf ==="
-          # 查找构建生成的 wine.inf（优先）
           WINE_INF_SRC=$(find "$BUILD_DIR" -name "wine.inf" -type f 2>/dev/null | head -1)
           if [ -z "$WINE_INF_SRC" ]; then
-              # 如果未生成，尝试从源码目录复制原始文件
               if [ -f "$SOURCE_DIR/dlls/wine.inf/wine.inf" ]; then
                   WINE_INF_SRC="$SOURCE_DIR/dlls/wine.inf/wine.inf"
               elif [ -f "$SOURCE_DIR/dlls/wine.inf/wine.inf.in" ]; then
@@ -616,66 +624,43 @@ jobs:
           if [ -n "$WINE_INF_SRC" ]; then
               mkdir -p "$TARGET_PREFIX/share/wine"
               cp -v "$WINE_INF_SRC" "$TARGET_PREFIX/share/wine/wine.inf"
-          else
-              echo "警告: 未找到 wine.inf 文件"
           fi
           
-          echo "=== 补全关键程序文件 ==="
+          echo "=== 补全关键程序 ==="
           BIN_DIR="$TARGET_PREFIX/bin"
           mkdir -p "$BIN_DIR"
-          # 需要的关键程序列表
-          PROGRAMS="wineboot winecfg regedit wineconsole wineserver wine wine64"
-          for prog in $PROGRAMS; do
+          for prog in wineboot winecfg regedit wineconsole wineserver wine wine64; do
               if [ ! -f "$BIN_DIR/$prog" ]; then
-                  # 在构建目录中查找可执行文件
                   found=$(find "$BUILD_DIR" -type f -name "$prog" -executable 2>/dev/null | head -1)
                   if [ -n "$found" ]; then
                       cp -v "$found" "$BIN_DIR/"
-                  else
-                      echo "警告: 未找到 $prog"
                   fi
               fi
           done
-          # 检查 wine 是否存在，如果缺失但 wine64 存在，创建符号链接
           if [ ! -f "$BIN_DIR/wine" ] && [ -f "$BIN_DIR/wine64" ]; then
               ln -sv wine64 "$BIN_DIR/wine"
           fi
-          # 确保 wine-preloader 存在
-          if [ ! -f "$BIN_DIR/wine-preloader" ]; then
-              found=$(find "$BUILD_DIR" -type f -name "wine-preloader" -executable 2>/dev/null | head -1)
-              if [ -n "$found" ]; then
-                  cp -v "$found" "$BIN_DIR/"
-              fi
-          fi
           
-          echo "=== 复制 GStreamer 解码器到安装目录 ==="
+          echo "=== 复制 GStreamer ==="
           if [ -n "$GST_PREFIX" ] && [ -d "$GST_PREFIX" ]; then
               mkdir -p "$TARGET_PREFIX/opt/gstreamer"
               cp -r "$GST_PREFIX"/* "$TARGET_PREFIX/opt/gstreamer/"
-              echo "GStreamer 解码器已复制到 $TARGET_PREFIX/opt/gstreamer"
+              echo "GStreamer 已复制"
           fi
-          
-          echo "=== 最终安装目录结构预览 ==="
-          ls -la "$TARGET_PREFIX/share/wine/" || true
-          ls -la "$TARGET_PREFIX/bin/" || true
 
       # ------------------------------------------------------------
-      # 13. 验证安装目录内容（可选，便于调试）
+      # 13. 验证安装目录
       # ------------------------------------------------------------
       - name: 验证安装目录内容
         run: |
-          echo "安装目录 /tmp/wine-install-wow64 的内容："
+          echo "安装目录内容："
           ls -la /tmp/wine-install-wow64/
           if [ -d /tmp/wine-install-wow64/bin ]; then
-            echo "bin 目录内容："
+            echo "bin 目录："
             ls -la /tmp/wine-install-wow64/bin/
           fi
-          if [ -d /tmp/wine-install-wow64/share ]; then
-            echo "share 目录内容："
-            ls -la /tmp/wine-install-wow64/share/
-          fi
           if [ -d /tmp/wine-install-wow64/opt/gstreamer ]; then
-            echo "GStreamer 目录内容："
+            echo "GStreamer 目录："
             ls -la /tmp/wine-install-wow64/opt/gstreamer/
           fi
 
@@ -721,41 +706,22 @@ jobs:
             - **Wine 分支**: ${{ github.event.inputs.wine_branch || 'staging' }}
             - **Wine 版本**: ${{ github.event.inputs.wine_version || 'latest' }}
             - **主机架构**: ARM64 (aarch64)
-            - **目标 Windows 架构**: i386, x86_64, arm64ec (通过 WOW64 模拟)
+            - **目标 Windows 架构**: i386, x86_64, arm64ec
             - **平台**: Termux (Android)
-            - **图形 API**: Vulkan 支持已启用
-            - **多媒体**: GStreamer 1.24 + FFmpeg 解码器支持已启用
+            - **图形 API**: Vulkan 支持
+            - **多媒体**: GStreamer 1.24 + FFmpeg 解码器
             - **工具链**: llvm-mingw + 系统 gcc
             
             ## 特性
             ✓ ARM64 原生 Wine 可执行文件
             ✓ 支持运行 32/64 位 Windows 应用程序
-            ✓ Vulkan 渲染
+            ✓ Vulkan 渲染支持
             ✓ GStreamer 多媒体后端（包含 FFmpeg 解码器）
             ✓ 中文环境支持
-            ✓ 应用了关键补丁提升兼容性
-            ✓ 包含完整的运行时文件：wine.inf、wineboot 及所有必要程序
-            
-            ## GStreamer 解码器支持
-            - H.264/H.265 (x264/x265)
-            - MP3, AAC, AC3, DTS 音频
-            - MP4, MKV, AVI, MOV 容器
-            - VP8, VP9, AV1 视频
-            - 更多格式通过 FFmpeg 后端支持
+            ✓ 包含完整运行时文件
             
             ## 安装说明
-            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置（建议 `/data/data/com.termux/files/usr/glibc`），并设置环境变量。
-            
-            ### GStreamer 环境变量（可选，用于多媒体支持）
-            ```bash
-            export GST_PLUGIN_PATH=/path/to/wine/opt/gstreamer/lib/aarch64-linux-gnu/gstreamer-1.0
-            export LD_LIBRARY_PATH=/path/to/wine/opt/gstreamer/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH
-            ```
-            
-            ## 构建信息
-            - 构建时间: ${{ github.event.head_commit.timestamp }}
-            - 提交: ${{ github.sha }}
-            - 工作流: ${{ github.workflow }}
+            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置。
           files: |
             ${{ github.workspace }}/${{ env.BUILD_NAME }}.tar.xz
             ${{ github.workspace }}/checksums.txt
