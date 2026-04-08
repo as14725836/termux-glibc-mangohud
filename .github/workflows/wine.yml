@@ -228,19 +228,6 @@ jobs:
           meson install -C build
           cd ..
           
-          # ==================== 6. libav 插件（FFmpeg） ====================
-          echo "=== 6/7 编译 GStreamer libav 插件 ==="
-          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-libav.git
-          cd gst-libav
-          meson setup build \
-            --prefix=$GST_PREFIX \
-            --libdir=lib/aarch64-linux-gnu \
-            -Dtests=disabled \
-            --buildtype=release \
-            --cross-file=$CROSS_FILE
-          meson compile -C build -j$(nproc)
-          meson install -C build
-          cd ..
           
           # 设置环境变量供后续步骤使用
           echo "GST_PREFIX=$GST_PREFIX" >> $GITHUB_ENV
