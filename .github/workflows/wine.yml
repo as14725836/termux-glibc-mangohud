@@ -244,6 +244,7 @@ jobs:
             -Dvulkan=disabled \
             -Dmsdk=disabled \
             -Dnvcodec=disabled \
+            -Dwrap-mode=forcefallback \
             -Dva=disabled \
             --buildtype=release \
             --cross-file=$CROSS_FILE
