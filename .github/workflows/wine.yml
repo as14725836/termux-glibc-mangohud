@@ -121,7 +121,7 @@ jobs:
             libxkbregistry-dev:arm64 \
             libwayland-dev:arm64
 
-            sudo apt build-dep wine
+            sudo apt build-dep wine -y
       # ------------------------------------------------------------
       # 3. 安装 llvm-mingw 交叉编译工具链
       # ------------------------------------------------------------
