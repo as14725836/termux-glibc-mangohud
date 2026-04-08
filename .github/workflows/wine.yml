@@ -240,7 +240,6 @@ jobs:
             -Dexamples=disabled \
             -Dv4l2=disabled \
             -Dqt5=disabled \
-            -Dqt6=disabled \
             -Doss=disabled \
             -Doss4=disabled \
             --buildtype=release \
