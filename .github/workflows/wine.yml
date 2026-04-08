@@ -229,28 +229,6 @@ jobs:
           meson install -C build
           cd ..
           
-          # ==================== 4. Bad 插件 ====================
-          echo "=== 4/7 编译 GStreamer Bad 插件 ==="
-          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-plugins-bad.git
-          cd gst-plugins-bad
-          meson setup build \
-            --prefix=$GST_PREFIX \
-            --libdir=lib/aarch64-linux-gnu \
-            -Dintrospection=disabled \
-            -Dtests=disabled \
-            -Dexamples=disabled \
-            -Daes=disabled \
-            -Dd3d11=disabled \
-            -Dvulkan=disabled \
-            -Dmsdk=disabled \
-            -Dnvcodec=disabled \
-            -Dwrap-mode=forcefallback \
-            -Dva=disabled \
-            --buildtype=release \
-            --cross-file=$CROSS_FILE
-          meson compile -C build -j$(nproc) || echo "警告: Bad 插件部分编译失败，继续..."
-          meson install -C build || echo "警告: Bad 插件安装失败，继续..."
-          cd ..
           
           # ==================== 5. Ugly 插件 ====================
           echo "=== 5/7 编译 GStreamer Ugly 插件 ==="
