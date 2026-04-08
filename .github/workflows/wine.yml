@@ -231,7 +231,7 @@ jobs:
           
           # ==================== 3. Good 插件 ====================
           echo "=== 3/7 编译 GStreamer Good 插件 ==="
-          git clone --depth 1 https://gitlab.freedesktop.org/gstreamer/gst-plugins-good.git
+          git clone https://gitlab.freedesktop.org/gstreamer/gst-plugins-good.git
           cd gst-plugins-good
           meson setup build \
             --prefix=$GST_PREFIX \
