@@ -53,12 +53,14 @@ jobs:
       # ------------------------------------------------------------
       - name: 配置 APT 源
         run: |
-            sudo sed -i 's/#deb-src/deb-src/' /etc/apt/sources.list
-            sudo apt update
-            dpkg --add-architecture arm64
-
-            apt-get update
-            apt-get install -y --no-install-recommends hello:arm64 || { echo "arm64 源测试失败"; exit 1; }
+         sed -i 's/# deb-src/deb-src/' /etc/apt/sources.list || true
+         sed -i 's/Types: deb/Types: deb deb-src/' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+    
+         apt update
+         dpkg --add-architecture arm64
+         apt update
+  
+         apt install -y --no-install-recommends libc6:arm64
       # ------------------------------------------------------------
       # 2. 安装所有依赖（完全参照 Dockerfile 的包列表）
       # ------------------------------------------------------------
@@ -119,7 +121,7 @@ jobs:
             libxkbregistry-dev:arm64 \
             libwayland-dev:arm64
 
-            sudo apt install wine-build-deps
+            sudo apt build-dep wine
       # ------------------------------------------------------------
       # 3. 安装 llvm-mingw 交叉编译工具链
       # ------------------------------------------------------------
