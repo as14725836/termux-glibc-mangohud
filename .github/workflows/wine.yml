@@ -236,7 +236,6 @@ jobs:
           meson setup build \
             --prefix=$GST_PREFIX \
             --libdir=lib/aarch64-linux-gnu \
-            -Dintrospection=disabled \
             -Dtests=disabled \
             --buildtype=release \
             --cross-file=$CROSS_FILE
@@ -251,7 +250,6 @@ jobs:
           meson setup build \
             --prefix=$GST_PREFIX \
             --libdir=lib/aarch64-linux-gnu \
-            -Dintrospection=disabled \
             -Dtests=disabled \
             --buildtype=release \
             --cross-file=$CROSS_FILE
@@ -266,7 +264,6 @@ jobs:
           meson setup build \
             --prefix=$GST_PREFIX \
             --libdir=lib/aarch64-linux-gnu \
-            -Dintrospection=disabled \
             -Dtests=disabled \
             --buildtype=release \
             --cross-file=$CROSS_FILE
