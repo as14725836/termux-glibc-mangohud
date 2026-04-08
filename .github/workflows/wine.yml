@@ -241,7 +241,6 @@ jobs:
             -Dexamples=disabled \
             -Daes=disabled \
             -Dd3d11=disabled \
-            -Dopengl=disabled \
             -Dvulkan=disabled \
             -Dmsdk=disabled \
             -Dnvcodec=disabled \
