@@ -147,7 +147,7 @@ jobs:
       - name: 编译 ARM64 GStreamer 解码器
         run: |
           apt-get install -y python3-pip python3-setuptools
-          pip3 install --upgrade meson
+          pip3 install --upgrade meson --break-system-packages
           set -e
           
           echo "=== 开始编译 ARM64 GStreamer 解码器 ==="
