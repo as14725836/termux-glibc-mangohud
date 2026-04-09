@@ -82,7 +82,7 @@ jobs:
             libfreetype6-dev:arm64 \
             libltdl-dev:arm64 \
             libxcb1-dev:arm64 \
-            libpocl-dev \
+            libpocl-dev:arm64 \
             libssl-dev:arm64 \
             libx11-dev:arm64 \
             build-essential libc-dev-arm64-cross less libc-devtools libidn2-0:arm64 \
@@ -131,7 +131,7 @@ jobs:
             libswresample-dev:arm64
 
           apt build-dep wine -y || true
-          sudo apt-get install crossbuild-essential-arm64 ocl-icd-opencl-dev:arm64 -y
+          sudo apt-get install crossbuild-essential-arm64 opencl-headers ocl-icd-libopencl1:arm64 ocl-icd-opencl-dev:arm64 -y
 
       # ------------------------------------------------------------
       # 3. 安装 llvm-mingw 交叉编译工具链
