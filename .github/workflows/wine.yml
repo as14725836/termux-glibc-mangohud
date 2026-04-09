@@ -96,7 +96,6 @@ jobs:
             dpkg-dev fakeroot debhelper dh-make \
             libxcursor-dev:arm64 \
             libxi-dev:arm64 \
-            
             libxshmfence-dev:arm64 \
             libxxf86vm-dev:arm64 \
             libxrandr-dev:arm64 \
