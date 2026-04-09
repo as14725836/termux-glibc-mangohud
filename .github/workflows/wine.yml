@@ -96,6 +96,7 @@ jobs:
             dpkg-dev fakeroot debhelper dh-make \
             libxcursor-dev:arm64 \
             libxi-dev:arm64 \
+            
             libxshmfence-dev:arm64 \
             libxxf86vm-dev:arm64 \
             libxrandr-dev:arm64 \
@@ -131,6 +132,7 @@ jobs:
             libswresample-dev:arm64
 
           apt build-dep wine -y || true
+          sudo apt-get install crossbuild-essential-arm64 ocl-icd-opencl-dev:arm64 -y
 
       # ------------------------------------------------------------
       # 3. 安装 llvm-mingw 交叉编译工具链
