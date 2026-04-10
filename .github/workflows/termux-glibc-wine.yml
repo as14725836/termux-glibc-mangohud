@@ -146,7 +146,6 @@ jobs:
           
           # 切换到指定的 Proton 分支
           
-          git checkout master
           git pull
           
           # 修复 Termux 路径问题
