@@ -141,7 +141,7 @@ jobs:
           cd $BUILD_DIR/proton
           
           # 克隆 Proton 源码
-          git clone https://gitlab.winehq.org/wine/wine.git wine
+          git clone https://github.com/GameNative/proton-wine.git wine
           cd wine
           
           # 切换到指定的 Proton 分支
