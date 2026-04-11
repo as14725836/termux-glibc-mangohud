@@ -439,6 +439,7 @@ jobs:
             --disable-tests \
             --with-vulkan \
             --with-gstreamer \
+            --disable-winedmo \
             --host=aarch64-linux-gnu \
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
