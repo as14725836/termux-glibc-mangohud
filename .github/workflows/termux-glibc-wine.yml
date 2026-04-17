@@ -19,10 +19,10 @@ on:
       proton_branch:
         description: 'Proton 分支 (仅 Proton 构建)'
         required: false
-        default: 'proton_10.0'
+        default: 'proton_11.0'
         type: choice
         options:
-        - proton_10.0
+        - proton_11.0
         - proton_9.0
         - experimental_10.0
         - bleeding-edge
@@ -132,7 +132,7 @@ jobs:
           set -e
           
           echo "开始构建 Proton WOW64 版本..."
-          echo "分支: ${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
+          echo "分支: ${{ github.event.inputs.proton_branch || 'proton_11.0' }}"
           
           
           # 清理并创建构建目录
