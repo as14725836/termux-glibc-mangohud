@@ -125,8 +125,7 @@ jobs:
       - name: 生成 configure
         run: |
           cd /opt/wine/source
-          chmod +x autogen.sh
-          ./autogen.sh
+          
 
       - name: 构建 ARM64 (64位)
         run: |
