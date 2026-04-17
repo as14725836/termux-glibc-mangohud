@@ -139,13 +139,17 @@ jobs:
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
           ../source/configure \
-            --prefix=/opt/wine/final \
-            --enable-win64 \
-            --enable-archs=arm64ec,aarch64,i386 \
-            --with-mingw=clang \
-            --host=aarch64-linux-gnu \
-            --disable-tests \
-            CC=aarch64-linux-gnu-gcc
+          --prefix=/opt/wine/final \
+          --enable-win64 \
+          --enable-archs=arm64ec,aarch64,i386 \
+          --with-mingw=clang \
+          --build=x86_64-linux-gnu \
+          --host=aarch64-linux-gnu \
+          --disable-tests \
+          CC=aarch64-linux-gnu-gcc \
+          CXX=aarch64-linux-gnu-g++ \
+          CPP=aarch64-linux-gnu-cpp \
+          LD=aarch64-linux-gnu-ld
 
           make -j$(nproc)
           make install install-libs
@@ -162,13 +166,18 @@ jobs:
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
           ../source/configure \
-            --prefix=/opt/wine/final \
-            --with-wine64=/opt/wine/build64 \
-            --enable-archs=i386 \
-            --with-mingw=clang \
-            --host=aarch64-linux-gnu \
-            --disable-tests \
-            CC=aarch64-linux-gnu-gcc
+          --prefix=/opt/wine/final \
+          --with-wine64=/opt/wine/build64 \
+          --with-wine-tools=/opt/wine/build64 \
+          --enable-archs=i386 \
+          --with-mingw=clang \
+          --build=x86_64-linux-gnu \
+          --host=aarch64-linux-gnu \
+          --disable-tests \
+          CC=aarch64-linux-gnu-gcc \
+          CXX=aarch64-linux-gnu-g++ \
+          CPP=aarch64-linux-gnu-cpp \
+          LD=aarch64-linux-gnu-ld
 
           make -j$(nproc)
           make install install-libs
