@@ -149,7 +149,8 @@ jobs:
           CC=aarch64-linux-gnu-gcc \
           CXX=aarch64-linux-gnu-g++ \
           CPP=aarch64-linux-gnu-cpp \
-          LD=aarch64-linux-gnu-ld
+          LD=aarch64-linux-gnu-ld \
+          --without-wine-tools
 
           make -j$(nproc)
           make install install-libs
