@@ -201,14 +201,16 @@ jobs:
               fi
               ;;
             vanilla)
-              echo "处理 Vanilla 分支"
-              git clone https://github.com/Pipetto-crypto/wine.git source
-              cd source
-              git config advice.detachedHead false
-              if [ "$WINE_VERSION" != "latest" ]; then
-                git checkout "wine-$WINE_VERSION"
-              fi
-              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
+              echo "处理 Proton 分支"
+          git clone https://github.com/Pipetto-crypto/wine.git source
+          cd source
+          git config advice.detachedHead false
+          if [ "$PROTON_VERSION" != "latest" ]; then
+          git checkout "proton-$PROTON_VERSION"
+          else
+          git checkout "proton-9.0-arm64ec"
+          fi
+          WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "proton-${PROTON_VERSION:-9.0-arm64ec}")
               ;;
             *)
               echo "未知的 Wine 分支: $WINE_BRANCH"
