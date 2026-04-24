@@ -151,8 +151,9 @@ jobs:
           cd $BUILD_DIR/proton
           
           # 克隆 Proton 源码
-          git clone https://github.com/ValveSoftware/wine
+          git https://github.com/Pipetto-crypto/wine.git
           cd wine
+          git checkout "proton-9.0-arm64ec"
           
           # 切换到指定的 Proton 分支
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
