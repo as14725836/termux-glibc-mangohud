@@ -151,7 +151,7 @@ jobs:
           cd $BUILD_DIR/proton
           
           # 克隆 Proton 源码
-          git https://github.com/Pipetto-crypto/wine.git
+          git clone https://github.com/Pipetto-crypto/wine.git wine
           cd wine
           git checkout "proton-9.0-arm64ec"
           
