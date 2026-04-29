@@ -171,44 +171,93 @@ jobs:
           import re
 
           with open('dlls/crypt32/unixlib.c', 'r') as f:
-              content = f.read()
+              lines = f.readlines()
 
-          # 添加 Termux 证书路径
-          array_pattern = r'(static const char\* CRYPT_knownLocations\[\] = \{)([^}]*)(\};)'
-          termux_path = '  "/data/data/com.termux/files/usr/glibc/etc/ca-certificates/cacert.pem",\n'
+          # 1. 在 CRYPT_knownLocations 数组末尾添加 Termux 路径
+          in_array = False
+          array_end = -1
+          for i, line in enumerate(lines):
+              if 'static const char* CRYPT_knownLocations[] = {' in line:
+                  in_array = True
+              if in_array and line.strip() == '};':
+                  array_end = i
+                  break
 
-          def add_path(match):
-              before, middle, after = match.group(1), match.group(2), match.group(3)
-              return before + middle + termux_path + after
+          if array_end != -1:
+              lines.insert(array_end, '  "/data/data/com.termux/files/usr/glibc/etc/ca-certificates/cacert.pem",\n')
 
-          content = re.sub(array_pattern, add_path, content, flags=re.DOTALL)
+          # 2. 删除 macOS 代码块
+          new_lines = []
+          skip_until = -1
+          for i, line in enumerate(lines):
+              if skip_until > i:
+                  continue
+              if '#ifdef __APPLE__' in line:
+                  depth = 1
+                  j = i + 1
+                  while j < len(lines) and depth > 0:
+                      if '#ifdef __APPLE__' in lines[j] or '#ifndef __APPLE__' in lines[j]:
+                          depth += 1
+                      elif '#endif' in lines[j]:
+                          depth -= 1
+                      j += 1
+                  skip_until = j - 1
+                  continue
+              new_lines.append(line)
+          lines = new_lines
 
-          # 删除 macOS 代码
-          content = re.sub(r'\n?#ifdef __APPLE__\n.*?\n#endif\n', '', content, flags=re.DOTALL)
+          # 3. 修改 load_root_certs 函数
+          in_func = False
+          func_start = -1
+          func_end = -1
+          brace_count = 0
 
-          # 替换 load_root_certs 函数
-          old_func = r'static void load_root_certs\(void\)\s*\n\{.*?\n\}'
-          new_func = '''static void load_root_certs(void)
-          {
-              unsigned int i;
-              const char *cert_path = getenv("WINE_CA_CERT_PATH");
+          for i, line in enumerate(lines):
+              if 'static void load_root_certs(void)' in line:
+                  func_start = i
+                  in_func = True
+              if in_func:
+                  brace_count += line.count('{')
+                  brace_count -= line.count('}')
+                  if brace_count == 0 and func_start != -1 and i > func_start:
+                      func_end = i
+                      break
 
-              if (cert_path)
-                  import_certs_from_path(cert_path, TRUE);
+          if func_start != -1 and func_end != -1:
+              new_func = [
+                  'static void load_root_certs(void)\n',
+                  '{\n',
+                  '    unsigned int i;\n',
+                  '    const char *cert_path = getenv("WINE_CA_CERT_PATH");\n',
+                  '    \n',
+                  '    if (cert_path)\n',
+                  '        import_certs_from_path(cert_path, TRUE);\n',
+                  '    \n',
+                  '    if (list_empty(&root_cert_list)) {\n',
+                  '        for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations); i++) {\n',
+                  '            import_certs_from_path(CRYPT_knownLocations[i], TRUE);\n',
+                  '        }\n',
+                  '    }\n',
+                  '}\n'
+              ]
+              lines = lines[:func_start] + new_func + lines[func_end+1:]
 
-              if (list_empty(&root_cert_list)) {
-                  for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations); i++) {
-                      import_certs_from_path(CRYPT_knownLocations[i], TRUE);
-                  }
-              }
-          }'''
-          content = re.sub(old_func, new_func, content, flags=re.DOTALL)
-
-          # 删除 WINE_ADDITIONAL_CERTS_DIR
-          content = re.sub(r'\n?\s*if\s*\(\s*\(additional_dir\s*=\s*getenv\(\s*"WINE_ADDITIONAL_CERTS_DIR"\s*\)\s*\)\s*\)\s*\n\s+import_certs_from_path\(\s*additional_dir\s*,\s*TRUE\s*\)\s*;\s*\n', '\n', content)
+          # 4. 删除 WINE_ADDITIONAL_CERTS_DIR 相关代码
+          new_lines = []
+          skip_next = False
+          for i, line in enumerate(lines):
+              if 'additional_dir = getenv' in line and 'WINE_ADDITIONAL_CERTS_DIR' in line:
+                  skip_next = True
+                  continue
+              if skip_next and 'import_certs_from_path' in line:
+                  skip_next = False
+                  continue
+              new_lines.append(line)
+          lines = new_lines
 
           with open('dlls/crypt32/unixlib.c', 'w') as f:
-              f.write(content)
+              f.writelines(lines)
+
           print("crypt32 修复完成")
           PYTHON_SCRIPT
 
@@ -558,44 +607,93 @@ jobs:
           import re
 
           with open('dlls/crypt32/unixlib.c', 'r') as f:
-              content = f.read()
+              lines = f.readlines()
 
-          # 添加 Termux 证书路径
-          array_pattern = r'(static const char\* CRYPT_knownLocations\[\] = \{)([^}]*)(\};)'
-          termux_path = '  "/data/data/com.termux/files/usr/glibc/etc/ca-certificates/cacert.pem",\n'
+          # 1. 在 CRYPT_knownLocations 数组末尾添加 Termux 路径
+          in_array = False
+          array_end = -1
+          for i, line in enumerate(lines):
+              if 'static const char* CRYPT_knownLocations[] = {' in line:
+                  in_array = True
+              if in_array and line.strip() == '};':
+                  array_end = i
+                  break
 
-          def add_path(match):
-              before, middle, after = match.group(1), match.group(2), match.group(3)
-              return before + middle + termux_path + after
+          if array_end != -1:
+              lines.insert(array_end, '  "/data/data/com.termux/files/usr/glibc/etc/ca-certificates/cacert.pem",\n')
 
-          content = re.sub(array_pattern, add_path, content, flags=re.DOTALL)
+          # 2. 删除 macOS 代码块
+          new_lines = []
+          skip_until = -1
+          for i, line in enumerate(lines):
+              if skip_until > i:
+                  continue
+              if '#ifdef __APPLE__' in line:
+                  depth = 1
+                  j = i + 1
+                  while j < len(lines) and depth > 0:
+                      if '#ifdef __APPLE__' in lines[j] or '#ifndef __APPLE__' in lines[j]:
+                          depth += 1
+                      elif '#endif' in lines[j]:
+                          depth -= 1
+                      j += 1
+                  skip_until = j - 1
+                  continue
+              new_lines.append(line)
+          lines = new_lines
 
-          # 删除 macOS 代码
-          content = re.sub(r'\n?#ifdef __APPLE__\n.*?\n#endif\n', '', content, flags=re.DOTALL)
+          # 3. 修改 load_root_certs 函数
+          in_func = False
+          func_start = -1
+          func_end = -1
+          brace_count = 0
 
-          # 替换 load_root_certs 函数
-          old_func = r'static void load_root_certs\(void\)\s*\n\{.*?\n\}'
-          new_func = '''static void load_root_certs(void)
-          {
-              unsigned int i;
-              const char *cert_path = getenv("WINE_CA_CERT_PATH");
+          for i, line in enumerate(lines):
+              if 'static void load_root_certs(void)' in line:
+                  func_start = i
+                  in_func = True
+              if in_func:
+                  brace_count += line.count('{')
+                  brace_count -= line.count('}')
+                  if brace_count == 0 and func_start != -1 and i > func_start:
+                      func_end = i
+                      break
 
-              if (cert_path)
-                  import_certs_from_path(cert_path, TRUE);
+          if func_start != -1 and func_end != -1:
+              new_func = [
+                  'static void load_root_certs(void)\n',
+                  '{\n',
+                  '    unsigned int i;\n',
+                  '    const char *cert_path = getenv("WINE_CA_CERT_PATH");\n',
+                  '    \n',
+                  '    if (cert_path)\n',
+                  '        import_certs_from_path(cert_path, TRUE);\n',
+                  '    \n',
+                  '    if (list_empty(&root_cert_list)) {\n',
+                  '        for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations); i++) {\n',
+                  '            import_certs_from_path(CRYPT_knownLocations[i], TRUE);\n',
+                  '        }\n',
+                  '    }\n',
+                  '}\n'
+              ]
+              lines = lines[:func_start] + new_func + lines[func_end+1:]
 
-              if (list_empty(&root_cert_list)) {
-                  for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations); i++) {
-                      import_certs_from_path(CRYPT_knownLocations[i], TRUE);
-                  }
-              }
-          }'''
-          content = re.sub(old_func, new_func, content, flags=re.DOTALL)
-
-          # 删除 WINE_ADDITIONAL_CERTS_DIR
-          content = re.sub(r'\n?\s*if\s*\(\s*\(additional_dir\s*=\s*getenv\(\s*"WINE_ADDITIONAL_CERTS_DIR"\s*\)\s*\)\s*\)\s*\n\s+import_certs_from_path\(\s*additional_dir\s*,\s*TRUE\s*\)\s*;\s*\n', '\n', content)
+          # 4. 删除 WINE_ADDITIONAL_CERTS_DIR 相关代码
+          new_lines = []
+          skip_next = False
+          for i, line in enumerate(lines):
+              if 'additional_dir = getenv' in line and 'WINE_ADDITIONAL_CERTS_DIR' in line:
+                  skip_next = True
+                  continue
+              if skip_next and 'import_certs_from_path' in line:
+                  skip_next = False
+                  continue
+              new_lines.append(line)
+          lines = new_lines
 
           with open('dlls/crypt32/unixlib.c', 'w') as f:
-              f.write(content)
+              f.writelines(lines)
+
           print("crypt32 修复完成")
           PYTHON_SCRIPT
 
