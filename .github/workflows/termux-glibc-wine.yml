@@ -163,6 +163,9 @@ jobs:
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
 
+          echo "修复 server/mapping.c 内存映射地址..."
+          sed -i 's/free_map_addr( 0x600000000000, 0x100000000000 );/free_map_addr( 0x4000000000, 0x1000000000 );/' server/mapping.c
+
           echo "修复 memfd 路径问题..."
           sed -i '/pread( fd, map_addr, size, offset );/a\    \n    /* After falling back to read(), set executable permission if needed */\n    if (vprot \& VPROT_EXEC)\n        mprotect( map_addr, map_size, PROT_READ | PROT_EXEC );' dlls/ntdll/unix/virtual.c
 
@@ -579,6 +582,9 @@ jobs:
           find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+
+          echo "修复 server/mapping.c 内存映射地址..."
+          sed -i 's/free_map_addr( 0x600000000000, 0x100000000000 );/free_map_addr( 0x4000000000, 0x1000000000 );/' server/mapping.c
 
           echo "修复 memfd 路径问题..."
           sed -i '/pread( fd, map_addr, size, offset );/a\    \n    /* After falling back to read(), set executable permission if needed */\n    if (vprot \& VPROT_EXEC)\n        mprotect( map_addr, map_size, PROT_READ | PROT_EXEC );' dlls/ntdll/unix/virtual.c
