@@ -174,6 +174,16 @@ jobs:
           echo "修复 memfd 路径问题..."
           sed -i '/pread( fd, map_addr, size, offset );/a\    \n    /* After falling back to read(), set executable permission if needed */\n    if (vprot \& VPROT_EXEC)\n        mprotect( map_addr, map_size, PROT_READ | PROT_EXEC );' dlls/ntdll/unix/virtual.c
           echo "路径修复完成"
+
+          # 修复 crypt32 根证书加载问题（新增）
+          echo "修复 crypt32 根证书加载..."
+          find dlls/crypt32 -name "unixlib.c" -exec sed -i '
+          /^};$/i \  "/data/data/com.termux/files/usr/glibc/etc/ca-certificates/cacert.pem",
+          s/for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations) && list_empty(&root_cert_list); i++)/for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations); i++)/
+          ' {} \;
+
+          # 删除 macOS 专有代码（如果存在）
+          find dlls/crypt32 -name "unixlib.c" -exec sed -i '/^#ifdef __APPLE__$/,/^#endif$/d' {} \;
           
           # 生成 configure 脚本
           echo "生成 configure 脚本..."
@@ -589,6 +599,16 @@ jobs:
           echo "修复 memfd 路径问题..."
           sed -i '/pread( fd, map_addr, size, offset );/a\    \n    /* After falling back to read(), set executable permission if needed */\n    if (vprot \& VPROT_EXEC)\n        mprotect( map_addr, map_size, PROT_READ | PROT_EXEC );' dlls/ntdll/unix/virtual.c
           echo "路径修复完成"
+
+          # 修复 crypt32 根证书加载问题（新增）
+          echo "修复 crypt32 根证书加载..."
+          find dlls/crypt32 -name "unixlib.c" -exec sed -i '
+          /^};$/i \  "/data/data/com.termux/files/usr/glibc/etc/ca-certificates/cacert.pem",
+          s/for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations) && list_empty(&root_cert_list); i++)/for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations); i++)/
+          ' {} \;
+
+          # 删除 macOS 专有代码（如果存在）
+          find dlls/crypt32 -name "unixlib.c" -exec sed -i '/^#ifdef __APPLE__$/,/^#endif$/d' {} \;
           
           # 根据版本选择修复方式
           # 从 WINE_VERSION_ACTUAL 中提取纯数字版本号
