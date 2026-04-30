@@ -19,10 +19,10 @@ on:
       proton_branch:
         description: 'Proton 分支 (仅 Proton 构建)'
         required: false
-        default: 'proton_10.0'
+        default: 'proton_11.0'
         type: choice
         options:
-        - proton_10.0
+        - proton_11.0
         - proton_9.0
         - experimental_10.0
         - bleeding-edge
@@ -150,9 +150,9 @@ jobs:
 
           git clone https://github.com/GameNative/proton-wine.git wine
           cd wine
-          git checkout "proton_10.0"
+          git checkout "proton_11.0"
 
-          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
+          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_11.0' }}"
           echo "切换到分支: $PROTON_BRANCH"
           git checkout $PROTON_BRANCH
           
