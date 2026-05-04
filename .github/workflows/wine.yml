@@ -205,8 +205,8 @@ jobs:
               git clone https://github.com/AndreRH/wine.git source
           cd source
           git config advice.detachedHead false
-          if [ "$PROTON_VERSION" != "latest" ]; then
-          git checkout "proton-$PROTON_VERSION"
+          if [ "$WINE_VERSION" != "latest" ]; then
+          git checkout "wine-$WINE_VERSION"
           else
           git checkout "arm64ec"
           fi
