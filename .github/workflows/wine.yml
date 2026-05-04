@@ -201,16 +201,14 @@ jobs:
               fi
               ;;
             vanilla)
-              echo "处理 Proton 分支"
-          git clone https://github.com/Pipetto-crypto/wine.git source
-          cd source
-          git config advice.detachedHead false
-          if [ "$PROTON_VERSION" != "latest" ]; then
-          git checkout "proton-$PROTON_VERSION"
-          else
-          git checkout "proton-9.0-arm64ec"
-          fi
-          WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "proton-${PROTON_VERSION:-9.0-arm64ec}")
+              echo "处理 Vanilla 分支"
+              git clone https://github.com/wine-mirror/wine.git source
+              cd source
+              git config advice.detachedHead false
+              if [ "$WINE_VERSION" != "latest" ]; then
+                git checkout "wine-$WINE_VERSION"
+              fi
+              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
               ;;
             *)
               echo "未知的 Wine 分支: $WINE_BRANCH"
@@ -508,3 +506,17 @@ jobs:
             ✓ 支持运行 32/64 位 Windows 应用程序
             ✓ Vulkan 渲染
             ✓ GStreamer 多媒体后端
+            ✓ 中文环境支持
+            ✓ 应用了关键补丁提升兼容性
+            ✓ 包含完整的运行时文件：wine.inf、wineboot、wineserver 等所有必要程序
+            ## 安装说明
+            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置（建议 `/data/data/com.termux/files/usr/glibc`），并设置环境变量。
+            ## 构建信息
+            - 构建时间: ${{ github.event.head_commit.timestamp }}
+            - 提交: ${{ github.sha }}
+            - 工作流: ${{ github.workflow }}
+          files: |
+            ${{ github.workspace }}/${{ env.BUILD_NAME }}.tar.xz
+            ${{ github.workspace }}/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
