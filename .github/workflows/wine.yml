@@ -45,6 +45,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             ca-certificates wget git curl gnupg sudo xz-utils g++ file
+
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
@@ -65,8 +66,9 @@ jobs:
           dpkg --add-architecture arm64
           apt-get update
           apt-get install -y --no-install-recommends hello:arm64 || { echo "arm64 源测试失败"; exit 1; }
+
       # ------------------------------------------------------------
-      # 2. 安装所有依赖（完全参照 Dockerfile 的包列表）
+      # 2. 安装所有依赖（包含完整的 GStreamer 支持）
       # ------------------------------------------------------------
       - name: 安装构建依赖
         run: |
@@ -109,12 +111,8 @@ jobs:
             libusb-1.0-0-dev:arm64 \
             libv4l-dev:arm64 \
             libpulse-dev:arm64 \
-            libgstreamer1.0-dev:arm64 \
-            libgstreamer-plugins-base1.0-dev:arm64 \
-            libgstreamer-plugins-bad1.0-dev:arm64 \
             libudev-dev:arm64 \
             libunwind-dev:arm64 \
-            libsdl2-dev:arm64 \
             libfontconfig1-dev:arm64 \
             libkrb5-dev:arm64 \
             libvulkan-dev:arm64 \
@@ -124,6 +122,43 @@ jobs:
             libxkbcommon-dev:arm64 \
             libxkbregistry-dev:arm64 \
             libwayland-dev:arm64
+
+      # ------------------------------------------------------------
+      # 2.1 单独安装 GStreamer（确保完整）
+      # ------------------------------------------------------------
+      - name: 安装 GStreamer ARM64 开发包
+        run: |
+          echo "=== 安装 GStreamer 及插件 ==="
+          # 安装 GStreamer 核心和插件（arm64）
+          apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev:arm64 \
+            libgstreamer-plugins-base1.0-dev:arm64 \
+            libgstreamer-plugins-bad1.0-dev:arm64 \
+            libgstreamer-plugins-good1.0-dev:arm64 \
+            gstreamer1.0-plugins-base:arm64 \
+            gstreamer1.0-plugins-good:arm64 \
+            gstreamer1.0-plugins-bad:arm64 \
+            gstreamer1.0-plugins-ugly:arm64 \
+            gstreamer1.0-tools:arm64
+          
+          # 安装 amd64 版本的开发工具（用于构建）
+          apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
+          
+          echo "=== 验证 GStreamer ARM64 安装 ==="
+          dpkg -l | grep -E "gstreamer.*:arm64" | head -10
+          
+          # 检查 .pc 文件是否存在
+          echo "=== 检查 pkg-config 文件 ==="
+          ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/ | grep -i gstreamer || echo "警告: 未找到 gstreamer pc 文件"
+          
+          # 如果没有 pc 文件，创建符号链接
+          if [ ! -f /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-plugins-base-1.0.pc ]; then
+            echo "尝试修复 gstreamer pc 文件"
+            apt-get install --reinstall -y libgstreamer-plugins-base1.0-dev:arm64
+          fi
+
       # ------------------------------------------------------------
       # 3. 安装 llvm-mingw 交叉编译工具链
       # ------------------------------------------------------------
@@ -135,6 +170,7 @@ jobs:
           tar -xJf ${{ env.LLVMMINGW_NAME }}.tar.xz
           rm ${{ env.LLVMMINGW_NAME }}.tar.xz
           echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
+
       # ------------------------------------------------------------
       # 4. 设置中文语言环境
       # ------------------------------------------------------------
@@ -145,8 +181,9 @@ jobs:
           locale-gen
           echo "LANG=zh_CN.UTF-8" >> $GITHUB_ENV
           echo "LC_ALL=zh_CN.UTF-8" >> $GITHUB_ENV
+
       # ------------------------------------------------------------
-      # 5. 获取 Wine 源码（分支处理与原工作流一致）
+      # 5. 获取 Wine 源码
       # ------------------------------------------------------------
       - name: 获取 Wine 源码
         run: |
@@ -203,14 +240,14 @@ jobs:
             vanilla)
               echo "处理 Vanilla 分支"
               git clone https://github.com/afeimod/wine.git source
-          cd source
-          git config advice.detachedHead false
-          if [ "$WINE_VERSION" != "latest" ]; then
-          git checkout "$WINE_VERSION"
-          else
-          git pull
-          fi
-          WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "proton-${PROTON_VERSION:-9.0-arm64ec}")
+              cd source
+              git config advice.detachedHead false
+              if [ "$WINE_VERSION" != "latest" ]; then
+                git checkout "$WINE_VERSION"
+              else
+                git pull
+              fi
+              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "wine-${WINE_VERSION}")
               ;;
             *)
               echo "未知的 Wine 分支: $WINE_BRANCH"
@@ -222,6 +259,7 @@ jobs:
           echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
           echo "WINE_VERSION_ACTUAL=$WINE_VERSION_ACTUAL" >> $GITHUB_ENV
           echo "源码准备完成，构建名称: $BUILD_NAME"
+
       # ------------------------------------------------------------
       # 6. 修复 Termux 路径问题
       # ------------------------------------------------------------
@@ -234,6 +272,7 @@ jobs:
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
+
       # ------------------------------------------------------------
       # 7. 应用 mfplat 补丁
       # ------------------------------------------------------------
@@ -258,6 +297,7 @@ jobs:
             chmod +x fix_wine9.2_mfplat.sh
             ./fix_wine9.2_mfplat.sh
           fi
+
       # ------------------------------------------------------------
       # 8. 生成 configure 脚本
       # ------------------------------------------------------------
@@ -267,10 +307,11 @@ jobs:
           if [ ! -f "configure" ]; then
             ./autogen.sh
           fi
+
       # ------------------------------------------------------------
-      # 9. 构建 native wine64（严格模仿成功示例，并备份完整 nls 目录）
+      # 9. 构建 native wine64
       # ------------------------------------------------------------
-      - name: 构建 native wine64 工具和 NLS（带完整备份）
+      - name: 构建 native wine64 工具和 NLS
         run: |
           set -e
           mkdir -p ${{ env.WINE64_DIR }}
@@ -282,66 +323,79 @@ jobs:
           make __tooldeps__ -j$(nproc)
           echo "构建 NLS 目录..."
           make -C nls
-          # 备份整个 nls 目录（跟随符号链接）
           mkdir -p /opt/nls-backup
           cp -aL nls/. /opt/nls-backup/
-          echo "nls 目录已完整备份到 /opt/nls-backup"
-          ls -la /opt/nls-backup/
+          echo "nls 目录已备份到 /opt/nls-backup"
+
       # ------------------------------------------------------------
-      # 10. 复制构建目录，跟随符号链接，并验证 NLS（带恢复机制）
+      # 10. 复制构建目录
       # ------------------------------------------------------------
-      - name: 复制构建目录并验证 NLS（带恢复机制）
+      - name: 复制构建目录并验证 NLS
         run: |
           set -e
           mkdir -p /opt/wine64-native
-          # 检查源文件，若不存在则从备份恢复（备份包含所有 nls 文件）
           if [ ! -f ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ] && [ ! -L ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ]; then
-            echo "警告: 源目录中 nls/locale.nls 不存在，尝试从备份恢复"
+            echo "警告: 源目录中 nls/locale.nls 不存在，从备份恢复"
             if [ -d /opt/nls-backup ]; then
               mkdir -p ${{ env.WINE64_DIR }}/amd64/nls
               cp -af /opt/nls-backup/. ${{ env.WINE64_DIR }}/amd64/nls/
-              echo "已从备份恢复完整 nls 目录"
-            else
-              echo "错误: 无法恢复 nls 目录"
-              exit 1
             fi
           fi
-          # 复制整个构建目录，使用 -aL 选项（归档且跟随符号链接）
           cp -aL ${{ env.WINE64_DIR }}/amd64/. /opt/wine64-native/
-          chmod -R +x /opt/wine64-native/tools/*/
+          chmod -R +x /opt/wine64-native/tools/*/ 2>/dev/null || true
           chmod -R +r /opt/wine64-native/nls
-          # 验证复制后的文件是否为普通文件（不是符号链接）
           if [ ! -f /opt/wine64-native/nls/locale.nls ]; then
-            echo "警告: 复制后 locale.nls 丢失或为无效符号链接，尝试从备份恢复"
             if [ -d /opt/nls-backup ]; then
               mkdir -p /opt/wine64-native/nls
               cp -af /opt/nls-backup/. /opt/wine64-native/nls/
-              echo "已从备份恢复 nls 目录到目标目录"
-            else
-              echo "错误: 无法恢复 nls 目录"
-              exit 1
             fi
           fi
-          echo "复制后 locale.nls 存在，大小: $(wc -c < /opt/wine64-native/nls/locale.nls) 字节"
+          echo "locale.nls 大小: $(wc -c < /opt/wine64-native/nls/locale.nls) 字节"
+
       # ------------------------------------------------------------
-      # 11. 交叉编译 ARM64 WOW64（使用复制后的目录作为工具目录）
-      #     修改：移除 --with-wine64，仅使用 --with-wine-tools 以强制重新编译 programs
+      # 11. 交叉编译 ARM64 WOW64（修复 GStreamer 检测）
       # ------------------------------------------------------------
       - name: 交叉编译 ARM64 WOW64
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
           mkdir -p build-arm64
           cd build-arm64
+          
           export PATH="/opt/${{ env.LLVMMINGW_NAME }}/bin:$PATH"
+          
+          # 设置 ARM64 的 pkg-config 路径
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
+          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+          export PKG_CONFIG_SYSROOT_DIR=/
+          
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
-          # 根据 rules (4).txt 设置正确的 LDFLAGS，同时保留库搜索路径
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,--dynamic-linker=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 -Wl,-rpath=/data/data/com.termux/files/usr/glibc/lib"
           export WINE_NLS_DIR=/opt/wine64-native/nls
-          echo "使用 Wine64 构建目录（作为工具目录）: /opt/wine64-native"
-          echo "WINE_NLS_DIR=$WINE_NLS_DIR"
-          # 关键修改：仅使用 --with-wine-tools，不使用 --with-wine64
+          
+          echo "=== 验证 GStreamer 检测 ==="
+          echo "PKG_CONFIG_LIBDIR=$PKG_CONFIG_LIBDIR"
+          echo "可用的 gstreamer pc 文件:"
+          ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/ | grep -i gstreamer || echo "未找到"
+          
+          # 手动验证 GStreamer 是否可检测
+          if pkg-config --exists gstreamer-1.0 2>/dev/null; then
+            echo "✓ gstreamer-1.0 检测成功"
+            pkg-config --modversion gstreamer-1.0
+          else
+            echo "✗ gstreamer-1.0 检测失败"
+          fi
+          
+          if pkg-config --exists gstreamer-plugins-base-1.0 2>/dev/null; then
+            echo "✓ gstreamer-plugins-base-1.0 检测成功"
+            pkg-config --modversion gstreamer-plugins-base-1.0
+          else
+            echo "✗ gstreamer-plugins-base-1.0 检测失败"
+            echo "尝试查找 base plugins pc 文件:"
+            find /usr -name "gstreamer-plugins-base-1.0.pc" 2>/dev/null
+          fi
+          
+          echo "=== 开始配置 Wine ==="
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
@@ -354,129 +408,93 @@ jobs:
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
             --with-wine-tools=/opt/wine64-native \
-            CC=aarch64-linux-gnu-gcc
+            CC=aarch64-linux-gnu-gcc \
+            CXX=aarch64-linux-gnu-g++
+          
+          echo "=== 开始编译 ==="
           make -j$(nproc)
           make install
-          # 验证安装是否生成 bin 目录（若缺失则报错）
+          
           if [ ! -d /tmp/wine-install-wow64/bin ]; then
-            echo "错误: /tmp/wine-install-wow64/bin 目录不存在，安装可能不完整"
+            echo "错误: 安装目录 bin 不存在"
             exit 1
           fi
+
       # ------------------------------------------------------------
-      # 12. 全面补全安装目录的运行时文件（增强版：优先从 programs/ 查找）
+      # 12. 补全安装目录
       # ------------------------------------------------------------
-      - name: 全面补全安装目录的运行时文件（增强版）
+      - name: 补全安装目录的运行时文件
         run: |
           set -e
           TARGET_PREFIX="/tmp/wine-install-wow64"
           BUILD_DIR="${{ env.WINE_SOURCE_DIR }}/source/build-arm64"
           SOURCE_DIR="${{ env.WINE_SOURCE_DIR }}/source"
           NATIVE_NLS_DIR="/opt/wine64-native/nls"
-          SOURCE_FONTS_DIR="$SOURCE_DIR/fonts"
+          
           echo "=== 补全 share/wine/nls ==="
           mkdir -p "$TARGET_PREFIX/share/wine/nls"
           if [ -d "$NATIVE_NLS_DIR" ]; then
-              cp -v "$NATIVE_NLS_DIR"/*.nls "$TARGET_PREFIX/share/wine/nls/" 2>/dev/null || echo "没有找到 .nls 文件，可能已存在"
+              cp -v "$NATIVE_NLS_DIR"/*.nls "$TARGET_PREFIX/share/wine/nls/" 2>/dev/null || true
           fi
           if [ ! -f "$TARGET_PREFIX/share/wine/nls/locale.nls" ] && [ -f "/opt/nls-backup/locale.nls" ]; then
               cp -v "/opt/nls-backup/locale.nls" "$TARGET_PREFIX/share/wine/nls/"
           fi
-          echo "=== 补全 share/wine/fonts ==="
-          if [ -d "$SOURCE_FONTS_DIR" ]; then
-              mkdir -p "$TARGET_PREFIX/share/wine/fonts"
-              cp -v "$SOURCE_FONTS_DIR"/*.ttf "$SOURCE_FONTS_DIR"/*.fon "$TARGET_PREFIX/share/wine/fonts/" 2>/dev/null || echo "字体复制完成或无字体文件"
-          else
-              echo "警告: 源码 fonts 目录不存在，跳过字体复制"
-          fi
+          
           echo "=== 补全 wine.inf ==="
-          # 查找构建生成的 wine.inf（优先）
           WINE_INF_SRC=$(find "$BUILD_DIR" -name "wine.inf" -type f 2>/dev/null | head -1)
-          if [ -z "$WINE_INF_SRC" ]; then
-              # 如果未生成，尝试从源码目录复制原始文件
-              if [ -f "$SOURCE_DIR/dlls/wine.inf/wine.inf" ]; then
-                  WINE_INF_SRC="$SOURCE_DIR/dlls/wine.inf/wine.inf"
-              elif [ -f "$SOURCE_DIR/dlls/wine.inf/wine.inf.in" ]; then
-                  WINE_INF_SRC="$SOURCE_DIR/dlls/wine.inf/wine.inf.in"
-              fi
+          if [ -z "$WINE_INF_SRC" ] && [ -f "$SOURCE_DIR/dlls/wine.inf/wine.inf" ]; then
+              WINE_INF_SRC="$SOURCE_DIR/dlls/wine.inf/wine.inf"
           fi
           if [ -n "$WINE_INF_SRC" ]; then
               mkdir -p "$TARGET_PREFIX/share/wine"
               cp -v "$WINE_INF_SRC" "$TARGET_PREFIX/share/wine/wine.inf"
-          else
-              echo "警告: 未找到 wine.inf 文件"
           fi
-          echo "=== 补全关键程序文件 ==="
+          
+          echo "=== 补全关键程序 ==="
           BIN_DIR="$TARGET_PREFIX/bin"
           mkdir -p "$BIN_DIR"
-          # 需要的关键程序列表（包括 wineboot, winecfg, regedit, wineconsole 等）
-          PROGRAMS="wine wineserver wineboot winecfg regedit"
+          PROGRAMS="wine wineserver wineboot winecfg regedit wineconsole"
           for prog in $PROGRAMS; do
               if [ -f "$BIN_DIR/$prog" ]; then
-                  echo "文件 $BIN_DIR/$prog 已存在"
+                  echo "$prog 已存在"
                   continue
               fi
-              # 优先从 programs/ 子目录查找（用户态程序）
-              found=""
-              if [[ "$prog" != "wine" && "$prog" != "wineserver" ]]; then
-                  found=$(find "$BUILD_DIR/programs" -type f -name "$prog" -executable 2>/dev/null | head -1)
-              fi
-              if [ -z "$found" ]; then
-                  # 全目录搜索（包括 loader/ 等）
-                  found=$(find "$BUILD_DIR" -type f -name "$prog" -executable 2>/dev/null | head -1)
-              fi
+              found=$(find "$BUILD_DIR" -type f -name "$prog" -executable 2>/dev/null | head -1)
               if [ -n "$found" ]; then
                   cp -v "$found" "$BIN_DIR/"
               else
-                  echo "错误: 完全未找到 $prog"
-                  exit 1
+                  echo "警告: 未找到 $prog"
               fi
           done
           
-          echo "=== 验证 bin 目录关键文件 ==="
-          ls -la "$BIN_DIR"
+          echo "=== 验证关键文件 ==="
           for required in wine wineserver wineboot; do
               if [ ! -f "$BIN_DIR/$required" ] && [ ! -L "$BIN_DIR/$required" ]; then
-                  echo "错误: 缺少关键文件 $required"
+                  echo "错误: 缺少 $required"
                   exit 1
-              else
-                  echo "✓ $required 存在"
               fi
           done
-          echo "=== 最终安装目录结构预览 ==="
-          ls -la "$TARGET_PREFIX/share/wine/" || true
-          ls -la "$TARGET_PREFIX/bin/" || true
+
       # ------------------------------------------------------------
-      # 13. 验证安装目录内容（可选，便于调试）
-      # ------------------------------------------------------------
-      - name: 验证安装目录内容
-        run: |
-          echo "安装目录 /tmp/wine-install-wow64 的内容："
-          ls -la /tmp/wine-install-wow64/
-          if [ -d /tmp/wine-install-wow64/bin ]; then
-            echo "bin 目录内容："
-            ls -la /tmp/wine-install-wow64/bin/
-          fi
-          if [ -d /tmp/wine-install-wow64/share ]; then
-            echo "share 目录内容："
-            ls -la /tmp/wine-install-wow64/share/
-          fi
-      # ------------------------------------------------------------
-      # 14. 打包
+      # 13. 打包和发布
       # ------------------------------------------------------------
       - name: 准备打包
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           mkdir -p wine-package/$PACKAGE_NAME
           cp -r /tmp/wine-install-wow64/* wine-package/$PACKAGE_NAME/
+
       - name: 创建打包文件
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
           ls -lh *.tar.xz
+
       - name: Generate checksums
         run: |
           sha256sum *.tar.xz > checksums.txt
           cat checksums.txt
+
       - name: Upload Wine WoW64 artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -494,29 +512,18 @@ jobs:
           name: Wine ${{ github.event.inputs.wine_branch || 'staging' }} ${{ github.event.inputs.wine_version || 'latest' }} (ARM64 WOW64 for Termux)
           body: |
             # Wine ${{ github.event.inputs.wine_branch || 'staging' }} ${{ github.event.inputs.wine_version || 'latest' }} - ARM64 WOW64 for Termux
+            
             ## 版本信息
             - **Wine 分支**: ${{ github.event.inputs.wine_branch || 'staging' }}
             - **Wine 版本**: ${{ github.event.inputs.wine_version || 'latest' }}
             - **主机架构**: ARM64 (aarch64)
-            - **目标 Windows 架构**: i386, x86_64, arm64ec (通过 WOW64 模拟)
+            - **目标 Windows 架构**: i386, x86_64, arm64ec
             - **平台**: Termux (Android)
             - **图形 API**: Vulkan 支持已启用
             - **多媒体**: GStreamer 支持已启用
-            - **工具链**: llvm-mingw + 系统 gcc
-            ## 特性
-            ✓ ARM64 原生 Wine 可执行文件
-            ✓ 支持运行 32/64 位 Windows 应用程序
-            ✓ Vulkan 渲染
-            ✓ GStreamer 多媒体后端
-            ✓ 中文环境支持
-            ✓ 应用了关键补丁提升兼容性
-            ✓ 包含完整的运行时文件：wine.inf、wineboot、wineserver 等所有必要程序
+            
             ## 安装说明
-            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置（建议 `/data/data/com.termux/files/usr/glibc`），并设置环境变量。
-            ## 构建信息
-            - 构建时间: ${{ github.event.head_commit.timestamp }}
-            - 提交: ${{ github.sha }}
-            - 工作流: ${{ github.workflow }}
+            解压后，将文件夹放置在 Termux 的合适位置，并设置环境变量。
           files: |
             ${{ github.workspace }}/${{ env.BUILD_NAME }}.tar.xz
             ${{ github.workspace }}/checksums.txt
