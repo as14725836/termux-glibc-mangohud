@@ -202,13 +202,13 @@ jobs:
               ;;
             vanilla)
               echo "处理 Vanilla 分支"
-              git clone https://github.com/AndreRH/wine.git source
+              git clone https://github.com/afeimod/wine.git source
           cd source
           git config advice.detachedHead false
           if [ "$WINE_VERSION" != "latest" ]; then
           git checkout "$WINE_VERSION"
           else
-          git checkout "arm64ce"
+          git pull
           fi
           WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "proton-${PROTON_VERSION:-9.0-arm64ec}")
               ;;
