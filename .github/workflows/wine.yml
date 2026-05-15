@@ -154,6 +154,38 @@ jobs:
             apt-get install --reinstall -y libgstreamer-plugins-base1.0-dev:arm64
           fi
 
+      - name: 从源码编译 GStreamer Base Plugins (ARM64)
+        run: |
+         echo "=== 安装编译依赖 ==="
+         apt-get install -y --no-install-recommends \
+         meson ninja-build \
+         libglib2.0-dev:arm64 \
+         libgstreamer1.0-dev:arm64
+    
+         echo "=== 下载 GStreamer Base Plugins 源码 ==="
+         cd /tmp
+         wget https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.22.0.tar.xz
+         tar -xJf gst-plugins-base-1.28.0.tar.xz
+         cd gst-plugins-base-1.28.0
+    
+         echo "=== 交叉编译配置 ==="
+         export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
+         export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+    
+         meson setup build \
+         --cross-file=/dev/null \
+         --prefix=/usr \
+         --libdir=/usr/lib/aarch64-linux-gnu \
+         --buildtype=release
+    
+          echo "=== 编译安装 ==="
+          cd build
+          ninja
+          ninja install
+    
+          echo "=== 验证 ==="
+          ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-plugins-base-1.0.pc
+
       # ------------------------------------------------------------
       # 3. 安装 llvm-mingw 交叉编译工具链
       # ------------------------------------------------------------
