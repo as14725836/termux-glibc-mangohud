@@ -131,11 +131,10 @@ jobs:
           echo "=== 安装 GStreamer 及插件 ==="
           # 安装 GStreamer 核心和插件（arm64）
           apt-get install -y --no-install-recommends \
-            libgstreamer1.0-dev:arm64 \
-            gstreamer1.0-plugins-base:arm64 \
-            gstreamer1.0-plugins-good:arm64 \
-            gstreamer1.0-plugins-bad:arm64 \
-            gstreamer1.0-plugins-ugly:arm64
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly
           
           # 安装 amd64 版本的开发工具（用于构建）
           apt-get install -y --no-install-recommends \
