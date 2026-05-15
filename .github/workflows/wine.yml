@@ -137,7 +137,7 @@ jobs:
             gstreamer1.0-plugins-ugly
 
           apt-get install -y python3-pip
-          pip3 install --upgrade meson
+          pip3 install --upgrade meson --break-system-packages
           export PATH="/root/.local/bin:$PATH"
           meson --version
           
