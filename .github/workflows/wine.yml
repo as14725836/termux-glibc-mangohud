@@ -164,7 +164,7 @@ jobs:
     
          echo "=== 下载 GStreamer Base Plugins 源码 ==="
          cd /tmp
-         wget https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.22.0.tar.xz
+         wget https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.28.0.tar.xz
          tar -xJf gst-plugins-base-1.28.0.tar.xz
          cd gst-plugins-base-1.28.0
     
