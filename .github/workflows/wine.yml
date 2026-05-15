@@ -135,6 +135,11 @@ jobs:
             gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly
+
+          apt-get install -y python3-pip
+          pip3 install --upgrade meson
+          export PATH="/root/.local/bin:$PATH"
+          meson --version
           
           # 安装 amd64 版本的开发工具（用于构建）
           apt-get install -y --no-install-recommends \
