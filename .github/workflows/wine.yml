@@ -82,7 +82,7 @@ jobs:
             git gettext make automake autoconf pkg-config libtool gtk-doc-tools clang \
             dpkg-dev \
             libglib2.0-dev:arm64 \
-            libfreetype6-dev:arm64 \
+            libfreetype-dev:arm64 \
             libltdl-dev:arm64 \
             libxcb1-dev:arm64 \
             libx11-dev:arm64 \
