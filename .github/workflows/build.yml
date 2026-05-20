@@ -109,76 +109,36 @@ jobs:
           meson --version
           ninja --version
 
-      # ⚙️ 应用 Termux 无 root CPU 频率补丁
-      - name: 应用 Termux 无 root CPU 频率补丁
-        run: |
-          cd MangoHud
-          SRC_FILE="src/sysinfo/linux.cpp"
-          if [ -f "$SRC_FILE" ]; then
-            echo "🔧 应用 CPU 频率检测修补..."
-            cp "$SRC_FILE" "${SRC_FILE}.bak"
-            awk '
-            BEGIN {in_func=0}
-            /^int get_cpu_freq\(int core\)/ {print; in_func=1; next}
-            in_func && /^\{/ {print; print "    int freq = 0; std::string path;"; next}
-            in_func && /return freq;/ {
-                print "    // 尝试 scaling_cur_freq"
-                print "    path = \"/sys/devices/system/cpu/cpu\" + std::to_string(core) + \"/cpufreq/scaling_cur_freq\";"
-                print "    { std::ifstream f(path); if(f.is_open()){ f >> freq; if(freq>0) return freq/1000; } }"
-                print ""
-                print "    // 尝试 cpuinfo_cur_freq"
-                print "    path = \"/sys/devices/system/cpu/cpu\" + std::to_string(core) + \"/cpufreq/cpuinfo_cur_freq\";"
-                print "    { std::ifstream f(path); if(f.is_open()){ f >> freq; if(freq>0) return freq/1000; } }"
-                print ""
-                print "    // 从 /proc/cpuinfo 读取 (非 root fallback)"
-                print "    {"
-                print "        std::ifstream cpuinfo(\"/proc/cpuinfo\");"
-                print "        if(cpuinfo.is_open()){"
-                print "            std::string line; int index=-1;"
-                print "            while(std::getline(cpuinfo,line)){"
-                print "                if(line.find(\"processor\")!=std::string::npos) index++;"
-                print "                if(index==core && line.find(\"cpu MHz\")!=std::string::npos){"
-                print "                    size_t pos=line.find(\":\");"
-                print "                    if(pos!=std::string::npos){"
-                print "                        std::istringstream iss(line.substr(pos+1));"
-                print "                        iss >> freq; if(freq>0) return (int)freq;"
-                print "                    }"
-                print "                }"
-                print "            }"
-                print "        }"
-                print "    }"
-                print ""
-                print "    // fallback 默认值"
-                print "    return 2000;"
-                in_func=0; next
-            }
-            {print}
-            ' "${SRC_FILE}.bak" > "$SRC_FILE"
-            echo "✅ CPU 频率检测补丁应用成功"
-          else
-            echo "⚠️ 未找到 $SRC_FILE"
-          fi
+      
 
       # 🏗️ 构建 MangoHud
       - name: 构建 MangoHud (Termux glibc)
         run: |
-          cd MangoHud
-          sudo mkdir -p /data/data/com.termux/files/usr/glibc
-          sudo chmod -R 777 /data
-          meson setup build \
-            --prefix=/data/data/com.termux/files/usr/glibc \
-            --libdir=lib \
-            -Dbuildtype=release \
-            -Dwith_x11=enabled \
-            -Dwith_wayland=enabled \
-            -Dwith_xnvctrl=disabled \
-            -Dwith_dbus=enabled \
-            -Dmangoplot=enabled \
-            -Dmangoapp=false \
-            -Dmangohudctl=false \
-            -Dtests=disabled
-          ninja -C build -j$(nproc)
-          ninja -C build install
+         cd MangoHud
+    
+    
+         sed -i '1i#include <fstream>' src/hud_elements.cpp
+  
+         sed -i 's/right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%i", cpuStats.GetCPUDataTotal().cpu_mhz);/int freq_mhz = cpuStats.GetCPUDataTotal().cpu_mhz;\n            static bool is_snapdragon = false;\n            static bool checked = false;\n            if (!checked) {\n                std::ifstream cpuinfo("\/proc\/cpuinfo");\n                std::string line;\n                while (std::getline(cpuinfo, line)) {\n                    if (line.find("Hardware") != std::string::npos \&\&\n                        (line.find("Qualcomm") != std::string::npos ||\n                         line.find("SM8") != std::string::npos)) {\n                        is_snapdragon = true;\n                        break;\n                    }\n                }\n                checked = true;\n            }\n            if (is_snapdragon \&\& freq_mhz >= 3000) {\n                char str[16];\n                snprintf(str, sizeof(str), "%.2fG", freq_mhz \/ 1000.0f);\n                right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", str);\n            } else {\n                right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%i", freq_mhz);\n            }/' src/hud_elements.cpp
+    
+         sed -i 's/if (is_snapdragon \&\& freq_mhz >= 3000) {/if (is_snapdragon \&\& freq_mhz >= 3000) {\n                ImGui::SameLine(0, 1.0f);\n                ImGui::PushFont(HUDElements.sw_stats->font_small);\n                HUDElements.TextColored(HUDElements.colors.text, "GHz");\n                ImGui::PopFont();\n                return;/' src/hud_elements.cpp
+    
+         sudo mkdir -p /data/data/com.termux/files/usr/glibc
+         sudo chmod -R 777 /data
+         meson setup build \
+         --prefix=/data/data/com.termux/files/usr/glibc \
+         --libdir=lib \
+         -Dbuildtype=release \
+         -Dwith_x11=enabled \
+         -Dwith_wayland=enabled \
+         -Dwith_xnvctrl=disabled \
+         -Dwith_dbus=enabled \
+         -Dmangoplot=enabled \
+         -Dmangoapp=false \
+         -Dmangohudctl=false \
+         -Dtests=disabled
+         ninja -C build -j$(nproc)
+         ninja -C build install
 
       # 🔧 修正 $LIB 变量
       - name: 修正 MangoHud 启动脚本
