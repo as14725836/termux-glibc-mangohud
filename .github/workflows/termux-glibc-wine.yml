@@ -148,10 +148,10 @@ jobs:
           mkdir -p $BUILD_DIR/proton
           cd $BUILD_DIR/proton
 
-          git clone https://github.com/Pipetto-crypto/wine.git wine
+          git clone https://github.com/GameNative/proton-wine.git wine
           cd wine
 
-          git checkout "master"
+          git checkout "proton_11.0"
 
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_11.0' }}"
           echo "切换到分支: $PROTON_BRANCH"
@@ -550,7 +550,7 @@ jobs:
 
           elif [ "$WINE_BRANCH" = "vanilla" ]; then
             echo "处理 Vanilla 分支"
-            git clone https://github.com/wine-mirror/wine.git wine
+            git clone https://github.com/Pipetto-crypto/wine.git wine
             SOURCE_DIR="wine"
             cd "$SOURCE_DIR"
 
