@@ -514,6 +514,28 @@ jobs:
           return status;
           s/return NtContinue( context, FALSE );/return status;/g
           }' dlls/ntdll/unix/thread.c
+          
+          echo "修复 字体..."
+          perl -i -pe '
+          if (/if \(os2->version == 0\)/) {
+          $_ = q(        if (os2->version == 0)
+          {
+            FT_UInt dummy;
+            if (pFT_Get_First_Char( ft_face, &dummy ) < 0x100)
+                fs->fsCsb[0] = FS_LATIN1;
+            else
+                fs->fsCsb[0] = FS_SYMBOL;
+          });
+          $skip = 1;
+          }
+          elsif ($skip && /^        }/) {
+          $skip = 0;
+          $_ = "";
+          }
+          elsif ($skip) {
+          $_ = "";
+          }
+          ' dlls/win32u/freetype.c
 
 
           PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
