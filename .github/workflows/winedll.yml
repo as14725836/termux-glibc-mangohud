@@ -1,4 +1,4 @@
-name: Extract MediaFoundation DLLs
+name: wine DLLs
 
 on:
   workflow_dispatch:
