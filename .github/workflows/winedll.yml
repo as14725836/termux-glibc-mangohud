@@ -108,7 +108,7 @@ jobs:
       - name: Write install info
         run: |
           cat > README.txt <<'EOF'
-          MediaFoundation DLLs — extracted from Windows 7 SP1 (KB976932)
+          Windows DLLs — extracted from Windows 7 SP1 (KB976932)
           Provider: Microsoft
           License: Microsoft EULA
           
@@ -138,14 +138,31 @@ jobs:
             ls -lh system32/
           fi
 
+      - name: Generate archive name
+        id: archive_name
+        run: |
+          # 清理 DLL 名称，替换逗号和空格为下划线
+          DLLS_CLEAN="${{ github.event.inputs.dll_names }}"
+          DLLS_CLEAN=$(echo "$DLLS_CLEAN" | tr ',' '_' | tr ' ' '_' | sed 's/__*/_/g' | sed 's/\.dll//g')
+          ARCH="${{ github.event.inputs.arch }}"
+          if [ "$ARCH" = "both" ]; then
+            ARCH_SUFFIX="x86_x64"
+          elif [ "$ARCH" = "x86" ]; then
+            ARCH_SUFFIX="x86"
+          else
+            ARCH_SUFFIX="x64"
+          fi
+          echo "ARCHIVE_NAME=${DLLS_CLEAN}_${ARCH_SUFFIX}" >> $GITHUB_OUTPUT
+          echo "Archive name will be: ${DLLS_CLEAN}_${ARCH_SUFFIX}"
+
       - name: Zip files
         run: |
           if [ -d syswow64 ] && [ -d system32 ]; then
-            zip -r mediafoundation.zip syswow64 system32 README.txt
+            zip -r ${{ steps.archive_name.outputs.ARCHIVE_NAME }}.zip syswow64 system32 README.txt
           elif [ -d syswow64 ]; then
-            zip -r mediafoundation.zip syswow64 README.txt
+            zip -r ${{ steps.archive_name.outputs.ARCHIVE_NAME }}.zip syswow64 README.txt
           elif [ -d system32 ]; then
-            zip -r mediafoundation.zip system32 README.txt
+            zip -r ${{ steps.archive_name.outputs.ARCHIVE_NAME }}.zip system32 README.txt
           else
             echo "No files extracted!"
             exit 1
@@ -154,6 +171,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mediafoundation-${{ github.event.inputs.dll_names }}-${{ github.event.inputs.arch }}
-          path: mediafoundation.zip
+          name: ${{ steps.archive_name.outputs.ARCHIVE_NAME }}
+          path: ${{ steps.archive_name.outputs.ARCHIVE_NAME }}.zip
           retention-days: 7
