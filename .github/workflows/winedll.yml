@@ -25,32 +25,37 @@ jobs:
       - name: Verify x64 checksum
         run: |
           echo "28d3932f714bf71d78e75d36aa2e0fb8  win7sp1_x64.exe" | md5sum -c -
+
       - name: Extract x86 mf.dll
         run: |
           mkdir -p output/win32
-          # 7z extracts nested CABs from the SP1 exe
-          7z x win7sp1_x86.exe -o./x86_tmp/ -y
-          # The DLL lives inside a named folder within the extracted CAB
-          find ./x86_tmp -iname "mf.dll" | while read f; do
-            echo "Found: $f"
-            cp "$f" output/win32/mf.dll
-            break
-          done
+          cabextract -d ./x86_tmp win7sp1_x86.exe
+          find ./x86_tmp -name "*.cab" -exec cabextract -d ./x86_extract {} \;
+          find ./x86_extract -name "mf.dll" 2>/dev/null | head -1 | xargs -I {} cp {} output/win32/mf.dll
+          if [ ! -f output/win32/mf.dll ]; then
+            find ./x86_tmp -name "mf.dll" -exec cp {} output/win32/mf.dll \;
+          fi
           ls -lh output/win32/
+
       - name: Extract x64 mf.dll
         run: |
           mkdir -p output/win64
-          7z x win7sp1_x64.exe -o./x64_tmp/ -y
-          find ./x64_tmp -iname "mf.dll" | while read f; do
-            echo "Found: $f"
-            cp "$f" output/win64/mf.dll
-            break
-          done
+          cabextract -d ./x64_tmp win7sp1_x64.exe
+          find ./x64_tmp -name "*.cab" -exec cabextract -d ./x64_extract {} \;
+          find ./x64_extract -name "mf.dll" 2>/dev/null | head -1 | xargs -I {} cp {} output/win64/mf.dll
+          if [ ! -f output/win64/mf.dll ]; then
+            find ./x64_tmp -name "mf.dll" -exec cp {} output/win64/mf.dll \;
+          fi
           ls -lh output/win64/
-      - name: Copy source EXEs into output
+
+      - name: Debug - list extracted files (if not found)
+        if: ${{ failure() }}
         run: |
-          cp win7sp1_x86.exe output/
-          cp win7sp1_x64.exe output/
+          echo "=== x86 extracted files ==="
+          find ./x86_tmp -name "*.dll" 2>/dev/null | head -20
+          echo "=== x64 extracted files ==="
+          find ./x64_tmp -name "*.dll" 2>/dev/null | head -20
+
       - name: Write install info
         run: |
           cat > output/README.txt <<'EOF'
@@ -60,10 +65,9 @@ jobs:
           Files:
             win32/mf.dll        — 32-bit mf.dll for Wine win32 prefix
             win64/mf.dll        — 64-bit mf.dll for Wine win64 prefix
-            win7sp1_x86.exe     — original source (x86 SP1)
-            win7sp1_x64.exe     — original source (x64 SP1)
           Wine DLL override:  mf = native,builtin
           EOF
+
       - name: Zip output folder
         run: zip -r mediafoundation.zip output/
 
