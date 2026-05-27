@@ -6,7 +6,7 @@ on:
       dll_names:
         description: '要提取的 DLL 名称（多个用逗号分隔，例如: mf.dll, mfplat.dll, mfreadwrite.dll）'
         required: true
-        default: 'mf.dll'
+        default: ''
         type: string
       arch:
         description: '架构（x86, x64, both）'
