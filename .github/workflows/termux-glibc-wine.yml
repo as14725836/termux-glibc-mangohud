@@ -516,10 +516,10 @@ jobs:
           }' dlls/ntdll/unix/thread.c
           
           echo "补丁应用"
-          #patch -p1 < "$GITHUB_WORKSPACE/ndis-p10.patch"
-          patch -p1 < "$GITHUB_WORKSPACE/pathfix-p10.patch"
-          patch -p1 < "$GITHUB_WORKSPACE/termux-p10.patch"
-          patch -p1 < "$GITHUB_WORKSPACE/wine-virtual-memory-p10.patch"
+          patch -p1 -N < "$GITHUB_WORKSPACE/ndis-p10.patch"
+          patch -p1 -N < "$GITHUB_WORKSPACE/pathfix-p10.patch"
+          patch -p1 -N < "$GITHUB_WORKSPACE/termux-p10.patch"
+          patch -p1 -N < "$GITHUB_WORKSPACE/wine-virtual-memory-p10.patch"
           
 
           PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
