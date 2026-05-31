@@ -121,7 +121,6 @@ jobs:
          --libdir=lib \
          -Dbuildtype=release \
          -Dwith_x11=enabled \
-         -Dwith_dlsym=enabled \
          -Dwith_wayland=disabled \
          -Dwith_xnvctrl=disabled \
          -Dwith_dbus=disabled \
