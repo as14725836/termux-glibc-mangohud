@@ -109,8 +109,6 @@ jobs:
           meson --version
           ninja --version
 
-      
-
       # 🏗️ 构建 MangoHud
       - name: 构建 MangoHud (Termux glibc)
         run: |
@@ -155,14 +153,25 @@ jobs:
             done
           done
 
-      # 📦 打包结果
+      # 📦 打包结果（仅必要文件 - 简洁版）
       - name: 打包构建产物
         run: |
           cd /data/data/com.termux/files/usr
           TAR_NAME="termux-glibc-mangohud-${{ env.VERSION }}-aarch64.tar.gz"
-          tar -czvf /home/runner/$TAR_NAME glibc
+          
+          # 使用 tar 的 --files-from 参数精确打包
+          cat > /tmp/mangohud_files.txt << EOF
+          glibc/bin/mangohud
+          glibc/lib/mangohud
+          glibc/share/vulkan/implicit_layer.d/MangoHud.aarch64.json
+          EOF
+          
+          tar -czvf /home/runner/$TAR_NAME --files-from=/tmp/mangohud_files.txt 2>/dev/null || true
+          
           echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
           echo "📦 打包完成: $TAR_NAME"
+          echo "📁 包内文件:"
+          tar -tzf /home/runner/$TAR_NAME
 
       # ☁️ 上传产物
       - name: 上传构建产物
@@ -190,18 +199,16 @@ jobs:
 
             ### 📦 文件信息
             - **文件名**: `${{ env.TAR_NAME }}`
-            - **包含**: 完整的 MangoHud 安装文件
+            - **包含**: MangoHud 核心文件（精简版）
 
             ### 🛠️ 构建特性
             - ✅ 支持 X11
-            - ✅ 启用 MangoPlot
             - ❌ 禁用 XNVCtrl (NVIDIA GPU 统计)
             - ❌ 禁用 MangoApp
             - ❌ 禁用 MangoHudctl
 
             ### 📥 使用方法
             1. 下载并解压到 Termux 的 `/data/data/com.termux/files/usr/` 目录
-            2. 运行 `mangohud` 命令使用
           files: /home/runner/${{ env.TAR_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
