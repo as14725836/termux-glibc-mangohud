@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  REPO_URL: https://github.com/moze30/MangoHud
+  REPO_URL: https://github.com/as14725836/MangoHudfex.git
   LAST_COMMIT_FILE: last_mangohud_commit.txt
 
 jobs:
