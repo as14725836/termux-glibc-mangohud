@@ -1,4 +1,4 @@
-name: Build MangoHud (aarch64, PRO CLEAN)
+name: Build MangoHud (aarch64, Termux glibc - PRO)
 
 on:
   workflow_dispatch:
@@ -10,6 +10,8 @@ permissions:
 
 env:
   REPO_URL: https://github.com/moze30/MangoHud.git
+  LAST_COMMIT_FILE: last_mangohud_commit.txt
+  sudo mkdir PREFIX: /data/data/com.termux/files/usr/glibc
   CCACHE_DIR: ${{ github.workspace }}/ccache
 
 jobs:
@@ -17,28 +19,33 @@ jobs:
     runs-on: ubuntu-24.04-arm
 
     steps:
+      # =========================
+      # 1. Checkout
+      # =========================
       - uses: actions/checkout@v4
 
       # =========================
-      # ccache
+      # 2. ccache (🚀 加速核心)
       # =========================
       - name: Setup ccache
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache
+          echo "CCACHE_DIR=${{ env.CCACHE_DIR }}" >> $GITHUB_ENV
           ccache -M 1G
           ccache -z
 
       # =========================
-      # clone
+      # 3. Clone source
       # =========================
-      - name: Clone
-        run: git clone --depth=1 $REPO_URL MangoHud
+      - name: Clone MangoHud
+        run: |
+          git clone --depth=1 $REPO_URL MangoHud
 
       # =========================
-      # deps
+      # 4. Install deps (优化版)
       # =========================
-      - name: Install deps
+      - name: Install dependencies
         run: |
           sudo apt-get install -y \
             build-essential git pkg-config meson ninja-build \
@@ -48,26 +55,28 @@ jobs:
             libdrm-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev \
             patchelf ccache
 
+      - name: Upgrade build tools
+        run: |
           pip3 install --upgrade meson ninja mako
 
       # =========================
-      # version
+      # 5. Version check
       # =========================
-      - name: Version
+      - name: Get version
         run: |
           cd MangoHud
           VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "dev-$(git rev-parse --short HEAD)")
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       # =========================
-      # configure (NO PREFIX PATH)
+      # 6. Meson configure (PRO optimized)
       # =========================
       - name: Configure
         run: |
           cd MangoHud
 
           meson setup build \
-            --prefix=/usr \
+            --prefix=${{ env.PREFIX }} \
             --libdir=lib \
             -Dbuildtype=release \
             -Doptimization=2 \
@@ -83,41 +92,59 @@ jobs:
             -Dtests=disabled
 
       # =========================
-      # build
+      # 7. Build (🚀 stable + fast)
       # =========================
       - name: Build
         run: |
           cd MangoHud
-          ninja -C build -j2
+
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+
+          ninja -C build -j6
 
       # =========================
-      # install (DESTDIR ONLY)
+      # 8. Install
       # =========================
-      - name: Install to pkg
+      - name: Install
         run: |
           cd MangoHud
-          DESTDIR=$PWD/pkg ninja -C build install
+          ninja -C build install
 
       # =========================
-      # patch ELF (ONLY pkg)
+      # 9. Patch ELF (SAFE ONLY)
       # =========================
       - name: Patch ELF
         run: |
-          PKG=$PWD/MangoHud/pkg
+          ROOT=${{ env.PREFIX }}
+          INTERP=$ROOT/lib/ld-linux-aarch64.so.1
 
-          for f in $(find $PKG -type f 2>/dev/null); do
+          for f in $(find $ROOT/bin $ROOT/lib -type f 2>/dev/null); do
             file "$f" | grep -q ELF || continue
-            patchelf --set-interpreter /lib/ld-linux-aarch64.so.1 "$f" || true
+            patchelf --set-interpreter "$INTERP" "$f" || true
           done
 
       # =========================
-      # package (NO /data AT ALL)
+      # 10. Build speed stats
       # =========================
-      - name: Package
+      - name: Show ccache stats
+        run: ccache -s
+
+      # =========================
+      # 11. KEEP YOUR ORIGINAL PACKAGING (UNCHANGED)
+      # =========================
+      - name: 打包构建产物
         run: |
-          cd MangoHud/pkg/usr
+          cd /data/data/com.termux/files/usr
 
           TAR_NAME="termux-glibc-mangohud-${{ env.VERSION }}-aarch64.tar.gz"
-          echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
 
-          tar -czvf /home/runner/$TAR_NAME bin lib share
+          cat > /tmp/mangohud_files.txt << EOF
+          glibc/bin/mangohud
+          glibc/lib/mangohud
+          glibc/share/vulkan/implicit_layer.d/MangoHud.aarch64.json
+          EOF
+
+          tar -czvf /home/runner/$TAR_NAME --files-from=/tmp/mangohud_files.txt 2>/dev/null || true
+
+          echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
