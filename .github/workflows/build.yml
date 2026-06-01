@@ -34,11 +34,6 @@ jobs:
           sudo apt-get install -y ccache
           ccache -M 2G
           ccache -z
-
-      - name: Clone MangoHud
-        run: |
-          git clone --depth=1 $REPO_URL MangoHud
-
       - name: Get version
         id: get_version
         run: |
