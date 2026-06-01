@@ -43,6 +43,8 @@ jobs:
         id: get_version
         run: |
           cd MangoHud
+          git checkout test
+          git pull
           if git describe --tags --abbrev=0 2>/dev/null; then
             VERSION=$(git describe --tags --abbrev=0)
           else
