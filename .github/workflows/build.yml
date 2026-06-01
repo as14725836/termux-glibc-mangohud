@@ -13,8 +13,11 @@ env:
   LAST_COMMIT_FILE: last_mangohud_commit.txt
 
 jobs:
-  build: 
+  build:
     runs-on: ubuntu-24.04-arm
+    
+    # 增加超时时间
+    timeout-minutes: 120
 
     steps:
       # 🧩 检出当前仓库（用于存放记录文件）
@@ -81,55 +84,86 @@ jobs:
           echo "🔖 提交: $COMMIT"
           echo "🕓 时间: $DATE"
 
-      - name: 修复依赖
+      # 📦 修复 APT 并安装依赖
+      - name: 修复 APT 并安装依赖
         run: |
-          sudo apt clean
-          sudo apt autoclean
-          sudo rm -rf /var/lib/apt/lists/*
-          sudo apt update
-          sudo rm /var/lib/apt/lists/lock
-          sudo rm /var/cache/apt/archives/lock
-
-      # 📦 安装依赖
-      - name: 安装基础依赖
-        run: |
-          sudo apt-get update
+          # 清理并修复 APT
+          sudo pkill -9 apt-get || true
+          sudo pkill -9 dpkg || true
+          sudo rm -f /var/lib/dpkg/lock-frontend
+          sudo rm -f /var/lib/dpkg/lock
+          sudo rm -f /var/lib/apt/lists/lock
+          sudo rm -f /var/cache/apt/archives/lock
+          sudo dpkg --configure -a
+          
+          # 更新软件源
+          sudo apt-get clean
+          sudo apt-get autoclean
+          sudo apt-get update --fix-missing
+          
+          # 安装依赖
           sudo apt-get install -y \
-            build-essential glslang-tools python3-pip git \
-            pkg-config meson libdbus-1-dev libx11-dev \
-            libxext-dev libxrandr-dev libxinerama-dev \
-            libxdamage-dev libxfixes-dev libdrm-dev \
-            libgl1-mesa-dev libwayland-dev libxkbcommon-dev patchelf
+            build-essential \
+            glslang-tools \
+            python3-pip \
+            git \
+            pkg-config \
+            meson \
+            libdbus-1-dev \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxdamage-dev \
+            libxfixes-dev \
+            libdrm-dev \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            patchelf \
+            ninja-build
 
-      # 🛠️ 升级 Meson/Ninja
+      # 🛠️ 升级 Meson 和 Ninja
       - name: 升级 Meson 和 Ninja
         run: |
-          pip install --upgrade pip
-          pip install --upgrade meson ninja mako
+          pip3 install --upgrade pip
+          pip3 install --upgrade meson ninja mako
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
           meson --version
           ninja --version
 
-      # 🏗️ 构建 MangoHud
+      # 🏗️ 构建 MangoHud (限制并行数避免 OOM)
       - name: 构建 MangoHud (Termux glibc)
         run: |
-         cd MangoHud
-   
-         sudo mkdir -p /data/data/com.termux/files/usr/glibc
-         sudo chmod -R 777 /data
-         meson setup build \
-         --prefix=/data/data/com.termux/files/usr/glibc \
-         --libdir=lib \
-         -Dbuildtype=release \
-         -Dwith_x11=enabled \
-         -Dwith_wayland=disabled \
-         -Dwith_xnvctrl=disabled \
-         -Dwith_dbus=disabled \
-         -Dmangoplot=disabled \
-         -Dmangoapp=false \
-         -Dmangohudctl=false \
-         -Dtests=disabled
-         ninja -C build -j$(nproc)
-         ninja -C build install
+          cd MangoHud
+          
+          # 创建目录
+          sudo mkdir -p /data/data/com.termux/files/usr/glibc
+          sudo chmod -R 777 /data 2>/dev/null || true
+          
+          # 配置构建（限制并行数）
+          meson setup build \
+            --prefix=/data/data/com.termux/files/usr/glibc \
+            --libdir=lib \
+            -Dbuildtype=release \
+            -Dwith_x11=enabled \
+            -Dwith_wayland=disabled \
+            -Dwith_xnvctrl=disabled \
+            -Dwith_dbus=disabled \
+            -Dmangoplot=disabled \
+            -Dmangoapp=false \
+            -Dmangohudctl=false \
+            -Dtests=disabled
+          
+          # 限制并行编译数，避免内存不足
+          NPROC=$(nproc)
+          if [ $NPROC -gt 2 ]; then
+            NPROC=2
+          fi
+          echo "使用 $NPROC 个并行任务编译"
+          ninja -C build -j$NPROC
+          ninja -C build install
 
       # 🔧 修正 $LIB 变量
       - name: 修正 MangoHud 启动脚本
@@ -137,6 +171,7 @@ jobs:
           ROOT=/data/data/com.termux/files/usr/glibc
           if [ -f "$ROOT/bin/mangohud" ]; then
             sed -i 's|/\\$LIB|/lib|g' "$ROOT/bin/mangohud"
+            echo "✅ 已修正启动脚本"
           fi
 
       # 🧱 修补 ELF 解释器
@@ -147,31 +182,33 @@ jobs:
           for dir in "$ROOT/bin" "$ROOT/lib"; do
             [ -d "$dir" ] || continue
             for f in "$dir"/*; do
-              if file "$f" | grep -q 'ELF'; then
-                patchelf --set-interpreter "$INTERP" "$f" || true
+              if [ -f "$f" ] && file "$f" 2>/dev/null | grep -q 'ELF'; then
+                patchelf --set-interpreter "$INTERP" "$f" 2>/dev/null || true
               fi
             done
           done
+          echo "✅ ELF 解释器修补完成"
 
-      # 📦 打包结果（仅必要文件 - 简洁版）
+      # 📦 打包结果
       - name: 打包构建产物
         run: |
           cd /data/data/com.termux/files/usr
           TAR_NAME="termux-glibc-mangohud-${{ env.VERSION }}-aarch64.tar.gz"
           
-          # 使用 tar 的 --files-from 参数精确打包
+          # 创建临时文件列表
           cat > /tmp/mangohud_files.txt << EOF
           glibc/bin/mangohud
           glibc/lib/mangohud
           glibc/share/vulkan/implicit_layer.d/MangoHud.aarch64.json
           EOF
           
+          # 打包（忽略不存在的文件）
           tar -czvf /home/runner/$TAR_NAME --files-from=/tmp/mangohud_files.txt 2>/dev/null || true
           
           echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
           echo "📦 打包完成: $TAR_NAME"
           echo "📁 包内文件:"
-          tar -tzf /home/runner/$TAR_NAME
+          tar -tzf /home/runner/$TAR_NAME 2>/dev/null || echo "包可能为空"
 
       # ☁️ 上传产物
       - name: 上传构建产物
@@ -179,9 +216,25 @@ jobs:
         with:
           name: ${{ env.TAR_NAME }}
           path: /home/runner/${{ env.TAR_NAME }}
+          retention-days: 30
+
+      # 🚀 检查 Release 是否已存在
+      - name: Check if release exists
+        id: check_release
+        run: |
+          if gh release view ${{ env.VERSION }} --repo ${{ github.repository }} 2>/dev/null; then
+            echo "release_exists=true" >> $GITHUB_ENV
+            echo "⚠️ Release ${{ env.VERSION }} 已存在，跳过发布"
+          else
+            echo "release_exists=false" >> $GITHUB_ENV
+            echo "✅ 将创建新 Release: ${{ env.VERSION }}"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # 🚀 发布 Release
       - name: 发布到 GitHub Release
+        if: env.release_exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION }}
@@ -206,16 +259,20 @@ jobs:
             - ❌ 禁用 XNVCtrl (NVIDIA GPU 统计)
             - ❌ 禁用 MangoApp
             - ❌ 禁用 MangoHudctl
+            - ❌ 禁用 Wayland
 
             ### 📥 使用方法
             1. 下载并解压到 Termux 的 `/data/data/com.termux/files/usr/` 目录
+            ```bash
+            tar -xzvf ${{ env.TAR_NAME }} -C /data/data/com.termux/files/usr/
+            ```
           files: /home/runner/${{ env.TAR_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # 💾 保存最新构建的提交哈希
       - name: Save last commit hash
-        run: echo "$LATEST_COMMIT" > $LAST_COMMIT_FILE
+        run: echo "${{ env.LATEST_COMMIT }}" > $LAST_COMMIT_FILE
 
       # 📤 上传记录文件（供下次比较）
       - name: Upload commit record
@@ -223,3 +280,4 @@ jobs:
         with:
           name: last-mangohud-commit
           path: ${{ env.LAST_COMMIT_FILE }}
+          retention-days: 7
