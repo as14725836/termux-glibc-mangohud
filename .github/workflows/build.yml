@@ -11,47 +11,35 @@ permissions:
 env:
   REPO_URL: https://github.com/moze30/MangoHud.git
   LAST_COMMIT_FILE: last_mangohud_commit.txt
-  # 修复：使用 runner 本地目录而不是 Termux 路径
   PREFIX: ${{ github.workspace }}/install
   CCACHE_DIR: ${{ github.workspace }}/ccache
 
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
+    # 增加超时时间
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v4
 
-      # =========================
-      # 创建安装目录
-      # =========================
       - name: Create prefix directory
         run: |
           mkdir -p ${{ env.PREFIX }}/bin
           mkdir -p ${{ env.PREFIX }}/lib
           mkdir -p ${{ env.PREFIX }}/share
-          echo "✅ 创建目录: ${{ env.PREFIX }}"
 
-      # =========================
-      # Setup ccache
-      # =========================
       - name: Setup ccache
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache
-          ccache -M 1G
+          ccache -M 2G
           ccache -z
 
-      # =========================
-      # Clone source
-      # =========================
       - name: Clone MangoHud
         run: |
           git clone --depth=1 $REPO_URL MangoHud
 
-      # =========================
-      # Get version
-      # =========================
       - name: Get version
         id: get_version
         run: |
@@ -64,9 +52,6 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "✅ 版本: $VERSION"
 
-      # =========================
-      # Install dependencies
-      # =========================
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -85,9 +70,6 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      # =========================
-      # Meson configure
-      # =========================
       - name: Configure
         run: |
           cd MangoHud
@@ -110,32 +92,37 @@ jobs:
             -Dtests=disabled
 
       # =========================
-      # Build
+      # 关键修复：增加 swap + 限制并行数
       # =========================
-      - name: Build
+      - name: Build (with swap)
         run: |
           cd MangoHud
+          
+          # 增加 swap 空间防止 OOM
+          echo "=== 增加 Swap 空间 ==="
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "Swap 状态:"
+          free -h
+          
           export CC="ccache gcc"
           export CXX="ccache g++"
           
-          NPROC=$(nproc)
-          if [ $NPROC -gt 4 ]; then
-            NPROC=4
-          fi
-          echo "使用 $NPROC 个并行任务"
-          ninja -C build -j$NPROC
+          # 使用 2 个并行任务（arm64 runner 内存有限）
+          echo "=== 开始编译 (并行数: 2) ==="
+          ninja -C build -j2
+          
+          echo "=== 编译完成，清理 Swap ==="
+          sudo swapoff /swapfile
+          sudo rm -f /swapfile
 
-      # =========================
-      # Install to prefix
-      # =========================
       - name: Install
         run: |
           cd MangoHud
           ninja -C build install
 
-      # =========================
-      # 修复启动脚本中的 $LIB 变量
-      # =========================
       - name: Fix mangohud script
         run: |
           if [ -f "${{ env.PREFIX }}/bin/mangohud" ]; then
@@ -143,13 +130,9 @@ jobs:
             echo "✅ 已修正启动脚本"
           fi
 
-      # =========================
-      # Patch ELF (设置正确的解释器路径)
-      # =========================
       - name: Patch ELF
         run: |
           ROOT="${{ env.PREFIX }}"
-          # 使用系统的解释器路径（打包后用户需要改成自己的路径）
           INTERP="/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1"
           
           for f in $(find "$ROOT/bin" "$ROOT/lib" -type f 2>/dev/null); do
@@ -158,95 +141,28 @@ jobs:
               patchelf --set-interpreter "$INTERP" "$f" 2>/dev/null || true
             fi
           done
-          echo "✅ ELF 修补完成"
 
-      # =========================
-      # 重新打包为 Termux 目录结构
-      # =========================
       - name: Repackage for Termux
         run: |
-          # 创建 Termux 风格的目录结构
           mkdir -p termux_package/glibc
-          
-          # 复制文件到 termux 包目录
           cp -r ${{ env.PREFIX }}/* termux_package/glibc/
-          
-          # 查看打包内容
           echo "打包内容:"
-          find termux_package -type f
+          find termux_package -type f | head -20
 
-      # =========================
-      # 打包构建产物
-      # =========================
       - name: Create tarball
         run: |
           cd termux_package
           TAR_NAME="termux-glibc-mangohud-${{ env.VERSION }}-aarch64.tar.gz"
-          
           tar -czvf /home/runner/$TAR_NAME .
-          
           echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
-          echo "📦 打包完成: $TAR_NAME"
-          echo "文件大小:"
           ls -lh /home/runner/$TAR_NAME
 
-      # =========================
-      # 验证打包内容
-      # =========================
-      - name: Verify package
-        run: |
-          echo "=== 包内文件列表 ==="
-          tar -tzf /home/runner/${{ env.TAR_NAME }} | head -30
-
-      # =========================
-      # Show ccache stats
-      # =========================
       - name: Show ccache stats
         run: ccache -s
 
-      # =========================
-      # 上传产物
-      # =========================
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.TAR_NAME }}
           path: /home/runner/${{ env.TAR_NAME }}
           retention-days: 30
-
-      # =========================
-      # 发布 Release
-      # =========================
-      - name: Check if release exists
-        id: check_release
-        run: |
-          if gh release view ${{ env.VERSION }} --repo ${{ github.repository }} 2>/dev/null; then
-            echo "release_exists=true" >> $GITHUB_ENV
-          else
-            echo "release_exists=false" >> $GITHUB_ENV
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create Release
-        if: env.release_exists == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.VERSION }}
-          name: MangoHud ${{ env.VERSION }} (aarch64, Termux glibc)
-          body: |
-            ## MangoHud ${{ env.VERSION }} for Termux (aarch64 glibc)
-
-            ### 📋 构建信息
-            - **版本号**: `${{ env.VERSION }}`
-            - **架构**: aarch64
-            - **环境**: Termux glibc
-
-            ### 📥 安装方法
-            解压到 Termux 的 `/data/data/com.termux/files/usr/` 目录：
-            ```bash
-            tar -xzvf ${{ env.TAR_NAME }} -C /data/data/com.termux/files/usr/
-            ```
-          files: /home/runner/${{ env.TAR_NAME }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
