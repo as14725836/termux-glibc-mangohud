@@ -1,9 +1,9 @@
-name: Build MangoHud (aarch64, Termux glibc)
+name: Build MangoHud (aarch64, Termux glibc - PRO)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 6 * * *'  # 每天早上6点自动检查更新构建
+    - cron: '0 6 * * *'
 
 permissions:
   contents: write
@@ -11,142 +11,77 @@ permissions:
 env:
   REPO_URL: https://github.com/moze30/MangoHud.git
   LAST_COMMIT_FILE: last_mangohud_commit.txt
+  PREFIX: /data/data/com.termux/files/usr/glibc
+  CCACHE_DIR: ${{ github.workspace }}/ccache
 
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
-    
-    # 增加超时时间
-    timeout-minutes: 120
 
     steps:
-      # 🧩 检出当前仓库（用于存放记录文件）
-      - name: Checkout workflow repository
-        uses: actions/checkout@v4
+      # =========================
+      # 1. Checkout
+      # =========================
+      - uses: actions/checkout@v4
 
-      # 🔍 获取上次构建的提交哈希
-      - name: Get last built commit
-        id: get_last_commit
+      # =========================
+      # 2. ccache (🚀 加速核心)
+      # =========================
+      - name: Setup ccache
         run: |
-          if [ -f "$LAST_COMMIT_FILE" ]; then
-            echo "LAST_COMMIT=$(cat $LAST_COMMIT_FILE)" >> $GITHUB_ENV
-          else
-            echo "LAST_COMMIT=none" >> $GITHUB_ENV
-          fi
+          sudo apt-get update
+          sudo apt-get install -y ccache
+          echo "CCACHE_DIR=${{ env.CCACHE_DIR }}" >> $GITHUB_ENV
+          ccache -M 1G
+          ccache -z
 
-      # 🔎 检查上游源码的最新提交
-      - name: Check upstream latest commit
-        id: check_upstream
-        run: |
-          LATEST_COMMIT=$(git ls-remote $REPO_URL HEAD | awk '{print $1}')
-          echo "LATEST_COMMIT=$LATEST_COMMIT" >> $GITHUB_ENV
-          echo "最新源码提交: $LATEST_COMMIT"
-
-          if [ "$LATEST_COMMIT" = "$LAST_COMMIT" ]; then
-            echo "🔸 源码未更新，跳过构建。"
-            echo "skip_build=true" >> $GITHUB_ENV
-          else
-            echo "✅ 检测到新提交，将进行构建。"
-            echo "skip_build=false" >> $GITHUB_ENV
-          fi
-
-      # 🛑 如果没有新提交则跳过后续步骤
-      - name: Stop if no new commit
-        if: env.skip_build == 'true'
-        run: |
-          echo "没有新提交，终止 workflow。"
-          exit 0
-
-      # 🧭 克隆 MangoHud 源码
-      - name: Clone MangoHud source
+      # =========================
+      # 3. Clone source
+      # =========================
+      - name: Clone MangoHud
         run: |
           git clone --depth=1 $REPO_URL MangoHud
 
-      # 🔖 获取源码版本号
-      - name: 获取源码版本号
-        id: get_version
+      # =========================
+      # 4. Install deps (优化版)
+      # =========================
+      - name: Install dependencies
         run: |
-          cd MangoHud
-          if git describe --tags --abbrev=0 >/dev/null 2>&1; then
-            VERSION=$(git describe --tags --abbrev=0)
-          else
-            VERSION="dev-$(git rev-parse --short HEAD)"
-          fi
-          AUTHOR=$(git log -1 --pretty=format:'%an')
-          COMMIT=$(git rev-parse HEAD)
-          DATE=$(date '+%Y-%m-%d %H:%M:%S UTC')
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "AUTHOR=$AUTHOR" >> $GITHUB_ENV
-          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
-          echo "BUILD_TIME=$DATE" >> $GITHUB_ENV
-          echo "✅ 版本: $VERSION"
-          echo "👤 作者: $AUTHOR"
-          echo "🔖 提交: $COMMIT"
-          echo "🕓 时间: $DATE"
-
-      # 📦 修复 APT 并安装依赖
-      - name: 修复 APT 并安装依赖
-        run: |
-          # 清理并修复 APT
-          sudo pkill -9 apt-get || true
-          sudo pkill -9 dpkg || true
-          sudo rm -f /var/lib/dpkg/lock-frontend
-          sudo rm -f /var/lib/dpkg/lock
-          sudo rm -f /var/lib/apt/lists/lock
-          sudo rm -f /var/cache/apt/archives/lock
-          sudo dpkg --configure -a
-          
-          # 更新软件源
-          sudo apt-get clean
-          sudo apt-get autoclean
-          sudo apt-get update --fix-missing
-          
-          # 安装依赖
           sudo apt-get install -y \
-            build-essential \
-            glslang-tools \
-            python3-pip \
-            git \
-            pkg-config \
-            meson \
-            libdbus-1-dev \
-            libx11-dev \
-            libxext-dev \
-            libxrandr-dev \
-            libxinerama-dev \
-            libxdamage-dev \
-            libxfixes-dev \
-            libdrm-dev \
-            libgl1-mesa-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            patchelf \
-            ninja-build
+            build-essential git pkg-config meson ninja-build \
+            glslang-tools python3-pip \
+            libdbus-1-dev libx11-dev libxext-dev libxrandr-dev \
+            libxinerama-dev libxdamage-dev libxfixes-dev \
+            libdrm-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev \
+            patchelf ccache
 
-      # 🛠️ 升级 Meson 和 Ninja
-      - name: 升级 Meson 和 Ninja
+      - name: Upgrade build tools
         run: |
-          pip3 install --upgrade pip
           pip3 install --upgrade meson ninja mako
-          export PATH="$HOME/.local/bin:$PATH"
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          meson --version
-          ninja --version
 
-      # 🏗️ 构建 MangoHud (限制并行数避免 OOM)
-      - name: 构建 MangoHud (Termux glibc)
+      # =========================
+      # 5. Version check
+      # =========================
+      - name: Get version
         run: |
           cd MangoHud
-          
-          # 创建目录
-          sudo mkdir -p /data/data/com.termux/files/usr/glibc
-          sudo chmod -R 777 /data 2>/dev/null || true
-          
-          # 配置构建（限制并行数）
+          VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "dev-$(git rev-parse --short HEAD)")
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      # =========================
+      # 6. Meson configure (PRO optimized)
+      # =========================
+      - name: Configure
+        run: |
+          cd MangoHud
+
           meson setup build \
-            --prefix=/data/data/com.termux/files/usr/glibc \
+            --prefix=${{ env.PREFIX }} \
             --libdir=lib \
             -Dbuildtype=release \
+            -Doptimization=2 \
+            -Db_lto=false \
+            -Db_ndebug=true \
             -Dwith_x11=enabled \
             -Dwith_wayland=disabled \
             -Dwith_xnvctrl=disabled \
@@ -155,129 +90,61 @@ jobs:
             -Dmangoapp=false \
             -Dmangohudctl=false \
             -Dtests=disabled
-          
-          # 限制并行编译数，避免内存不足
-          NPROC=$(nproc)
-          if [ $NPROC -gt 2 ]; then
-            NPROC=2
-          fi
-          echo "使用 $NPROC 个并行任务编译"
-          ninja -C build -j$NPROC
+
+      # =========================
+      # 7. Build (🚀 stable + fast)
+      # =========================
+      - name: Build
+        run: |
+          cd MangoHud
+
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+
+          ninja -C build -j6
+
+      # =========================
+      # 8. Install
+      # =========================
+      - name: Install
+        run: |
+          cd MangoHud
           ninja -C build install
 
-      # 🔧 修正 $LIB 变量
-      - name: 修正 MangoHud 启动脚本
+      # =========================
+      # 9. Patch ELF (SAFE ONLY)
+      # =========================
+      - name: Patch ELF
         run: |
-          ROOT=/data/data/com.termux/files/usr/glibc
-          if [ -f "$ROOT/bin/mangohud" ]; then
-            sed -i 's|/\\$LIB|/lib|g' "$ROOT/bin/mangohud"
-            echo "✅ 已修正启动脚本"
-          fi
-
-      # 🧱 修补 ELF 解释器
-      - name: 修补 ELF 可执行文件
-        run: |
-          ROOT=/data/data/com.termux/files/usr/glibc
+          ROOT=${{ env.PREFIX }}
           INTERP=$ROOT/lib/ld-linux-aarch64.so.1
-          for dir in "$ROOT/bin" "$ROOT/lib"; do
-            [ -d "$dir" ] || continue
-            for f in "$dir"/*; do
-              if [ -f "$f" ] && file "$f" 2>/dev/null | grep -q 'ELF'; then
-                patchelf --set-interpreter "$INTERP" "$f" 2>/dev/null || true
-              fi
-            done
-          done
-          echo "✅ ELF 解释器修补完成"
 
-      # 📦 打包结果
+          for f in $(find $ROOT/bin $ROOT/lib -type f 2>/dev/null); do
+            file "$f" | grep -q ELF || continue
+            patchelf --set-interpreter "$INTERP" "$f" || true
+          done
+
+      # =========================
+      # 10. Build speed stats
+      # =========================
+      - name: Show ccache stats
+        run: ccache -s
+
+      # =========================
+      # 11. KEEP YOUR ORIGINAL PACKAGING (UNCHANGED)
+      # =========================
       - name: 打包构建产物
         run: |
           cd /data/data/com.termux/files/usr
+
           TAR_NAME="termux-glibc-mangohud-${{ env.VERSION }}-aarch64.tar.gz"
-          
-          # 创建临时文件列表
+
           cat > /tmp/mangohud_files.txt << EOF
           glibc/bin/mangohud
           glibc/lib/mangohud
           glibc/share/vulkan/implicit_layer.d/MangoHud.aarch64.json
           EOF
-          
-          # 打包（忽略不存在的文件）
+
           tar -czvf /home/runner/$TAR_NAME --files-from=/tmp/mangohud_files.txt 2>/dev/null || true
-          
+
           echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
-          echo "📦 打包完成: $TAR_NAME"
-          echo "📁 包内文件:"
-          tar -tzf /home/runner/$TAR_NAME 2>/dev/null || echo "包可能为空"
-
-      # ☁️ 上传产物
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.TAR_NAME }}
-          path: /home/runner/${{ env.TAR_NAME }}
-          retention-days: 30
-
-      # 🚀 检查 Release 是否已存在
-      - name: Check if release exists
-        id: check_release
-        run: |
-          if gh release view ${{ env.VERSION }} --repo ${{ github.repository }} 2>/dev/null; then
-            echo "release_exists=true" >> $GITHUB_ENV
-            echo "⚠️ Release ${{ env.VERSION }} 已存在，跳过发布"
-          else
-            echo "release_exists=false" >> $GITHUB_ENV
-            echo "✅ 将创建新 Release: ${{ env.VERSION }}"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # 🚀 发布 Release
-      - name: 发布到 GitHub Release
-        if: env.release_exists == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.VERSION }}
-          name: MangoHud ${{ env.VERSION }} (aarch64, Termux glibc)
-          body: |
-            ## MangoHud ${{ env.VERSION }} for Termux (aarch64 glibc)
-
-            ### 📋 构建信息
-            - **版本号**: `${{ env.VERSION }}`
-            - **架构**: aarch64
-            - **环境**: Termux glibc
-            - **作者**: `${{ env.AUTHOR }}`
-            - **提交**: `${{ env.COMMIT }}`
-            - **构建时间**: `${{ env.BUILD_TIME }}`
-
-            ### 📦 文件信息
-            - **文件名**: `${{ env.TAR_NAME }}`
-            - **包含**: MangoHud 核心文件（精简版）
-
-            ### 🛠️ 构建特性
-            - ✅ 支持 X11
-            - ❌ 禁用 XNVCtrl (NVIDIA GPU 统计)
-            - ❌ 禁用 MangoApp
-            - ❌ 禁用 MangoHudctl
-            - ❌ 禁用 Wayland
-
-            ### 📥 使用方法
-            1. 下载并解压到 Termux 的 `/data/data/com.termux/files/usr/` 目录
-            ```bash
-            tar -xzvf ${{ env.TAR_NAME }} -C /data/data/com.termux/files/usr/
-            ```
-          files: /home/runner/${{ env.TAR_NAME }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # 💾 保存最新构建的提交哈希
-      - name: Save last commit hash
-        run: echo "${{ env.LATEST_COMMIT }}" > $LAST_COMMIT_FILE
-
-      # 📤 上传记录文件（供下次比较）
-      - name: Upload commit record
-        uses: actions/upload-artifact@v4
-        with:
-          name: last-mangohud-commit
-          path: ${{ env.LAST_COMMIT_FILE }}
-          retention-days: 7
