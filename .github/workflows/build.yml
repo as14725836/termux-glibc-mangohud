@@ -37,12 +37,11 @@ jobs:
 
       - name: Clone MangoHud
         run: |
-          git clone --depth=1 $REPO_URL MangoHud
+          git clone $REPO_URL MangoHud
           
       - name: Get version
         id: get_version
         run: |
-          git clone $REPO_URL MangoHud  # 移除 --depth=1
           cd MangoHud
           git checkout test
           git pull
