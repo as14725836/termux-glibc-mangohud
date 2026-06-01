@@ -17,7 +17,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
-    # 增加超时时间
     timeout-minutes: 180
 
     steps:
@@ -92,30 +91,41 @@ jobs:
             -Dtests=disabled
 
       # =========================
-      # 关键修复：增加 swap + 限制并行数
+      # 修复版：增加 Swap（处理文件已存在的情况）
       # =========================
       - name: Build (with swap)
         run: |
           cd MangoHud
           
-          # 增加 swap 空间防止 OOM
-          echo "=== 增加 Swap 空间 ==="
-          sudo fallocate -l 4G /swapfile
+          echo "=== 内存状态 ==="
+          free -h
+          
+          # 清理可能存在的旧 swap 文件
+          echo "=== 清理旧 Swap ==="
+          sudo swapoff /swapfile 2>/dev/null || true
+          sudo rm -f /swapfile
+          
+          # 创建新的 swap 文件
+          echo "=== 创建新 Swap (4GB) ==="
+          sudo dd if=/dev/zero of=/swapfile bs=1M count=4096 status=progress
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
-          echo "Swap 状态:"
+          
+          echo "=== Swap 启用后状态 ==="
           free -h
           
           export CC="ccache gcc"
           export CXX="ccache g++"
           
-          # 使用 2 个并行任务（arm64 runner 内存有限）
+          # 使用 2 个并行任务
           echo "=== 开始编译 (并行数: 2) ==="
           ninja -C build -j2
           
-          echo "=== 编译完成，清理 Swap ==="
-          sudo swapoff /swapfile
+          echo "=== 编译完成 ==="
+          
+          # 清理 swap
+          sudo swapoff /swapfile 2>/dev/null || true
           sudo rm -f /swapfile
 
       - name: Install
