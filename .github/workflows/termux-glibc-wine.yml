@@ -514,6 +514,14 @@ jobs:
           return status;
           s/return NtContinue( context, FALSE );/return status;/g
           }' dlls/ntdll/unix/thread.c
+
+          echo 这个命令只在 wined3dformat_from_d3dformat 函数中添加
+          sed -i '/^enum wined3d_format_id wined3dformat_from_d3dformat/,/^}/ {
+          /case D3DFMT_CxV8U8:/a\
+          case 0x64:\
+            WARN("Mapping D3DFORMAT 0x64 to B8G8R8A8_UNORM\\n");\
+            return WINED3DFMT_B8G8R8A8_UNORM;
+           }' dlls/d3d9/device.c
           
           echo "补丁应用"
           # 定义函数避免重复
@@ -523,10 +531,10 @@ jobs:
           }
 
           # 应用所有补丁
-          apply_patch "$GITHUB_WORKSPACE/ndis-p10.patch"
+          #apply_patch "$GITHUB_WORKSPACE/ndis-p10.patch"
           apply_patch "$GITHUB_WORKSPACE/pathfix-p10.patch"
           apply_patch "$GITHUB_WORKSPACE/termux-p10.patch"
-          apply_patch "$GITHUB_WORKSPACE/wine-virtual-memory-p10.patch"
+          #apply_patch "$GITHUB_WORKSPACE/wine-virtual-memory-p10.patch"
 
           PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
           VERSION_MAJOR=$(echo "$PURE_VERSION" | cut -d. -f1)
