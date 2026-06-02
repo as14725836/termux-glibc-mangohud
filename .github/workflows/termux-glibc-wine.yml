@@ -515,13 +515,31 @@ jobs:
           s/return NtContinue( context, FALSE );/return status;/g
           }' dlls/ntdll/unix/thread.c
 
-          echo 这个命令只在 wined3dformat_from_d3dformat 函数中添加
-          sed -i '/^enum wined3d_format_id wined3dformat_from_d3dformat/,/^}/ {
-          /case D3DFMT_CxV8U8:/a\
+          sed -i '/case D3DFMT_CxV8U8:/a\
+          case D3DFMT_VERTEXDATA:\
+            TRACE("Ignoring D3DFMT_VERTEXDATA (vertex buffer, not format)\\n");\
+            return WINED3DFMT_UNKNOWN;
+          ' dlls/d3d9/device.c
+
+          sed -i '/case D3DFMT_CxV8U8:/a\
+          case D3DFMT_VERTEXDATA:\
+            TRACE("Ignoring D3DFMT_VERTEXDATA (vertex buffer, not format)\\n");\
+            return WINED3DFMT_UNKNOWN;
+          ' dlls/d3d9/device.c
+
+          sed -i '/case D3DFMT_VERTEXDATA:/,+2d' dlls/d3d9/device.c && \
+          sed -i '/case D3DFMT_CxV8U8:/a\
           case 0x64:\
-            WARN("Mapping D3DFORMAT 0x64 to B8G8R8A8_UNORM\\n");\
-            return WINED3DFMT_B8G8R8A8_UNORM;
-           }' dlls/d3d9/device.c
+            TRACE("Mapping raw 0x64 (VERTEXDATA) safely\\n");\
+            return WINED3DFMT_UNKNOWN;
+          ' dlls/d3d9/device.c
+          sed -i '/desc->Format = D3DFMT_VERTEXDATA;/c\
+          if (format == D3DFMT_VERTEXDATA)\
+          {\
+          WARN("Invalid vertex buffer format D3DFMT_VERTEXDATA\\n");\
+          return D3DERR_INVALIDCALL;\
+          }\
+          desc->Format = D3DFMT_VERTEXDATA;' dlls/d3d9/buffer.c
           
           echo "补丁应用"
           # 定义函数避免重复
