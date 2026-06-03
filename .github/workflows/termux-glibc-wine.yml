@@ -533,13 +533,10 @@ jobs:
             TRACE("Mapping raw 0x64 (VERTEXDATA) safely\\n");\
             return WINED3DFMT_UNKNOWN;
           ' dlls/d3d9/device.c
-          sed -i '/desc->Format = D3DFMT_VERTEXDATA;/c\
-          if (format == D3DFMT_VERTEXDATA)\
-          {\
-          WARN("Invalid vertex buffer format D3DFMT_VERTEXDATA\\n");\
-          return D3DERR_INVALIDCALL;\
-          }\
-          desc->Format = D3DFMT_VERTEXDATA;' dlls/d3d9/buffer.c
+
+          sed -i '/desc->Format = D3DFMT_VERTEXDATA;/i\
+          /* VERTEXDATA (0x64) is a valid format for vertex buffers */\
+          /* No need to block it here */' dlls/d3d9/buffer.c
           
           echo "补丁应用"
           # 定义函数避免重复
