@@ -515,11 +515,14 @@ jobs:
           s/return NtContinue( context, FALSE );/return status;/g
           }' dlls/ntdll/unix/thread.c
 
-          sed -i '/case D3DFMT_CxV8U8:/a\
-          case 0x64:\
-            WARN("Mapping D3DFORMAT 0x64 (VERTEXDATA) to B8G8R8A8_UNORM\\n");\
-            return WINED3DFMT_B8G8R8A8_UNORM;
-          ' dlls/d3d9/device.
+          sed -i '/^    switch(format)$/i\
+          /* 处理 VERTEXDATA (0x64) */\
+          if (format == 0x64)\
+          {\
+          WARN("Mapping D3DFORMAT 0x64 (VERTEXDATA) to B8G8R8A8_UNORM\\\\n");\
+          return WINED3DFMT_B8G8R8A8_UNORM;\
+          }\
+          ' dlls/d3d9/device.c
           
           echo "补丁应用"
           # 定义函数避免重复
