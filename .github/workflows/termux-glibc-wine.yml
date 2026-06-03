@@ -516,27 +516,10 @@ jobs:
           }' dlls/ntdll/unix/thread.c
 
           sed -i '/case D3DFMT_CxV8U8:/a\
-          case D3DFMT_VERTEXDATA:\
-            TRACE("Ignoring D3DFMT_VERTEXDATA (vertex buffer, not format)\\n");\
-            return WINED3DFMT_UNKNOWN;
-          ' dlls/d3d9/device.c
-
-          sed -i '/case D3DFMT_CxV8U8:/a\
-          case D3DFMT_VERTEXDATA:\
-            TRACE("Ignoring D3DFMT_VERTEXDATA (vertex buffer, not format)\\n");\
-            return WINED3DFMT_UNKNOWN;
-          ' dlls/d3d9/device.c
-
-          sed -i '/case D3DFMT_VERTEXDATA:/,+2d' dlls/d3d9/device.c && \
-          sed -i '/case D3DFMT_CxV8U8:/a\
           case 0x64:\
-            TRACE("Mapping raw 0x64 (VERTEXDATA) safely\\n");\
-            return WINED3DFMT_UNKNOWN;
-          ' dlls/d3d9/device.c
-
-          sed -i '/desc->Format = D3DFMT_VERTEXDATA;/i\
-          /* VERTEXDATA (0x64) is a valid format for vertex buffers */\
-          /* No need to block it here */' dlls/d3d9/buffer.c
+            WARN("Mapping D3DFORMAT 0x64 (VERTEXDATA) to B8G8R8A8_UNORM\\n");\
+            return WINED3DFMT_B8G8R8A8_UNORM;
+          ' dlls/d3d9/device.
           
           echo "补丁应用"
           # 定义函数避免重复
