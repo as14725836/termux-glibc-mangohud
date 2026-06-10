@@ -3,21 +3,43 @@ From: Jade Macho <ade@0x0a.de>
 Date: Wed, 18 Mar 2026 02:06:16 +0100
 Subject: [PATCH] server: Dynamically relocate .exes by default too
 
+Skip relocation during early process init to avoid breaking
+wine's own loader. User .exes are relocated after kernel32 is up.
+
 TODO: Should this only be enabled for Vista onwards? Toggleable?
 ---
- dlls/ntdll/unix/virtual.c | 1 -
- server/mapping.c          | 2 --
- 2 files changed, 3 deletions(-)
+ dlls/ntdll/unix/virtual.c | 17 ++++++++++++++++-
+ server/mapping.c          |  2 --
+ 2 files changed, 16 insertions(+), 3 deletions(-)
 
 diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
-index 781598fced1..c46d2255475 100644
+index 781598fced1..a3b7e9d8212 100644
 --- a/dlls/ntdll/unix/virtual.c
 +++ b/dlls/ntdll/unix/virtual.c
-@@ -3410,7 +3410,6 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+@@ -3407,10 +3407,25 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+         *size_ptr = view_size;
      }
  
++    /*
++     * For non-DLL images (exes), only relocate after ntdll init is complete.
++     * During early startup the LDR list contains only ntdll.dll and the main exe;
++     * relocating wine's own loader at that stage breaks page permissions.
++     */
++    {
++        BOOL is_dll = (image_info->image_charact & IMAGE_FILE_DLL) != 0;
++        BOOL early_init = FALSE;
++        if (!is_dll && NtCurrentTeb()->Peb->Ldr)
++        {
++            PLIST_ENTRY head = &NtCurrentTeb()->Peb->Ldr->InLoadOrderModuleList;
++            PLIST_ENTRY e = head->Flink;
++            int count = 0;
++            while (e && e != head && count < 4) { count++; e = e->Flink; }
++            early_init = (count <= 2);  /* only ntdll + self → wine's own loader */
++        }
++
      if (!image_info->map_addr &&
 -        (image_info->image_charact & IMAGE_FILE_DLL) &&
++        (!early_init) &&
          (image_info->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated))
      {
          SERVER_START_REQ( get_image_map_address )
@@ -36,4 +58,3 @@ index 69cd0a7451b..5e742342514 100644
      size += granularity_mask + 1;  /* leave some free space between mappings */
 -- 
 2.53.0
-
