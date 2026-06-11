@@ -157,6 +157,26 @@ jobs:
 
 
       # ============================================================
+      # 5. 应用 Proton 构建补丁（ffmpeg + GstMapInfo typo 修复）
+      # ============================================================
+      - name: 应用 fix-build_ffmpeg.patch
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          wget -q -O fix-build_ffmpeg.patch https://raw.githubusercontent.com/Waim908/wine-termux/main/proton/10.0/fix-build_ffmpeg.patch
+          patch -p1 < fix-build_ffmpeg.patch
+          rm fix-build_ffmpeg.patch
+
+      - name: 修复 GstMapInfo 拼写错误（GstBufferMapInfo → GstMapInfo）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          # 第1023行: GstBufferMapInfo 是 typo，正确类型是 GstMapInfo
+          sed -i 's/GstBufferMapInfo/GstMapInfo/g' dlls/winegstreamer/media-converter/videoconv.c
+          echo "已修复 GstBufferMapInfo → GstMapInfo"
+
+
+      # ============================================================
       # 6. 生成 configure
       # ============================================================
       - name: 生成 configure 脚本
