@@ -172,6 +172,7 @@ jobs:
       - name: 原生构建 ARM64 WOW64
         run: |
           set -e
+          set -o pipefail
           cd ${{ env.WINE_SOURCE_DIR }}/source
           mkdir -p build-arm64
           cd build-arm64
@@ -212,8 +213,7 @@ jobs:
             --without-usb \
             --without-v4l2 \
             --without-wayland
-
-          set -o pipefail
+            
           make -s -j$(nproc) 2>&1 | tee build.log
           if [ $? -ne 0 ]; then
               echo "❌ 编译失败，最后200行日志："
