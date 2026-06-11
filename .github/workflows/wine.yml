@@ -180,7 +180,7 @@ jobs:
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          sed -i 's/&size, PAGE_READWRITE, &protect_old\[i\]/\\&size, PAGE_EXECUTE_READWRITE, \\&protect_old[i]/' dlls/ntdll/loader.c
+          sed -i 's/&size, PAGE_READWRITE, &protect_old\[i\]/\&size, PAGE_EXECUTE_READWRITE, \&protect_old[i]/' dlls/ntdll/loader.c
           echo "已修复 perform_relocations: PAGE_READWRITE → PAGE_EXECUTE_READWRITE"
 
       - name: 缩减虚拟地址空间上限（适配 Android/Termux 受限地址空间）
