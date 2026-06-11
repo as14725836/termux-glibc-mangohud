@@ -170,6 +170,7 @@ jobs:
       # 7. 原生编译 ARM64 WOW64（无需预处理 wine64 native tools）
       # ============================================================
       - name: 原生构建 ARM64 WOW64
+        shell: bash
         run: |
           set -e
           set -o pipefail
