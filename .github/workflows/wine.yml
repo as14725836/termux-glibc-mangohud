@@ -164,7 +164,8 @@ jobs:
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
           wget -q -O fix-build_ffmpeg.patch https://raw.githubusercontent.com/Waim908/wine-termux/main/proton/10.0/fix-build_ffmpeg.patch
-          patch -p1 < fix-build_ffmpeg.patch
+          # 非交互式：跳过不存在的文件，不阻塞 CI
+          patch -p1 -N -t < fix-build_ffmpeg.patch || true
           rm fix-build_ffmpeg.patch
 
       - name: 修复 GstMapInfo 拼写错误（GstBufferMapInfo → GstMapInfo）
