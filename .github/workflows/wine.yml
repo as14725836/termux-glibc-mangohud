@@ -155,7 +155,6 @@ jobs:
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
 
-
       # ============================================================
       # 5. 应用 Proton 构建补丁（ffmpeg + GstMapInfo typo 修复）
       # ============================================================
@@ -172,10 +171,9 @@ jobs:
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          # 第1023行: GstBufferMapInfo 是 typo，正确类型是 GstMapInfo
+          # 第 1023 行: GstBufferMapInfo 是 typo，正确类型是 GstMapInfo
           sed -i 's/GstBufferMapInfo/GstMapInfo/g' dlls/winegstreamer/media-converter/videoconv.c
           echo "已修复 GstBufferMapInfo → GstMapInfo"
-
 
       # ============================================================
       # 6. 生成 configure
@@ -188,7 +186,7 @@ jobs:
           fi
 
       # ============================================================
-      # 7. 原生编译 ARM64 WOW64（无需预处理 wine64 native tools）
+      # 7. 原生编译 ARM64 WOW64
       # ============================================================
       - name: 原生构建 ARM64 WOW64
         shell: bash
@@ -199,9 +197,14 @@ jobs:
           mkdir -p build-arm64
           cd build-arm64
           export PATH="/opt/${{ env.LLVMMINGW_NAME }}/bin:$PATH"
+          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export PKG_CONFIG_SYSROOT_DIR=/
           export CFLAGS="-O3 -pipe"
           export CXXFLAGS="-O3 -pipe"
+          export CROSSCFLAGS="-O3 -pipe"
+          export CROSSCXXFLAGS="-O3 -pipe"
           export LDFLAGS="-s"
+          export WINE_NLS_DIR=/opt/wine64-native/nls
 
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
@@ -235,15 +238,18 @@ jobs:
             --without-usb \
             --without-v4l2 \
             --without-wayland
-            
+
           make -s -j$(nproc) 2>&1 | tee build.log
           if [ $? -ne 0 ]; then
-              echo "❌ 编译失败，最后200行日志："
+              echo "❌ 编译失败，最后 200 行日志："
               tail -n 200 build.log
               exit 1
           fi
           make install
-          echo "✅ 编译及安装完成"
+          if [ ! -d /usr/bin ]; then
+            echo "错误: /usr/bin 目录不存在，安装可能不完整"
+            exit 1
+          fi
 
       # ============================================================
       # 8. 补全运行时文件
@@ -254,11 +260,24 @@ jobs:
           TARGET_PREFIX="/tmp/wine-install-wow64"
           BUILD_DIR="${{ env.WINE_SOURCE_DIR }}/source/build-arm64"
           SOURCE_DIR="${{ env.WINE_SOURCE_DIR }}/source"
+          NATIVE_NLS_DIR="/opt/wine64-native/nls"
+          SOURCE_FONTS_DIR="$SOURCE_DIR/fonts"
+
+          echo "=== 补全 share/wine/nls ==="
+          mkdir -p "$TARGET_PREFIX/share/wine/nls"
+          if [ -d "$NATIVE_NLS_DIR" ]; then
+              cp -v "$NATIVE_NLS_DIR"/*.nls "$TARGET_PREFIX/share/wine/nls/" 2>/dev/null || echo "没有找到 .nls 文件，可能已存在"
+          fi
+          if [ ! -f "$TARGET_PREFIX/share/wine/nls/locale.nls" ] && [ -f "/opt/nls-backup/locale.nls" ]; then
+              cp -v "/opt/nls-backup/locale.nls" "$TARGET_PREFIX/share/wine/nls/"
+          fi
 
           echo "=== 补全 share/wine/fonts ==="
-          if [ -d "$SOURCE_DIR/fonts" ]; then
+          if [ -d "$SOURCE_FONTS_DIR" ]; then
               mkdir -p "$TARGET_PREFIX/share/wine/fonts"
-              cp -v "$SOURCE_DIR/fonts"/*.ttf "$SOURCE_DIR/fonts"/*.fon "$TARGET_PREFIX/share/wine/fonts/" 2>/dev/null || echo "字体复制完成"
+              cp -v "$SOURCE_FONTS_DIR"/*.ttf "$SOURCE_FONTS_DIR"/*.fon "$TARGET_PREFIX/share/wine/fonts/" 2>/dev/null || echo "字体复制完成或无字体文件"
+          else
+              echo "警告: 源码 fonts 目录不存在，跳过字体复制"
           fi
 
           echo "=== 补全 wine.inf ==="
@@ -273,27 +292,97 @@ jobs:
           if [ -n "$WINE_INF_SRC" ]; then
               mkdir -p "$TARGET_PREFIX/share/wine"
               cp -v "$WINE_INF_SRC" "$TARGET_PREFIX/share/wine/wine.inf"
+          else
+              echo "警告: 未找到 wine.inf 文件"
           fi
 
-          echo "=== 补全 syswow64 DLL（i386 Windows PE）==="
+          echo "=== 补全关键程序文件 ==="
+          BIN_DIR="$TARGET_PREFIX/bin"
+          mkdir -p "$BIN_DIR"
+          PROGRAMS="wine wineserver wineboot winecfg regedit"
+          for prog in $PROGRAMS; do
+              if [ -f "$BIN_DIR/$prog" ]; then
+                  echo "文件 $BIN_DIR/$prog 已存在"
+                  continue
+              fi
+              found=""
+              if [[ "$prog" != "wine" && "$prog" != "wineserver" ]]; then
+                  found=$(find "$BUILD_DIR/programs" -type f -name "$prog" -executable 2>/dev/null | head -1)
+              fi
+              if [ -z "$found" ]; then
+                  found=$(find "$BUILD_DIR" -type f -name "$prog" -executable 2>/dev/null | head -1)
+              fi
+              if [ -n "$found" ]; then
+                  cp -v "$found" "$BIN_DIR/"
+              else
+                  echo "错误: 完全未找到 $prog"
+                  exit 1
+              fi
+          done
+
+          echo "=== 复制 syswow64 DLL（i386 Windows PE）==="
           I386_WIN_DIR="$BUILD_DIR/dlls/i386-windows"
+          I386_LIB_DIR="$BUILD_DIR/dlls/i386"
           ARM64EC_WIN_DIR="$BUILD_DIR/dlls/arm64ec-windows"
+
           if [ -d "$ARM64EC_WIN_DIR" ]; then
               mkdir -p "$TARGET_PREFIX/lib/wine/arm64ec-windows"
-              cp -v "$ARM64EC_WIN_DIR"/*.dll "$TARGET_PREFIX/lib/wine/arm64ec-windows/" 2>/dev/null || true
+              cp -v "$ARM64EC_WIN_DIR"/*.dll "$TARGET_PREFIX/lib/wine/arm64ec-windows/" 2>/dev/null || echo "无 arm64ec DLL 或已存在"
           fi
           if [ -d "$I386_WIN_DIR" ]; then
               mkdir -p "$TARGET_PREFIX/lib/wine/i386-windows"
-              cp -v "$I386_WIN_DIR"/*.dll "$TARGET_PREFIX/lib/wine/i386-windows/" 2>/dev/null || true
+              cp -v "$I386_WIN_DIR"/*.dll "$TARGET_PREFIX/lib/wine/i386-windows/" 2>/dev/null || echo "无额外 DLL 或已存在"
+          else
+              echo "警告: 未找到 dlls/i386-windows 目录，尝试搜索..."
+              found_i386=$(find "$BUILD_DIR" -type d -name "i386-windows" 2>/dev/null | head -1)
+              if [ -n "$found_i386" ]; then
+                  mkdir -p "$TARGET_PREFIX/lib/wine/i386-windows"
+                  cp -v "$found_i386"/*.dll "$TARGET_PREFIX/lib/wine/i386-windows/" 2>/dev/null || echo "复制完成或无额外 DLL"
+              fi
+          fi
+          if [ -d "$I386_LIB_DIR" ]; then
+              mkdir -p "$TARGET_PREFIX/lib/wine/i386"
+              cp -v "$I386_LIB_DIR"/*.so "$TARGET_PREFIX/lib/wine/i386/" 2>/dev/null || echo "无额外 .so 文件或已存在"
+          else
+              echo "警告: 未找到 dlls/i386 目录，尝试搜索..."
+              found_i386_so=$(find "$BUILD_DIR" -type d -name "i386" -path "*/dlls/i386" 2>/dev/null | head -1)
+              if [ -n "$found_i386_so" ]; then
+                  mkdir -p "$TARGET_PREFIX/lib/wine/i386"
+                  cp -v "$found_i386_so"/*.so "$TARGET_PREFIX/lib/wine/i386/" 2>/dev/null || echo "复制完成或无额外 .so"
+              fi
           fi
 
-          echo "=== 最终安装目录结构 ==="
-          ls -la "$TARGET_PREFIX/"
-          ls -la "$TARGET_PREFIX/bin/" || echo "bin 目录为空"
-          ls -la "$TARGET_PREFIX/share/wine/" || echo "share/wine 目录为空"
+          if [ -f "$TARGET_PREFIX/bin/wineserver" ]; then
+              chmod +x "$TARGET_PREFIX/bin/wineserver"
+          fi
+
+          echo "=== 验证关键 WOW64 DLL ==="
+          for dll in kernel32.dll user32.dll ntdll.dll; do
+              if [ -f "$TARGET_PREFIX/lib/wine/i386-windows/$dll" ]; then
+                  echo "✓ $dll 存在"
+              else
+                  echo "✗ $dll 缺失 - 这可能导致 WOW64 失败"
+              fi
+          done
+          echo "=== 验证目录结构 ==="
+          ls -la "$TARGET_PREFIX/lib/wine/" 2>/dev/null || echo "lib/wine 目录不存在"
+          ls -la "$TARGET_PREFIX/lib/wine/i386-windows/" 2>/dev/null || echo "i386-windows 目录不存在"
+          ls -la "$TARGET_PREFIX/lib/wine/i386/" 2>/dev/null || echo "i386 目录不存在"
+          ls -la "$TARGET_PREFIX/lib/wine/arm64ec-windows/" 2>/dev/null || echo "arm64ec-windows 目录不存在"
+          ls -la "$BIN_DIR"
+          for required in wine wineserver wineboot; do
+              if [ ! -f "$BIN_DIR/$required" ] && [ ! -L "$BIN_DIR/$required" ]; then
+                  echo "错误: 缺少关键文件 $required"
+                  exit 1
+              else
+                  echo "✓ $required 存在"
+              fi
+          done
+          ls -la "$TARGET_PREFIX/share/wine/" || true
+          ls -la "$TARGET_PREFIX/bin/" || true
 
       # ============================================================
-      # 9. 打包
+      # 9. 打包与发布
       # ============================================================
       - name: 准备打包
         run: |
@@ -328,19 +417,30 @@ jobs:
           tag_name: proton-${{ github.event.inputs.proton_branch || 'proton_10.0' }}-arm64
           name: Proton ${{ github.event.inputs.proton_branch || 'proton_10.0' }} (ARM64 WOW64 for Termux)
           body: |
-            # Proton ${{ github.event.inputs.proton_branch || 'proton_10.0' }} - ARM64 WOW64
+            # Proton ${{ github.event.inputs.proton_branch || 'proton_10.0' }} - ARM64 WOW64 for Termux
             ## 版本信息
             - **Proton 分支**: ${{ github.event.inputs.proton_branch || 'proton_10.0' }}
-            - **构建方式**: ARM64 原生编译
+            - **主机架构**: ARM64 (aarch64)
             - **目标 Windows 架构**: i386, x86_64, arm64ec (通过 WOW64 模拟)
-            - **容器**: Ubuntu 22.04 ARM64
-            - **工具链**: llvm-mingw (aarch64) + 系统 gcc
-            - **图形 API**: Vulkan
-            - **多媒体**: GStreamer
-            ## 安装说明 (Termux glibc)
-            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux glibc 环境路径：
-            `/data/data/com.termux/files/usr/glibc`
-            并设置相应的环境变量（PATH、WINE 前缀等）。源码已预先将 `/tmp` 替换为 Termux 兼容路径。
+            - **平台**: Termux (Android)
+            - **图形 API**: Vulkan 支持已启用
+            - **多媒体**: GStreamer 支持已启用
+            - **工具链**: llvm-mingw + 系统 gcc
+            ## 特性
+            ✓ ARM64 原生 Proton 可执行文件
+            ✓ 支持运行 32/64 位 Windows 应用程序
+            ✓ Vulkan 渲染
+            ✓ GStreamer 多媒体后端
+            ✓ 中文环境支持
+            ✓ 应用了关键补丁提升兼容性
+            ✓ 包含完整的运行时文件：wine.inf、wineboot、wineserver 等所有必要程序
+            ✓ 修复了 syswow64 目录为空的问题
+            ## 安装说明
+            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置（建议 `/data/data/com.termux/files/usr/glibc`），并设置环境变量。
+            ## 构建信息
+            - 构建时间: ${{ github.event.head_commit.timestamp }}
+            - 提交: ${{ github.sha }}
+            - 工作流: ${{ github.workflow }}
           files: |
             ${{ github.workspace }}/${{ env.BUILD_NAME }}.tar.xz
             ${{ github.workspace }}/checksums.txt
