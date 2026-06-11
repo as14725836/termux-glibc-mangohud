@@ -175,6 +175,44 @@ jobs:
           sed -i 's/GstBufferMapInfo/GstMapInfo/g' dlls/winegstreamer/media-converter/videoconv.c
           echo "已修复 GstBufferMapInfo → GstMapInfo"
 
+      - name: 修复 SELinux 兼容性（PAGE_READWRITE → PAGE_EXECUTE_READWRITE）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          sed -i 's/&size, PAGE_READWRITE, &protect_old\[i\]/&size, PAGE_EXECUTE_READWRITE, \&protect_old[i]/' dlls/ntdll/loader.c
+          echo "已修复 perform_relocations: PAGE_READWRITE → PAGE_EXECUTE_READWRITE"
+
+      - name: 缩减虚拟地址空间上限（适配 Android/Termux 受限地址空间）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          sed -i 's/0x7fffffff0000/0x7fffff0000/g' dlls/ntdll/unix/virtual.c
+          echo "已缩减 address_space_limit / user_space_limit / working_set_limit / reserve_area 上限 0x7fffffff0000 → 0x7fffff0000"
+
+      - name: 排除 Termux 下的 JNI 代码路径（unix/loader.c）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          # 修复1: init_paths() 中 Termux 下使用 /proc/self/exe
+          sed -i 's/defined(__linux__) && !defined(__ANDROID__)/defined(__linux__) \&\& !(defined(__ANDROID__) \&\& ! defined(__TERMUX__))/' dlls/ntdll/unix/loader.c
+          # 修复2: 跳过 Android JNI 初始化代码（WineActivity pre_exec 等）
+          sed -i 's/#ifdef __ANDROID__/#if defined(__ANDROID__) \&\& ! defined(__TERMUX__)/' dlls/ntdll/unix/loader.c
+          echo "已排除 Termux 下的 JNI 代码路径"
+
+      - name: 修复 machine-id 路径（适配 Termux glibc）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          sed -i 's|/etc/machine-id|/data/data/com.termux/files/usr/glibc/etc/machine-id|g' server/token.c
+          echo "已修复 machine-id 路径 → /data/data/com.termux/files/usr/glibc/etc/machine-id"
+
+      - name: 强制使用 CC 编译模式（修复 Termux 链接器兼容性）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          sed -i 's/int using_cc = 0;/int using_cc = 1;/' tools/winebuild/utils.c
+          echo "已设置 using_cc 默认值为 1（强制使用编译器模式）"
+
       # ============================================================
       # 6. 生成 configure
       # ============================================================
