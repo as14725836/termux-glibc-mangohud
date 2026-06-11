@@ -47,7 +47,8 @@ jobs:
             make binutils pkg-config autoconf automake libtool flex bison \
             nasm cmake ninja-build patch gettext \
             python3 python3-setuptools python3-lxml \
-            dpkg-dev fakeroot debhelper dh-make build-essential
+            dpkg-dev fakeroot debhelper dh-make build-essential \
+            patchelf
 
       - uses: actions/checkout@v4
 
@@ -179,7 +180,7 @@ jobs:
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          sed -i 's/&size, PAGE_READWRITE, &protect_old\[i\]/&size, PAGE_EXECUTE_READWRITE, \&protect_old[i]/' dlls/ntdll/loader.c
+          sed -i 's/&size, PAGE_READWRITE, &protect_old\[i\]/\\&size, PAGE_EXECUTE_READWRITE, \\&protect_old[i]/' dlls/ntdll/loader.c
           echo "已修复 perform_relocations: PAGE_READWRITE → PAGE_EXECUTE_READWRITE"
 
       - name: 缩减虚拟地址空间上限（适配 Android/Termux 受限地址空间）
@@ -418,6 +419,33 @@ jobs:
           done
           ls -la "$TARGET_PREFIX/share/wine/" || true
           ls -la "$TARGET_PREFIX/bin/" || true
+
+      # ============================================================
+      # 8.5. 修改 ELF interpreter 适配 Termux glibc
+      # ============================================================
+      - name: 修改 ELF interpreter（适配 Termux glibc 动态链接器路径）
+        run: |
+          set -e
+          TARGET_PREFIX="/tmp/wine-install-wow64"
+          TERMUX_LINKER="/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1"
+
+          echo "=== 修改 bin/ 目录下可执行文件的 interpreter ==="
+          find "$TARGET_PREFIX/bin" -type f -executable | while read elf; do
+              if file "$elf" | grep -q 'ELF.*aarch64'; then
+                  echo "  修改: $elf"
+                  patchelf --set-interpreter "$TERMUX_LINKER" "$elf"
+              fi
+          done
+
+          echo "=== 修改 lib/ 目录下 .so 文件的 interpreter ==="
+          find "$TARGET_PREFIX/lib" -type f -name "*.so" | while read elf; do
+              if file "$elf" | grep -q 'ELF.*aarch64'; then
+                  echo "  修改: $elf"
+                  patchelf --set-interpreter "$TERMUX_LINKER" "$elf" || true
+              fi
+          done
+
+          echo "ELF interpreter 已全部修改为 $TERMUX_LINKER"
 
       # ============================================================
       # 9. 打包与发布
