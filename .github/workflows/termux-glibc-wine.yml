@@ -173,6 +173,7 @@ jobs:
 
           # 应用所有补丁
           apply_patch "$GITHUB_WORKSPACE/0001.patch"
+          apply_patch "$GITHUB_WORKSPACE/termux-wine-fix.patch"
 
 
           echo "生成 configure 脚本..."
@@ -546,6 +547,7 @@ jobs:
           apply_patch "$GITHUB_WORKSPACE/pathfix-p10.patch"
           apply_patch "$GITHUB_WORKSPACE/termux-p10.patch"
           apply_patch "$GITHUB_WORKSPACE/wine-virtual-memory-p10.patch"
+          apply_patch "$GITHUB_WORKSPACE/termux-wine-fix.patch"
 
           PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
           VERSION_MAJOR=$(echo "$PURE_VERSION" | cut -d. -f1)
