@@ -155,16 +155,6 @@ jobs:
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
 
-      # ============================================================
-      # 5. 应用 fix-build_ffmpeg.patch
-      # ============================================================
-      - name: 下载并应用 fix-build_ffmpeg.patch
-        run: |
-          set -e
-          cd ${{ env.WINE_SOURCE_DIR }}/source
-          wget -q -O fix-build_ffmpeg.patch https://raw.githubusercontent.com/Waim908/wine-termux/main/proton/10.0/fix-build_ffmpeg.patch
-          patch -p1 < fix-build_ffmpeg.patch
-          rm fix-build_ffmpeg.patch
 
       # ============================================================
       # 6. 生成 configure
