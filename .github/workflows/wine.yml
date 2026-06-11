@@ -432,16 +432,22 @@ jobs:
           echo "=== 修改 bin/ 目录下可执行文件的 interpreter ==="
           find "$TARGET_PREFIX/bin" -type f -executable | while read elf; do
               if file "$elf" | grep -q 'ELF.*aarch64'; then
-                  echo "  修改: $elf"
-                  patchelf --set-interpreter "$TERMUX_LINKER" "$elf"
+                  if readelf -l "$elf" 2>/dev/null | grep -q INTERP; then
+                      echo "  修改: $elf"
+                      patchelf --set-interpreter "$TERMUX_LINKER" "$elf"
+                  else
+                      echo "  跳过(静态链接): $elf"
+                  fi
               fi
           done
 
           echo "=== 修改 lib/ 目录下 .so 文件的 interpreter ==="
           find "$TARGET_PREFIX/lib" -type f -name "*.so" | while read elf; do
               if file "$elf" | grep -q 'ELF.*aarch64'; then
-                  echo "  修改: $elf"
-                  patchelf --set-interpreter "$TERMUX_LINKER" "$elf" || true
+                  if readelf -l "$elf" 2>/dev/null | grep -q INTERP; then
+                      echo "  修改: $elf"
+                      patchelf --set-interpreter "$TERMUX_LINKER" "$elf"
+                  fi
               fi
           done
 
