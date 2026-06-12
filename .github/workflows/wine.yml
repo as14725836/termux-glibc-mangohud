@@ -133,7 +133,7 @@ jobs:
       # ============================================================
       # 4. 获取 Proton 源码
       # ============================================================
-      - name: 获取 Wine 源码（AndreRH/arm64ec）
+      - name: 获取 Wine 源码（Pipetto-crypto/proton-9.0-arm64ec）
         run: |
           set -e
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton-9.0-arm64ec' }}"
@@ -144,7 +144,7 @@ jobs:
           git checkout "$PROTON_BRANCH"
           PROTON_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$PROTON_BRANCH")
           COMMIT_HASH=$(git rev-parse --short HEAD)
-          BUILD_NAME="wine-arm64ec-${PROTON_VERSION_ACTUAL}-${COMMIT_HASH}-${PROTON_BRANCH}-arm64-wow64"
+          BUILD_NAME="proton-${PROTON_VERSION_ACTUAL}-${COMMIT_HASH}-${PROTON_BRANCH}-arm64-wow64"
           echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
           echo "PROTON_VERSION_ACTUAL=$PROTON_VERSION_ACTUAL" >> $GITHUB_ENV
           echo "源码准备完成，构建名称: $BUILD_NAME"
@@ -157,7 +157,7 @@ jobs:
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
 
       # ============================================================
-      # 5. 应用 Termux 兼容性补丁（ffmpeg + SELinux + 地址空间 + JNI排除 + machine-id + using_cc）
+      # 5. 应用 Termux 兼容性补丁（ffmpeg + GstMapInfo + SELinux + 地址空间 + JNI排除 + machine-id + SIGSYS + using_cc）
       # ============================================================
       - name: 应用 fix-build_ffmpeg.patch
         run: |
@@ -213,110 +213,53 @@ jobs:
           sed -i 's|/etc/machine-id|/data/data/com.termux/files/usr/glibc/etc/machine-id|g' server/token.c
           echo "已修复 machine-id 路径 → /data/data/com.termux/files/usr/glibc/etc/machine-id"
 
+      - name: 注入 SIGSYS 处理器（捕获 Android seccomp 封锁的 syscall374）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source/dlls/ntdll/unix
+
+          # 在 signal_arm64.c 的 signal 处理段插入 SIGSYS handler
+          if [ -f signal_arm64.c ]; then
+            # 1. 在 include 区添加需要的头文件
+            if ! grep -q 'SIGSYS' signal_arm64.c; then
+              sed -i '/#include.*signal.h/a #include <sys/syscall.h>' signal_arm64.c
+            fi
+
+            # 2. 用 printf 注入 sigaction 注册（避免 sed 多行缩进问题）
+            printf '    /* Termux/Android: catch blocked syscalls (seccomp SIGSYS) */\n    sa.sa_sigaction = termux_sigsys_handler;\n    sigaction( SIGSYS, &sa, NULL );\n' >> /tmp/sigsys_append.txt
+            sed -i '/sa_sigaction =.*handler.*SIGSEGV/r /tmp/sigsys_append.txt' signal_arm64.c
+            rm -f /tmp/sigsys_append.txt
+
+            # 3. 在文件末尾追加 handler 函数
+            cat >> signal_arm64.c << 'SIGSYSEND'
+
+          /***********************************************************************
+           *           termux_sigsys_handler
+           *
+           * Catches SIGSYS from seccomp on Android/Termux when syscall374
+           * (or other blocked syscalls) is invoked. Returns -ENOSYS in x0
+           * and advances PC past the syscall instruction.
+           */
+          static void termux_sigsys_handler( int sig, siginfo_t *info, void *ucontext )
+          {
+              ucontext_t *ctx = (ucontext_t *)ucontext;
+              /* Return -ENOSYS to the caller */
+              ctx->uc_mcontext.regs[0] = -(long)38; /* ENOSYS =38 */
+              /* Skip the syscall instruction (SVC#0 =4 bytes on ARM64) */
+              ctx->uc_mcontext.pc += 4;
+          }
+          SIGSYSEND
+            echo "SIGSYS handler 已注入 signal_arm64.c"
+          else
+            echo "signal_arm64.c 不存在，跳过 SIGSYS handler"
+          fi
+
       - name: 强制使用 CC 编译模式（修复 Termux 链接器兼容性）
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
           sed -i 's/int using_cc = 0;/int using_cc = 1;/' tools/winebuild/utils.c
           echo "已设置 using_cc 默认值为 1（强制使用编译器模式）"
-
-      - name: 部署 Termux mini syscall dispatcher
-        run: |
-          set -e
-          cd ${{ env.WINE_SOURCE_DIR }}/source/dlls/ntdll/unix
-
-          # 写入 mini dispatcher 源码
-          cat > termux_dispatcher.c << 'DISPEOF'
-          /*
-           * Mini syscall dispatcher for Termux/Android ARM64
-           * Provides __wrap___wine_syscall_dispatcher and
-           * __wrap___wine_syscall_dispatcher_return.
-           * Linked via -Wl,--wrap=...
-           */
-          #if defined(__aarch64__) && defined(__linux__)
-
-          #include "config.h"
-          #include "ntstatus.h"
-          #include "windef.h"
-          #include "winnt.h"
-          #include "unix_private.h"
-          #include "wine/asm.h"
-
-          /* Original dispatcher (from signal_arm64.c) */
-          extern void __real___wine_syscall_dispatcher(void);
-          extern void __real___wine_syscall_dispatcher_return(void);
-
-          NTSTATUS __real_termux_dispatch( UINT id, ULONG_PTR *args, ULONG len )
-          {
-              UINT idx = (id >> 12) & 3;
-              UINT num = id & 0xfff;
-              NTSTATUS (*func)(ULONG_PTR *args, ULONG len);
-
-              void *table = KeServiceDescriptorTable[idx].ServiceTable;
-              BYTE arg_count = KeServiceDescriptorTable[idx].ArgumentTable ?
-                               KeServiceDescriptorTable[idx].ArgumentTable[num] : 6;
-
-              if (idx >= 4 || !table || num >= KeServiceDescriptorTable[idx].ServiceLimit)
-                  return 0xc000001c;
-
-              func = ((NTSTATUS(**)(ULONG_PTR*,ULONG))table)[num];
-              return func(args, arg_count * sizeof(ULONG_PTR));
-          }
-
-          /* Wrapped entry: save regs, call C dispatcher, restore, return */
-          __ASM_GLOBAL_FUNC( __wrap___wine_syscall_dispatcher,
-              "stp x0, x1, [sp, #-0x160]!\n\t"
-              "stp x2, x3, [sp, #0x10]\n\t"
-              "stp x4, x5, [sp, #0x20]\n\t"
-              "stp x6, x7, [sp, #0x30]\n\t"
-              "stp x8, x9, [sp, #0x40]\n\t"
-              "stp x10, x11, [sp, #0x50]\n\t"
-              "stp x12, x13, [sp, #0x60]\n\t"
-              "stp x14, x15, [sp, #0x70]\n\t"
-              "stp x16, x17, [sp, #0x80]\n\t"
-              "stp x18, x19, [sp, #0x90]\n\t"
-              "stp x20, x21, [sp, #0xa0]\n\t"
-              "stp x22, x23, [sp, #0xb0]\n\t"
-              "stp x24, x25, [sp, #0xc0]\n\t"
-              "stp x26, x27, [sp, #0xd0]\n\t"
-              "stp x28, x29, [sp, #0xe0]\n\t"
-              "stp x30, xzr, [sp, #0xf0]\n\t"
-              "mov x0, x19\n\t"
-              "add x1, sp, #0x160\n\t"
-              "mov x2, #0x30\n\t"
-              "bl " __ASM_NAME("__real_termux_dispatch") "\n\t"
-              "ldp x2, x3, [sp, #0x10]\n\t"
-              "ldp x4, x5, [sp, #0x20]\n\t"
-              "ldp x6, x7, [sp, #0x30]\n\t"
-              "ldp x8, x9, [sp, #0x40]\n\t"
-              "ldp x10, x11, [sp, #0x50]\n\t"
-              "ldp x12, x13, [sp, #0x60]\n\t"
-              "ldp x14, x15, [sp, #0x70]\n\t"
-              "ldp x16, x17, [sp, #0x80]\n\t"
-              "ldp x18, x19, [sp, #0x90]\n\t"
-              "ldp x20, x21, [sp, #0xa0]\n\t"
-              "ldp x22, x23, [sp, #0xb0]\n\t"
-              "ldp x24, x25, [sp, #0xc0]\n\t"
-              "ldp x26, x27, [sp, #0xd0]\n\t"
-              "ldp x28, x29, [sp, #0xe0]\n\t"
-              "ldp x30, xzr, [sp, #0xf0]\n\t"
-              "add sp, sp, #0x160\n\t"
-              "ret" )
-
-          /* Wrapped return dispatcher */
-          __ASM_GLOBAL_FUNC( __wrap___wine_syscall_dispatcher_return,
-              "b " __ASM_NAME("__real___wine_syscall_dispatcher_return") )
-          #endif
-          DISPEOF
-
-          # 添加到 Makefile
-          if [ -f Makefile.in ]; then
-              if ! grep -q 'termux_dispatcher' Makefile.in; then
-                  sed -i '/^C_SRCS =/ s/$/ termux_dispatcher.c/' Makefile.in
-                  echo "已将 termux_dispatcher.c 加入 Makefile.in"
-              fi
-          fi
-          echo "Termux mini syscall dispatcher 部署完成"
 
       # ============================================================
       # 6. 生成 configure
@@ -346,7 +289,7 @@ jobs:
           export CXXFLAGS="-O3 -pipe"
           export CROSSCFLAGS="-O3 -pipe"
           export CROSSCXXFLAGS="-O3 -pipe"
-          export LDFLAGS="-s -Wl,--wrap=__wine_syscall_dispatcher -Wl,--wrap=__wine_syscall_dispatcher_return"
+          export LDFLAGS="-s"
           export WINE_NLS_DIR=/opt/wine64-native/nls
 
           ../configure \
