@@ -134,7 +134,7 @@ jobs:
       # ============================================================
       # 4. 获取 Proton 源码
       # ============================================================
-      - name: 获取 Wine 源码（Pipetto-crypto/proton-9.0-arm64ec）
+      - name: 获取 Wine 源码（GameNative/proton-wine）
         run: |
           set -e
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
@@ -267,6 +267,20 @@ jobs:
           cd ${{ env.WINE_SOURCE_DIR }}/source
           sed -i 's/int using_cc = 0;/int using_cc = 1;/' tools/winebuild/utils.c
           echo "已设置 using_cc 默认值为 1（强制使用编译器模式）"
+
+      - name: 修复 wineboot 缺失 initialize_xstate_features 声明
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          if [ -f programs/wineboot/wineboot.c ]; then
+              if ! grep -q 'initialize_xstate_features' programs/wineboot/wineboot.c; then
+                  echo "未找到 initialize_xstate_features 引用，跳过"
+              else
+                  # 在 #include 区末尾插入函数声明
+                  sed -i '/^#include.*wine\/debug\.h/a extern void initialize_xstate_features(void *data);' programs/wineboot/wineboot.c
+                  echo "已添加 initialize_xstate_features 声明"
+              fi
+          fi
 
       # ============================================================
       # 6. 生成 configure
