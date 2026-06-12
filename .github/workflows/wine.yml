@@ -168,17 +168,23 @@ jobs:
           patch -p1 -N -t < fix-build_ffmpeg.patch || true
           rm fix-build_ffmpeg.patch
 
-      - name: 修复 GstMapInfo 拼写错误（GstBufferMapInfo → GstMapInfo）
+      - name: 修复 GstMapInfo 类型兼容性（GStreamer1.20+ API）
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          # 第 1023 行: GstBufferMapInfo 是 typo，正确类型是 GstMapInfo
-          if [ -f dlls/winegstreamer/media-converter/videoconv.c ]; then
-            sed -i 's/GstBufferMapInfo/GstMapInfo/g' dlls/winegstreamer/media-converter/videoconv.c
-            echo "已修复 GstBufferMapInfo → GstMapInfo"
-          else
-            echo "videoconv.c 不存在，跳过 GstMapInfo 修复"
-          fi
+          # wg_transform.c 中 GstMapInfo 可能因头文件缺失退化为 int
+          for f in dlls/winegstreamer/wg_transform.c dlls/winegstreamer/media-converter/videoconv.c; do
+            if [ -f "$f" ]; then
+              # 确保显式包含 gstbuffer.h（提供 GstMapInfo 类型）
+              if ! grep -q 'gst/gstbuffer.h' "$f"; then
+                sed -i '/#include.*gst\/gst\.h/a #include <gst/gstbuffer.h>' "$f"
+                echo "已添加 #include <gst/gstbuffer.h> → $f"
+              fi
+              # 修复可能的 GstBufferMapInfo → GstMapInfo
+              sed -i 's/GstBufferMapInfo/GstMapInfo/g' "$f"
+            fi
+          done
+          echo "GstMapInfo 类型兼容性修复完成"
 
       - name: 修复 SELinux 兼容性（PAGE_READWRITE → PAGE_EXECUTE_READWRITE）
         run: |
