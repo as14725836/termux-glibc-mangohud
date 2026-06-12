@@ -217,6 +217,38 @@ jobs:
           sed -i 's/int using_cc = 0;/int using_cc = 1;/' tools/winebuild/utils.c
           echo "已设置 using_cc 默认值为 1（强制使用编译器模式）"
 
+      - name: 注入 landlock stub（绕过 Android seccomp 对 syscall374 的拦截）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          # 注入到 wineserver (server/main.c)
+          cat >> server/main.c << 'STUBEOF'
+
+          /* Android/Termux stub: seccomp blocks landlock_create_ruleset */
+          #ifdef __linux__
+          #include <stddef.h>
+          int landlock_create_ruleset(const void *attr, size_t size, unsigned int flags)
+          {
+              return -1;
+          }
+          #endif
+          STUBEOF
+          echo "已注入 landlock_create_ruleset stub → server/main.c"
+
+          # 注入到 ntdll (dlls/ntdll/unix/server.c)，覆盖所有路径
+          cat >> dlls/ntdll/unix/server.c << 'STUBEOF'
+
+          /* Android/Termux stub: seccomp blocks landlock_create_ruleset */
+          #ifdef __linux__
+          #include <stddef.h>
+          int landlock_create_ruleset(const void *attr, size_t size, unsigned int flags)
+          {
+              return -1;
+          }
+          #endif
+          STUBEOF
+          echo "已注入 landlock_create_ruleset stub → dlls/ntdll/unix/server.c"
+
       # ============================================================
       # 6. 生成 configure
       # ============================================================
@@ -241,7 +273,7 @@ jobs:
           export PATH="/opt/${{ env.LLVMMINGW_NAME }}/bin:$PATH"
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           export PKG_CONFIG_SYSROOT_DIR=/
-          export CFLAGS="-O3 -pipe"
+          export CFLAGS="-O3 -pipe -DHAVE_LINUX_LANDLOCK_H=0"
           export CXXFLAGS="-O3 -pipe"
           export CROSSCFLAGS="-O3 -pipe"
           export CROSSCXXFLAGS="-O3 -pipe"
@@ -249,6 +281,7 @@ jobs:
           export WINE_NLS_DIR=/opt/wine64-native/nls
           # 禁用 landlock（Android seccomp 禁止 landlock_create_ruleset 系统调用）
           export ac_cv_func_landlock_create_ruleset=no
+          export ac_cv_header_linux_landlock_h=no
 
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
