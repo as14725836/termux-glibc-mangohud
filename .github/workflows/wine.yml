@@ -187,8 +187,11 @@ jobs:
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
+          # 修复地址上限变量
           sed -i 's/0x7fffffff0000/0x7fffff0000/g' dlls/ntdll/unix/virtual.c
-          echo "已缩减 address_space_limit / user_space_limit / working_set_limit / reserve_area 上限 0x7fffffff0000 → 0x7fffff0000"
+          # 删除第三个 reserve_area（起始地址 0x7ffffe000000 超出 Android 地址空间）
+          sed -i '/reserve_area.*0x7ffffe000000/d' dlls/ntdll/unix/virtual.c
+          echo "已缩减地址空间上限并移除高危 reserve_area"
 
       - name: 排除 Termux 下的 JNI 代码路径（unix/loader.c）
         run: |
@@ -244,6 +247,8 @@ jobs:
           export CROSSCXXFLAGS="-O3 -pipe"
           export LDFLAGS="-s"
           export WINE_NLS_DIR=/opt/wine64-native/nls
+          # 禁用 landlock（Android seccomp 禁止 landlock_create_ruleset 系统调用）
+          export ac_cv_func_landlock_create_ruleset=no
 
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
