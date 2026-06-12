@@ -137,10 +137,10 @@ jobs:
       - name: 获取 Wine 源码（Pipetto-crypto/proton-9.0-arm64ec）
         run: |
           set -e
-          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'arm64ec' }}"
+          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
           mkdir -p ${{ env.WINE_SOURCE_DIR }}
           cd ${{ env.WINE_SOURCE_DIR }}
-          git clone https://github.com/airidosas252/wine-test.git source
+          git clone https://github.com/GameNative/proton-wine.git source
           cd source
           git checkout "$PROTON_BRANCH"
           PROTON_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$PROTON_BRANCH")
