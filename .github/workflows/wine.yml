@@ -293,13 +293,16 @@ jobs:
       # ============================================================
       # 6. 跳过不兼容 DLL（wdscore）+ 生成 configure
       # ============================================================
-      - name: 排除 wdscore.dll（纯 stub，ARM64EC C++ 装饰名不兼容）
+      - name: 排除 wdscore ARM64EC C++ 装饰名（清除 spec 中的 CDynamicArray stub 条目）
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          if [ -f dlls/wdscore/Makefile.in ]; then
-            mv dlls/wdscore/Makefile.in dlls/wdscore/Makefile.in.bak
-            echo "已排除 wdscore.dll（纯 stub DLL，ARM64EC 不兼容）"
+          if [ -f dlls/wdscore/wdscore.spec ]; then
+            # CDynamicArray 模板实例化的 C++ 装饰名含 ? @ $，ARM64EC 链接器不接受
+            # 全部为 @ stub 空实现，删除不影响任何功能
+            COUNT=$(grep -c '^@ stub ??' dlls/wdscore/wdscore.spec || echo 0)
+            sed -i '/^@ stub ??/d' dlls/wdscore/wdscore.spec
+            echo "已从 wdscore.spec 移除 ${COUNT} 条 C++ 装饰名条目"
           fi
 
       - name: 生成 configure 脚本
