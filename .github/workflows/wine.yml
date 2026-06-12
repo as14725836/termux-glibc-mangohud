@@ -291,8 +291,17 @@ jobs:
           fi
 
       # ============================================================
-      # 6. 生成 configure
+      # 6. 跳过不兼容 DLL（wdscore）+ 生成 configure
       # ============================================================
+      - name: 排除 wdscore.dll（纯 stub，ARM64EC C++ 装饰名不兼容）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          if [ -f dlls/wdscore/Makefile.in ]; then
+            mv dlls/wdscore/Makefile.in dlls/wdscore/Makefile.in.bak
+            echo "已排除 wdscore.dll（纯 stub DLL，ARM64EC 不兼容）"
+          fi
+
       - name: 生成 configure 脚本
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
