@@ -268,18 +268,25 @@ jobs:
           sed -i 's/int using_cc = 0;/int using_cc = 1;/' tools/winebuild/utils.c
           echo "已设置 using_cc 默认值为 1（强制使用编译器模式）"
 
-      - name: 修复 wineboot 缺失 initialize_xstate_features 声明
+      - name: 修复 wineboot 缺失 initialize_xstate_features（ARM64 分支遗漏）
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
           if [ -f programs/wineboot/wineboot.c ]; then
-            # GameNative 源码已包含 static 定义，外部声明是多余的且导致类型冲突
-            # 直接删除我们之前可能注入的 extern 声明
+            # 先删除之前可能注入的多余 extern 声明
             if grep -q 'extern.*initialize_xstate_features' programs/wineboot/wineboot.c; then
               sed -i '/extern.*initialize_xstate_features/d' programs/wineboot/wineboot.c
-              echo "已删除多余的 extern 声明（static 定义已存在于源文件中）"
+              echo "已删除多余的 extern 声明"
+            fi
+            # GameNative 的 #elif defined(__aarch64__) 分支缺少 initialize_xstate_features stub
+            # 用 printf 生成临时文件 + sed r 安全插入（避免 YAML 缩进冲突）
+            if grep -q '#elif defined(__aarch64__)' programs/wineboot/wineboot.c; then
+              printf '\n/* stub: xstate features not used on ARM64 */\nstatic void initialize_xstate_features(struct _KUSER_SHARED_DATA *data)\n{\n}\n' > /tmp/xstate_stub.txt
+              sed -i '/^#elif defined(__aarch64__)$/r /tmp/xstate_stub.txt' programs/wineboot/wineboot.c
+              rm -f /tmp/xstate_stub.txt
+              echo "已在 ARM64 分支插入 initialize_xstate_features stub"
             else
-              echo "无需修复：源码中无 extern 声明，static 定义已足够"
+              echo "未找到 #elif defined(__aarch64__)，可能不需要修复"
             fi
           fi
 
