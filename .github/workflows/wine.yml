@@ -273,16 +273,14 @@ jobs:
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
           if [ -f programs/wineboot/wineboot.c ]; then
-              if grep -q 'initialize_xstate_features.*void.*data' programs/wineboot/wineboot.c; then
-            # 修正错误的声明类型 (void * → struct _KUSER_SHARED_DATA *)
-            sed -i 's/extern void initialize_xstate_features(void \*data)/extern void initialize_xstate_features(struct _KUSER_SHARED_DATA *data)/' programs/wineboot/wineboot.c
-            echo "已修正 initialize_xstate_features 声明类型"
-          elif grep -q 'initialize_xstate_features' programs/wineboot/wineboot.c; then
-            echo "initialize_xstate_features 声明已存在，跳过"
-          else
-            sed -i '/^#include.*wine\/debug\.h/a extern void initialize_xstate_features(struct _KUSER_SHARED_DATA *data);' programs/wineboot/wineboot.c
-            echo "已添加 initialize_xstate_features 声明"
-          fi
+            # GameNative 源码已包含 static 定义，外部声明是多余的且导致类型冲突
+            # 直接删除我们之前可能注入的 extern 声明
+            if grep -q 'extern.*initialize_xstate_features' programs/wineboot/wineboot.c; then
+              sed -i '/extern.*initialize_xstate_features/d' programs/wineboot/wineboot.c
+              echo "已删除多余的 extern 声明（static 定义已存在于源文件中）"
+            else
+              echo "无需修复：源码中无 extern 声明，static 定义已足够"
+            fi
           fi
 
       # ============================================================
