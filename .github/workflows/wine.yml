@@ -273,13 +273,16 @@ jobs:
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
           if [ -f programs/wineboot/wineboot.c ]; then
-              if ! grep -q 'initialize_xstate_features' programs/wineboot/wineboot.c; then
-                  echo "未找到 initialize_xstate_features 引用，跳过"
-              else
-                  # 在 #include 区末尾插入函数声明
-                  sed -i '/^#include.*wine\/debug\.h/a extern void initialize_xstate_features(void *data);' programs/wineboot/wineboot.c
-                  echo "已添加 initialize_xstate_features 声明"
-              fi
+              if grep -q 'initialize_xstate_features.*void.*data' programs/wineboot/wineboot.c; then
+            # 修正错误的声明类型 (void * → struct _KUSER_SHARED_DATA *)
+            sed -i 's/extern void initialize_xstate_features(void \*data)/extern void initialize_xstate_features(struct _KUSER_SHARED_DATA *data)/' programs/wineboot/wineboot.c
+            echo "已修正 initialize_xstate_features 声明类型"
+          elif grep -q 'initialize_xstate_features' programs/wineboot/wineboot.c; then
+            echo "initialize_xstate_features 声明已存在，跳过"
+          else
+            sed -i '/^#include.*wine\/debug\.h/a extern void initialize_xstate_features(struct _KUSER_SHARED_DATA *data);' programs/wineboot/wineboot.c
+            echo "已添加 initialize_xstate_features 声明"
+          fi
           fi
 
       # ============================================================
