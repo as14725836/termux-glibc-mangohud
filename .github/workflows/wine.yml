@@ -54,62 +54,52 @@ jobs:
       - uses: actions/checkout@v4
 
       # ============================================================
-      # 1. 安装构建依赖（纯 ARM64，无架构后缀，无跨架构冲突）
-      # ============================================================
-      - name: 安装构建依赖
+      - name: 安装构建依赖（x86-64 宿主，交叉编译 aarch64）
         run: |
+          dpkg --add-architecture arm64
+          apt-get update
           apt-get install -y --no-install-recommends \
+            libfreetype-dev:arm64 \
             libfreetype-dev \
+            libglib2.0-dev:arm64 \
             libglib2.0-dev \
             libltdl-dev \
-            libxcb1-dev \
+            libx11-dev:arm64 \
             libx11-dev \
-            libxinerama-dev \
+            libxinerama-dev:arm64 \
+            libfontconfig-dev:arm64 \
             libfontconfig-dev \
-            librsvg2-bin \
-            libepoxy-dev \
-            libsdl2-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxshmfence-dev \
-            libxxf86vm-dev \
-            libxrandr-dev \
-            libxrender-dev \
-            libxfixes-dev \
-            libxcomposite-dev \
-            libdbus-1-dev \
-            libsane-dev \
-            libusb-1.0-0-dev \
-            libv4l-dev \
-            libpulse-dev \
-            libunwind-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
+            libepoxy-dev:arm64 \
+            libsdl2-dev:arm64 \
+            libxcursor-dev:arm64 \
+            libxi-dev:arm64 \
+            libxshmfence-dev:arm64 \
+            libxxf86vm-dev:arm64 \
+            libxrandr-dev:arm64 \
+            libxrender-dev:arm64 \
+            libxfixes-dev:arm64 \
+            libxcomposite-dev:arm64 \
+            libdbus-1-dev:arm64 \
+            libpulse-dev:arm64 \
+            libunwind-dev:arm64 \
+            libgstreamer1.0-dev:arm64 \
+            libgstreamer-plugins-base1.0-dev:arm64 \
             gstreamer1.0-tools \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly \
-            libgstreamer-plugins-bad1.0-dev \
-            libgstreamer-plugins-good1.0-dev \
-            libudev-dev \
-            libfontconfig1-dev \
-            libkrb5-dev \
-            libvulkan-dev \
-            libgl-dev \
-            libgnutls28-dev \
-            libcups2-dev \
-            libxkbcommon-dev \
-            libxkbregistry-dev \
-            libmpg123-dev \
-            libopenal-dev \
-            libwayland-dev \
-            libidn2-0 \
+            libudev-dev:arm64 \
+            libkrb5-dev:arm64 \
+            libvulkan-dev:arm64 \
+            libgl-dev:arm64 \
+            libgnutls28-dev:arm64 \
+            libxkbcommon-dev:arm64 \
+            libxkbregistry-dev:arm64 \
+            libmpg123-dev:arm64 \
+            libopenal-dev:arm64 \
+            libstdc++-12-dev:arm64 \
             libstdc++-12-dev \
             less
 
       # ============================================================
-      # 2. 下载 llvm-mingw（ARM64 原生工具链）
+      # 2. 下载 llvm-mingw（x86-64 交叉工具链，支持 ARM64EC）
       # ============================================================
       - name: 下载并安装 llvm-mingw
         run: |
@@ -313,17 +303,7 @@ jobs:
           fi
 
       # ============================================================
-      # 6.5. ARM64EC 工具链兼容（当前 llvm-mingw ARM64 宿主不支持 arm64ec 目标）
-      # ============================================================
-      - name: 绕过 ARM64EC 交叉编译器检测（clang 在 ARM64 宿主上不支持 arm64ec-windows 目标）
-        run: |
-          # 导出 configure 缓存变量，强制跳过 ARM64EC PE 交叉编译器检测
-          echo "ac_cv_arm64ec_cflags__target_arm64ec_windows__fuse_ld_lld__Wl__subsystem_console__Wl__WX=yes" >> $GITHUB_ENV
-          echo "ac_cv_arm64ec_cflags__target_arm64ec_windows__fuse_ld_lld__Wl__subsystem_console__Wl__WX__no_default_config=yes" >> $GITHUB_ENV
-          echo "已设置 ARM64EC 配置缓存变量"
-
-      # ============================================================
-      # 7. 原生编译 ARM64 WOW64
+      # 7. 原生编译 ARM64 WOW64（x86-64 宿主交叉编译，含 ARM64EC）
       # ============================================================
       - name: 原生构建 ARM64 WOW64
         shell: bash
