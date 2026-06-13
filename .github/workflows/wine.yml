@@ -336,7 +336,7 @@ jobs:
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
-            --enable-archs=aarch64,arm64ec,i386 \
+            --enable-archs=arm,i686,x86_64 \
             --enable-tools \
             --disable-tests \
             --with-x \
