@@ -81,6 +81,7 @@ jobs:
             libsane-dev \
             libusb-1.0-0-dev \
             libv4l-dev \
+            clang-dev \
             libpulse-dev \
             libunwind-dev \
             libgstreamer1.0-dev \
