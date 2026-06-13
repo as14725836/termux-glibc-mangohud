@@ -20,8 +20,8 @@ on:
         - bleeding-edge
 
 env:
-  LLVMMINGW_DATE: 20251202
-  LLVMMINGW_NAME: llvm-mingw-20251202-ucrt-ubuntu-22.04-aarch64
+  LLVMMINGW_DATE: 20260602
+  LLVMMINGW_NAME: llvm-mingw-20260602-ucrt-ubuntu-22.04-aarch64
   WINE_SOURCE_DIR: /opt/wine-src
   DEBIAN_FRONTEND: noninteractive
 
@@ -81,7 +81,6 @@ jobs:
             libsane-dev \
             libusb-1.0-0-dev \
             libv4l-dev \
-            clang-dev \
             libpulse-dev \
             libunwind-dev \
             libgstreamer1.0-dev \
@@ -337,7 +336,7 @@ jobs:
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
-            --enable-archs=i386,aarch64,arm64ec \
+            --enable-archs=aarch64,i386,arm64ec \
             --enable-tools \
             --disable-tests \
             --with-x \
