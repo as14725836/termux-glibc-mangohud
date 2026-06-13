@@ -21,7 +21,7 @@ on:
 
 env:
   LLVMMINGW_DATE: 20260602
-  LLVMMINGW_NAME: llvm-mingw-20260602-ucrt-ubuntu-22.04-aarch64
+  LLVMMINGW_NAME: llvm-mingw-20260602-ucrt-ubuntu-22.04-x86_64
   WINE_SOURCE_DIR: /opt/wine-src
   DEBIAN_FRONTEND: noninteractive
 
@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   build-proton-wow64:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     container:
       image: ubuntu:22.04
       options: --user root
@@ -134,7 +134,7 @@ jobs:
       # ============================================================
       # 4. 获取 Proton 源码
       # ============================================================
-      - name: 获取 Wine 源码（GameNative/proton-wine）
+      - name: 获取 Wine 源码（airidosas252/wine-test）
         run: |
           set -e
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
@@ -311,6 +311,16 @@ jobs:
           if [ ! -f "configure" ]; then
             ./autogen.sh
           fi
+
+      # ============================================================
+      # 6.5. ARM64EC 工具链兼容（当前 llvm-mingw ARM64 宿主不支持 arm64ec 目标）
+      # ============================================================
+      - name: 绕过 ARM64EC 交叉编译器检测（clang 在 ARM64 宿主上不支持 arm64ec-windows 目标）
+        run: |
+          # 导出 configure 缓存变量，强制跳过 ARM64EC PE 交叉编译器检测
+          echo "ac_cv_arm64ec_cflags__target_arm64ec_windows__fuse_ld_lld__Wl__subsystem_console__Wl__WX=yes" >> $GITHUB_ENV
+          echo "ac_cv_arm64ec_cflags__target_arm64ec_windows__fuse_ld_lld__Wl__subsystem_console__Wl__WX__no_default_config=yes" >> $GITHUB_ENV
+          echo "已设置 ARM64EC 配置缓存变量"
 
       # ============================================================
       # 7. 原生编译 ARM64 WOW64
