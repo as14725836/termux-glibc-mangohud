@@ -20,6 +20,14 @@ on:
         required: false
         default: 'latest'
         type: string
+      build_type:
+        description: '构建类型'
+        required: false
+        default: 'wow64'
+        type: choice
+        options:
+        - wow64
+        - proton
 
 env:
   LLVMMINGW_DATE: 20251202
@@ -296,7 +304,8 @@ jobs:
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
 
-          # 9. 修复 gst 问题
+      # ------------------------------------------------------------
+      # 9. 修复 gst 问题
       # ------------------------------------------------------------
       - name: 修复 gst 问题
         run: |
@@ -354,10 +363,20 @@ jobs:
           echo "已修复 machine-id 路径 → /data/data/com.termux/files/usr/glibc/etc/machine-id"
 
       # ------------------------------------------------------------
-      # 14. 应用 mfplat 补丁
+      # 14. 应用 mfplat 补丁（仅 wow64 构建时应用）
       # ------------------------------------------------------------
       - name: 应用 mfplat 补丁
         run: |
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'wow64' }}"
+          
+          # 如果是 proton 构建，跳过补丁
+          if [ "$BUILD_TYPE" = "proton" ]; then
+            echo "检测到 proton 构建，跳过 mfplat 补丁应用"
+            exit 0
+          fi
+          
+          # wow64 构建，继续应用补丁
+          echo "检测到 wow64 构建，应用 mfplat 补丁"
           cd ${{ env.WINE_SOURCE_DIR }}/source
           PURE_VERSION=$(echo "${{ env.WINE_VERSION_ACTUAL }}" | sed 's/^wine-//')
           VERSION_MAJOR=$(echo "$PURE_VERSION" | cut -d. -f1)
@@ -377,6 +396,7 @@ jobs:
             chmod +x fix_wine9.2_mfplat.sh
             ./fix_wine9.2_mfplat.sh
           fi
+          echo "mfplat 补丁应用完成"
 
       # ------------------------------------------------------------
       # 15. 生成 configure 脚本
@@ -409,7 +429,7 @@ jobs:
           ls -la /opt/nls-backup/
 
       # ------------------------------------------------------------
-      # 17. 复制构建目录并验证 NLS
+      # 17. 复制构建目录并验证 NLS（带恢复机制）
       # ------------------------------------------------------------
       - name: 复制构建目录并验证 NLS（带恢复机制）
         run: |
@@ -615,9 +635,9 @@ jobs:
             echo "share 目录内容："
             ls -la /tmp/wine-install-wow64/share/
           fi
-          if [ -d /tmp/wine-install-wow64/usr/lib/wine/aarch64-windows ]; then
+          if [ -d /tmp/wine-install-wow64/lib/wine/aarch64-windows ]; then
             echo "aarch64-windows 目录内容（FEX DLL）："
-            ls -la /tmp/wine-install-wow64/usr/lib/wine/aarch64-windows/
+            ls -la /tmp/wine-install-wow64/lib/wine/aarch64-windows/
           fi
 
       # ------------------------------------------------------------
@@ -661,6 +681,7 @@ jobs:
             ## 版本信息
             - **Wine 分支**: ${{ github.event.inputs.wine_branch || 'staging' }}
             - **Wine 版本**: ${{ github.event.inputs.wine_version || 'latest' }}
+            - **构建类型**: ${{ github.event.inputs.build_type || 'wow64' }}
             - **主机架构**: ARM64 (aarch64)
             - **目标 Windows 架构**: i386, x86_64, arm64ec (通过 WOW64 模拟)
             - **平台**: Termux (Android)
