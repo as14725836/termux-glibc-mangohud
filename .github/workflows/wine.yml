@@ -67,7 +67,10 @@ jobs:
             libxinerama-dev \
             libfontconfig-dev \
             libfontconfig-dev \
-            libepoxy-dev
+            libepoxy-dev \
+            clang \
+            lld \
+            llvm
 
       # ============================================================
       # 2. 下载 llvm-mingw（x86-64 交叉工具链，支持 ARM64EC）
