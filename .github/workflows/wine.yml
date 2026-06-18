@@ -296,7 +296,7 @@ jobs:
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
 
-      # ------------------------------------------------------------
+          sed -i '1642s/gstreamer-gl-1.0//g' configure.ac
       # 9. 修复 gst 问题
       # ------------------------------------------------------------
       - name: 修复 gst 问题
