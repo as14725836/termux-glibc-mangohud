@@ -129,7 +129,7 @@ jobs:
       # ============================================================
       # 4. 获取 Proton 源码
       # ============================================================
-      - name: 获取 Wine 源码（Pipetto-crypto/proton-9.0-arm64ec）
+      - name: 获取 Wine 源码
         run: |
           set -e
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton-9.0-arm64ec' }}"
@@ -137,8 +137,14 @@ jobs:
           cd ${{ env.WINE_SOURCE_DIR }}
           git clone https://github.com/AndreRH/wine.git source
           cd source
-      
+    
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          BRANCH_NAME=${PROTON_BRANCH:-"unknown"}
+           BUILD_NAME="wine-${COMMIT_HASH}-${BRANCH_NAME}-arm64-wow64"
+          echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV  # ✅ 确保这行存在
           echo "源码准备完成，构建名称: $BUILD_NAME"
+   
+
           echo "修复 Termux glibc 路径问题（/tmp → /data/data/com.termux/files/usr/tmp）..."
           find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
           find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
