@@ -233,6 +233,7 @@ jobs:
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
       # ----------------------------- name: 应用 fix-build_ffmpeg.patch
+      - name: 修复 gst 问题
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
