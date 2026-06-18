@@ -14,14 +14,13 @@ on:
         - proton_11.0
         - proton_10.0
         - proton_9.0
-        - arm64ec
         - experimental_10.0
         - proton-9.0-arm64ec
         - bleeding-edge
 
 env:
-  LLVMMINGW_DATE: 20260602
-  LLVMMINGW_NAME: llvm-mingw-20260602-ucrt-ubuntu-22.04-x86_64
+  LLVMMINGW_DATE: 20251202
+  LLVMMINGW_NAME: llvm-mingw-20251202-ucrt-ubuntu-22.04-aarch64
   WINE_SOURCE_DIR: /opt/wine-src
   DEBIAN_FRONTEND: noninteractive
 
@@ -30,7 +29,7 @@ permissions:
 
 jobs:
   build-proton-wow64:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     container:
       image: ubuntu:22.04
       options: --user root
@@ -50,30 +49,64 @@ jobs:
             python3 python3-setuptools python3-lxml \
             dpkg-dev fakeroot debhelper dh-make build-essential \
             patchelf
-
       - uses: actions/checkout@v4
 
       # ============================================================
-      - name: 安装构建依赖（x86-64 宿主，交叉编译 aarch64）
+      # 1. 安装构建依赖（纯 ARM64，无架构后缀，无跨架构冲突）
+      # ============================================================
+      - name: 安装构建依赖
         run: |
-          apt-get update
           apt-get install -y --no-install-recommends \
             libfreetype-dev \
-            libfreetype-dev \
-            libglib2.0-dev \
             libglib2.0-dev \
             libltdl-dev \
+            libxcb1-dev \
             libx11-dev \
             libxinerama-dev \
             libfontconfig-dev \
-            libfontconfig-dev \
+            librsvg2-bin \
             libepoxy-dev \
-            clang \
-            lld \
-            llvm
-
+            libsdl2-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxshmfence-dev \
+            libxxf86vm-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            libxfixes-dev \
+            libxcomposite-dev \
+            libdbus-1-dev \
+            libsane-dev \
+            libusb-1.0-0-dev \
+            libv4l-dev \
+            libpulse-dev \
+            libunwind-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-tools \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            libgstreamer-plugins-bad1.0-dev \
+            libgstreamer-plugins-good1.0-dev \
+            libudev-dev \
+            libfontconfig1-dev \
+            libkrb5-dev \
+            libvulkan-dev \
+            libgl-dev \
+            libgnutls28-dev \
+            libcups2-dev \
+            libxkbcommon-dev \
+            libxkbregistry-dev \
+            libmpg123-dev \
+            libopenal-dev \
+            libwayland-dev \
+            libidn2-0 \
+            libstdc++-12-dev \
+            less
       # ============================================================
-      # 2. 下载 llvm-mingw（x86-64 交叉工具链，支持 ARM64EC）
+      # 2. 下载 llvm-mingw（ARM64 原生工具链）
       # ============================================================
       - name: 下载并安装 llvm-mingw
         run: |
@@ -83,7 +116,6 @@ jobs:
           tar -xJf ${{ env.LLVMMINGW_NAME }}.tar.xz
           rm ${{ env.LLVMMINGW_NAME }}.tar.xz
           echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
-
       # ============================================================
       # 3. 中文语言环境
       # ============================================================
@@ -94,17 +126,16 @@ jobs:
           locale-gen
           echo "LANG=zh_CN.UTF-8" >> $GITHUB_ENV
           echo "LC_ALL=zh_CN.UTF-8" >> $GITHUB_ENV
-
       # ============================================================
       # 4. 获取 Proton 源码
       # ============================================================
-      - name: 获取 Wine 源码（airidosas252/wine-test）
+      - name: 获取 Wine 源码（Pipetto-crypto/proton-9.0-arm64ec）
         run: |
           set -e
-          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
+          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton-9.0-arm64ec' }}"
           mkdir -p ${{ env.WINE_SOURCE_DIR }}
           cd ${{ env.WINE_SOURCE_DIR }}
-          git clone https://github.com/airidosas252/wine-test.git source
+          git clone https://github.com/Pipetto-crypto/wine.git source
           cd source
           git checkout "$PROTON_BRANCH"
           PROTON_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$PROTON_BRANCH")
@@ -113,14 +144,12 @@ jobs:
           echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
           echo "PROTON_VERSION_ACTUAL=$PROTON_VERSION_ACTUAL" >> $GITHUB_ENV
           echo "源码准备完成，构建名称: $BUILD_NAME"
-
           echo "修复 Termux glibc 路径问题（/tmp → /data/data/com.termux/files/usr/tmp）..."
           find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
           find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-
       # ============================================================
       # 5. 应用 Termux 兼容性补丁（ffmpeg + GstMapInfo + SELinux + 地址空间 + JNI排除 + machine-id + SIGSYS + using_cc）
       # ============================================================
@@ -131,32 +160,23 @@ jobs:
           wget -q -O fix-build_ffmpeg.patch https://raw.githubusercontent.com/Waim908/wine-termux/main/proton/10.0/fix-build_ffmpeg.patch
           patch -p1 -N -t < fix-build_ffmpeg.patch || true
           rm fix-build_ffmpeg.patch
-
-      - name: 修复 GstMapInfo 类型兼容性（GStreamer1.20+ API）
+      - name: 修复 GstMapInfo 拼写错误（GstBufferMapInfo → GstMapInfo）
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          # wg_transform.c 中 GstMapInfo 可能因头文件缺失退化为 int
-          for f in dlls/winegstreamer/wg_transform.c dlls/winegstreamer/media-converter/videoconv.c; do
-            if [ -f "$f" ]; then
-              # 确保显式包含 gstbuffer.h（提供 GstMapInfo 类型）
-              if ! grep -q 'gst/gstbuffer.h' "$f"; then
-                sed -i '/#include.*gst\/gst\.h/a #include <gst/gstbuffer.h>' "$f"
-                echo "已添加 #include <gst/gstbuffer.h> → $f"
-              fi
-              # 修复可能的 GstBufferMapInfo → GstMapInfo
-              sed -i 's/GstBufferMapInfo/GstMapInfo/g' "$f"
-            fi
-          done
-          echo "GstMapInfo 类型兼容性修复完成"
-
+          # 第 1023 行: GstBufferMapInfo 是 typo，正确类型是 GstMapInfo
+          if [ -f dlls/winegstreamer/media-converter/videoconv.c ]; then
+            sed -i 's/GstBufferMapInfo/GstMapInfo/g' dlls/winegstreamer/media-converter/videoconv.c
+            echo "已修复 GstBufferMapInfo → GstMapInfo"
+          else
+            echo "videoconv.c 不存在，跳过 GstMapInfo 修复"
+          fi
       - name: 修复 SELinux 兼容性（PAGE_READWRITE → PAGE_EXECUTE_READWRITE）
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
           sed -i 's/&size, PAGE_READWRITE, &protect_old\[i\]/\&size, PAGE_EXECUTE_READWRITE, \&protect_old[i]/' dlls/ntdll/loader.c
           echo "已修复 perform_relocations: PAGE_READWRITE → PAGE_EXECUTE_READWRITE"
-
       - name: 缩减虚拟地址空间上限（适配 Android/Termux 受限地址空间）
         run: |
           set -e
@@ -166,7 +186,6 @@ jobs:
           # 删除第三个 reserve_area（起始地址 0x7ffffe000000 超出 Android 地址空间）
           sed -i '/reserve_area.*0x7ffffe000000/d' dlls/ntdll/unix/virtual.c
           echo "已缩减地址空间上限并移除高危 reserve_area"
-
       - name: 排除 Termux 下的 JNI 代码路径（unix/loader.c）
         run: |
           set -e
@@ -176,34 +195,28 @@ jobs:
           # 修复2: 跳过 Android JNI 初始化代码（WineActivity pre_exec 等）
           sed -i 's/#ifdef __ANDROID__/#if defined(__ANDROID__) \&\& ! defined(__TERMUX__)/' dlls/ntdll/unix/loader.c
           echo "已排除 Termux 下的 JNI 代码路径"
-
       - name: 修复 machine-id 路径（适配 Termux glibc）
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
           sed -i 's|/etc/machine-id|/data/data/com.termux/files/usr/glibc/etc/machine-id|g' server/token.c
           echo "已修复 machine-id 路径 → /data/data/com.termux/files/usr/glibc/etc/machine-id"
-
       - name: 注入 SIGSYS 处理器（捕获 Android seccomp 封锁的 syscall374）
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source/dlls/ntdll/unix
-
           # 在 signal_arm64.c 的 signal 处理段插入 SIGSYS handler
           if [ -f signal_arm64.c ]; then
             # 1. 在 include 区添加需要的头文件
             if ! grep -q 'SIGSYS' signal_arm64.c; then
               sed -i '/#include.*signal.h/a #include <sys/syscall.h>' signal_arm64.c
             fi
-
             # 2. 用 printf 注入 sigaction 注册（避免 sed 多行缩进问题）
             printf '    /* Termux/Android: catch blocked syscalls (seccomp SIGSYS) */\n    sa.sa_sigaction = termux_sigsys_handler;\n    sigaction( SIGSYS, &sa, NULL );\n' >> /tmp/sigsys_append.txt
             sed -i '/sa_sigaction =.*handler.*SIGSEGV/r /tmp/sigsys_append.txt' signal_arm64.c
             rm -f /tmp/sigsys_append.txt
-
             # 3. 在文件末尾追加 handler 函数
             cat >> signal_arm64.c << 'SIGSYSEND'
-
           /***********************************************************************
            *           termux_sigsys_handler
            *
@@ -224,60 +237,23 @@ jobs:
           else
             echo "signal_arm64.c 不存在，跳过 SIGSYS handler"
           fi
-
       - name: 强制使用 CC 编译模式（修复 Termux 链接器兼容性）
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
           sed -i 's/int using_cc = 0;/int using_cc = 1;/' tools/winebuild/utils.c
           echo "已设置 using_cc 默认值为 1（强制使用编译器模式）"
-
-      - name: 修复 wineboot 缺失 initialize_xstate_features（ARM64 分支遗漏）
-        run: |
-          set -e
-          cd ${{ env.WINE_SOURCE_DIR }}/source
-          if [ -f programs/wineboot/wineboot.c ]; then
-            # 先删除之前可能注入的多余 extern 声明
-            if grep -q 'extern.*initialize_xstate_features' programs/wineboot/wineboot.c; then
-              sed -i '/extern.*initialize_xstate_features/d' programs/wineboot/wineboot.c
-              echo "已删除多余的 extern 声明"
-            fi
-            # GameNative 的 #elif defined(__aarch64__) 分支缺少 initialize_xstate_features stub
-            # 用 printf 生成临时文件 + sed r 安全插入（避免 YAML 缩进冲突）
-            if grep -q '#elif defined(__aarch64__)' programs/wineboot/wineboot.c; then
-              printf '\n/* stub: xstate features not used on ARM64 */\nstatic void initialize_xstate_features(struct _KUSER_SHARED_DATA *data)\n{\n}\n' > /tmp/xstate_stub.txt
-              sed -i '/^#elif defined(__aarch64__)$/r /tmp/xstate_stub.txt' programs/wineboot/wineboot.c
-              rm -f /tmp/xstate_stub.txt
-              echo "已在 ARM64 分支插入 initialize_xstate_features stub"
-            else
-              echo "未找到 #elif defined(__aarch64__)，可能不需要修复"
-            fi
-          fi
-
       # ============================================================
-      # 6. 跳过不兼容 DLL（wdscore）+ 生成 configure
+      # 6. 生成 configure
       # ============================================================
-      - name: 排除 wdscore ARM64EC C++ 装饰名（清除 spec 中的 CDynamicArray stub 条目）
-        run: |
-          set -e
-          cd ${{ env.WINE_SOURCE_DIR }}/source
-          if [ -f dlls/wdscore/wdscore.spec ]; then
-            # CDynamicArray 模板实例化的 C++ 装饰名含 ? @ $，ARM64EC 链接器不接受
-            # 全部为 @ stub 空实现，删除不影响任何功能
-            COUNT=$(grep -c '^@ stub ??' dlls/wdscore/wdscore.spec || echo 0)
-            sed -i '/^@ stub ??/d' dlls/wdscore/wdscore.spec
-            echo "已从 wdscore.spec 移除 ${COUNT} 条 C++ 装饰名条目"
-          fi
-
       - name: 生成 configure 脚本
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
           if [ ! -f "configure" ]; then
             ./autogen.sh
           fi
-
       # ============================================================
-      # 7. 原生编译 ARM64 WOW64（x86-64 宿主交叉编译，含 ARM64EC）
+      # 7. 原生编译 ARM64 WOW64
       # ============================================================
       - name: 原生构建 ARM64 WOW64
         shell: bash
@@ -296,11 +272,10 @@ jobs:
           export CROSSCXXFLAGS="-O3 -pipe"
           export LDFLAGS="-s"
           export WINE_NLS_DIR=/opt/wine64-native/nls
-
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
-            --enable-archs=aarch64,i386,arm64ec \
+            --enable-archs=aarch64,arm64ec,i386 \
             --enable-tools \
             --disable-tests \
             --with-x \
@@ -329,7 +304,6 @@ jobs:
             --without-usb \
             --without-v4l2 \
             --without-wayland
-
           make -s -j$(nproc) 2>&1 | tee build.log
           if [ $? -ne 0 ]; then
               echo "❌ 编译失败，最后 200 行日志："
@@ -341,7 +315,6 @@ jobs:
             echo "错误: /usr/bin 目录不存在，安装可能不完整"
             exit 1
           fi
-
       # ============================================================
       # 8. 补全运行时文件
       # ============================================================
@@ -353,7 +326,6 @@ jobs:
           SOURCE_DIR="${{ env.WINE_SOURCE_DIR }}/source"
           NATIVE_NLS_DIR="/opt/wine64-native/nls"
           SOURCE_FONTS_DIR="$SOURCE_DIR/fonts"
-
           echo "=== 补全 share/wine/nls ==="
           mkdir -p "$TARGET_PREFIX/share/wine/nls"
           if [ -d "$NATIVE_NLS_DIR" ]; then
@@ -362,7 +334,6 @@ jobs:
           if [ ! -f "$TARGET_PREFIX/share/wine/nls/locale.nls" ] && [ -f "/opt/nls-backup/locale.nls" ]; then
               cp -v "/opt/nls-backup/locale.nls" "$TARGET_PREFIX/share/wine/nls/"
           fi
-
           echo "=== 补全 share/wine/fonts ==="
           if [ -d "$SOURCE_FONTS_DIR" ]; then
               mkdir -p "$TARGET_PREFIX/share/wine/fonts"
@@ -370,7 +341,6 @@ jobs:
           else
               echo "警告: 源码 fonts 目录不存在，跳过字体复制"
           fi
-
           echo "=== 补全 wine.inf ==="
           WINE_INF_SRC=$(find "$BUILD_DIR" -name "wine.inf" -type f 2>/dev/null | head -1)
           if [ -z "$WINE_INF_SRC" ]; then
@@ -386,7 +356,6 @@ jobs:
           else
               echo "警告: 未找到 wine.inf 文件"
           fi
-
           echo "=== 补全关键程序文件 ==="
           BIN_DIR="$TARGET_PREFIX/bin"
           mkdir -p "$BIN_DIR"
@@ -410,12 +379,10 @@ jobs:
                   exit 1
               fi
           done
-
           echo "=== 复制 syswow64 DLL（i386 Windows PE）==="
           I386_WIN_DIR="$BUILD_DIR/dlls/i386-windows"
           I386_LIB_DIR="$BUILD_DIR/dlls/i386"
           ARM64EC_WIN_DIR="$BUILD_DIR/dlls/arm64ec-windows"
-
           if [ -d "$ARM64EC_WIN_DIR" ]; then
               mkdir -p "$TARGET_PREFIX/lib/wine/arm64ec-windows"
               cp -v "$ARM64EC_WIN_DIR"/*.dll "$TARGET_PREFIX/lib/wine/arm64ec-windows/" 2>/dev/null || echo "无 arm64ec DLL 或已存在"
@@ -442,11 +409,9 @@ jobs:
                   cp -v "$found_i386_so"/*.so "$TARGET_PREFIX/lib/wine/i386/" 2>/dev/null || echo "复制完成或无额外 .so"
               fi
           fi
-
           if [ -f "$TARGET_PREFIX/bin/wineserver" ]; then
               chmod +x "$TARGET_PREFIX/bin/wineserver"
           fi
-
           echo "=== 验证关键 WOW64 DLL ==="
           for dll in kernel32.dll user32.dll ntdll.dll; do
               if [ -f "$TARGET_PREFIX/lib/wine/i386-windows/$dll" ]; then
@@ -471,7 +436,6 @@ jobs:
           done
           ls -la "$TARGET_PREFIX/share/wine/" || true
           ls -la "$TARGET_PREFIX/bin/" || true
-
       # ============================================================
       # 8.5. 修改 ELF interpreter 适配 Termux glibc
       # ============================================================
@@ -480,7 +444,6 @@ jobs:
           set -e
           TARGET_PREFIX="/tmp/wine-install-wow64"
           TERMUX_LINKER="/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1"
-
           echo "=== 修改 bin/ 目录下可执行文件的 interpreter ==="
           find "$TARGET_PREFIX/bin" -type f -executable | while read elf; do
               if file "$elf" | grep -q 'ELF.*aarch64'; then
@@ -492,7 +455,6 @@ jobs:
                   fi
               fi
           done
-
           echo "=== 修改 lib/ 目录下 .so 文件的 interpreter ==="
           find "$TARGET_PREFIX/lib" -type f -name "*.so" | while read elf; do
               if file "$elf" | grep -q 'ELF.*aarch64'; then
@@ -502,9 +464,7 @@ jobs:
                   fi
               fi
           done
-
           echo "ELF interpreter 已全部修改为 $TERMUX_LINKER"
-
       # ============================================================
       # 9. 打包与发布
       # ============================================================
@@ -513,18 +473,15 @@ jobs:
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           mkdir -p wine-package/$PACKAGE_NAME
           cp -r /tmp/wine-install-wow64/* wine-package/$PACKAGE_NAME/
-
       - name: 创建打包文件
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
           ls -lh *.tar.xz
-
       - name: Generate checksums
         run: |
           sha256sum *.tar.xz > checksums.txt
           cat checksums.txt
-
       - name: Upload Proton WoW64 artifacts
         uses: actions/upload-artifact@v4
         with:
