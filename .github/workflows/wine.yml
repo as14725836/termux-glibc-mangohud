@@ -74,7 +74,6 @@ jobs:
           dpkg --add-architecture arm64
           apt-get update
           apt-get install -y --no-install-recommends hello:arm64 || { echo "arm64 源测试失败"; exit 1; }
-
       # ------------------------------------------------------------
       # 2. 安装所有依赖
       # ------------------------------------------------------------
@@ -134,26 +133,7 @@ jobs:
             libxkbcommon-dev:arm64 \
             libxkbregistry-dev:arm64 \
             libwayland-dev:arm64
-
-      # ------------------------------------------------------------
-      # 2.5 创建 GStreamer GL 头文件符号链接
-      # ------------------------------------------------------------
-      - name: 创建 GStreamer GL 头文件符号链接
-        run: |
-          # 查找 gstglconfig.h 的实际位置
-          echo "=== 查找 gstglconfig.h ==="
-          find /usr -name "gstglconfig.h" 2>/dev/null || echo "未找到 gstglconfig.h"
-          
-          # 如果文件在 aarch64 路径下，创建符号链接到标准路径
-          if [ -f /usr/include/aarch64-linux-gnu/gstreamer-1.0/gst/gl/gstglconfig.h ]; then
-            mkdir -p /usr/include/gstreamer-1.0/gst/gl/
-            ln -sf /usr/include/aarch64-linux-gnu/gstreamer-1.0/gst/gl/gstglconfig.h /usr/include/gstreamer-1.0/gst/gl/gstglconfig.h
-            echo "已创建 gstglconfig.h 符号链接"
-            ls -la /usr/include/gstreamer-1.0/gst/gl/gstglconfig.h
-          else
-            echo "警告: gstglconfig.h 不存在，将使用 Python 脚本禁用 GL 支持"
-          fi
-      
+            
       # ------------------------------------------------------------
       # 4. 安装 llvm-mingw 交叉编译工具链
       # ------------------------------------------------------------
@@ -165,7 +145,6 @@ jobs:
           tar -xJf ${{ env.LLVMMINGW_NAME }}.tar.xz
           rm ${{ env.LLVMMINGW_NAME }}.tar.xz
           echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
-
       # ------------------------------------------------------------
       # 5. 编译 FEX-Emu（完全隔离，不影响后续环境）
       # ------------------------------------------------------------
@@ -222,7 +201,6 @@ jobs:
           ls -la /opt/FEX/install-wow64/usr/lib/wine/aarch64-windows/ || true
           
           echo "FEX 编译完成"
-
       # ------------------------------------------------------------
       # 6. 设置中文语言环境
       # ------------------------------------------------------------
@@ -233,7 +211,6 @@ jobs:
           locale-gen
           echo "LANG=zh_CN.UTF-8" >> $GITHUB_ENV
           echo "LC_ALL=zh_CN.UTF-8" >> $GITHUB_ENV
-
       # ------------------------------------------------------------
       # 7. 获取 Wine 源码
       # ------------------------------------------------------------
@@ -309,7 +286,6 @@ jobs:
           echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
           echo "WINE_VERSION_ACTUAL=$WINE_VERSION_ACTUAL" >> $GITHUB_ENV
           echo "源码准备完成，构建名称: $BUILD_NAME"
-
       # ------------------------------------------------------------
       # 8. 修复 Termux 路径问题
       # ------------------------------------------------------------
@@ -322,7 +298,6 @@ jobs:
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
-
       # ------------------------------------------------------------
       # 9. 修复 gst 问题
       # ------------------------------------------------------------
@@ -333,14 +308,8 @@ jobs:
           wget -q -O fix-build_ffmpeg.patch https://raw.githubusercontent.com/Waim908/wine-termux/main/proton/10.0/fix-build_ffmpeg.patch
           patch -p1 -N -t < fix-build_ffmpeg.patch || true
           rm fix-build_ffmpeg.patch
-
           sed -i '1642s/gstreamer-gl-1.0//g' configure.ac
-
-          # 使用 GITHUB_WORKSPACE 调用仓库根目录的 Python 脚本
-          echo "=== 检查 Python 脚本 ==="
-          ls -la $GITHUB_WORKSPACE/disable_gl.py || echo "脚本不存在"
-          python3 $GITHUB_WORKSPACE/disable_gl.py
-
+          python3 "$GITHUB_WORKSPACE/disable_gl.py"
       # ------------------------------------------------------------
       # 10. 修复 GstMapInfo 拼写错误
       # ------------------------------------------------------------
@@ -354,7 +323,6 @@ jobs:
           else
             echo "videoconv.c 不存在，跳过 GstMapInfo 修复"
           fi
-
       # ------------------------------------------------------------
       # 11. 修复 SELinux 兼容性
       # ------------------------------------------------------------
@@ -364,7 +332,6 @@ jobs:
           cd ${{ env.WINE_SOURCE_DIR }}/source
           sed -i 's/&size, PAGE_READWRITE, &protect_old\[i\]/\&size, PAGE_EXECUTE_READWRITE, \&protect_old[i]/' dlls/ntdll/loader.c
           echo "已修复 perform_relocations: PAGE_READWRITE → PAGE_EXECUTE_READWRITE"
-
       # ------------------------------------------------------------
       # 12. 缩减虚拟地址空间上限
       # ------------------------------------------------------------
@@ -375,7 +342,6 @@ jobs:
           sed -i 's/0x7fffffff0000/0x7fffff0000/g' dlls/ntdll/unix/virtual.c
           sed -i '/reserve_area.*0x7ffffe000000/d' dlls/ntdll/unix/virtual.c
           echo "已缩减地址空间上限并移除高危 reserve_area"
-
       # ------------------------------------------------------------
       # 13. 修复 machine-id 路径
       # ------------------------------------------------------------
@@ -385,7 +351,6 @@ jobs:
           cd ${{ env.WINE_SOURCE_DIR }}/source
           sed -i 's|/etc/machine-id|/data/data/com.termux/files/usr/glibc/etc/machine-id|g' server/token.c
           echo "已修复 machine-id 路径 → /data/data/com.termux/files/usr/glibc/etc/machine-id"
-
       # ------------------------------------------------------------
       # 14. 应用 mfplat 补丁（仅 wow64 构建时应用）
       # ------------------------------------------------------------
@@ -421,7 +386,6 @@ jobs:
             ./fix_wine9.2_mfplat.sh
           fi
           echo "mfplat 补丁应用完成"
-
       # ------------------------------------------------------------
       # 15. 生成 configure 脚本
       # ------------------------------------------------------------
@@ -431,7 +395,6 @@ jobs:
           if [ ! -f "configure" ]; then
             ./autogen.sh
           fi
-
       # ------------------------------------------------------------
       # 16. 构建 native wine64
       # ------------------------------------------------------------
@@ -451,7 +414,6 @@ jobs:
           cp -aL nls/. /opt/nls-backup/
           echo "nls 目录已完整备份到 /opt/nls-backup"
           ls -la /opt/nls-backup/
-
       # ------------------------------------------------------------
       # 17. 复制构建目录并验证 NLS（带恢复机制）
       # ------------------------------------------------------------
@@ -485,7 +447,6 @@ jobs:
             fi
           fi
           echo "复制后 locale.nls 存在，大小: $(wc -c < /opt/wine64-native/nls/locale.nls) 字节"
-
       # ------------------------------------------------------------
       # 18. 交叉编译 ARM64 WOW64
       # ------------------------------------------------------------
@@ -510,15 +471,10 @@ jobs:
           ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer*.pc || echo "GStreamer .pc 文件不存在"
           pkg-config --modversion gstreamer-1.0 2>/dev/null || echo "pkg-config 找不到 gstreamer"
           
-          # 查找 gstglconfig.h 的实际位置
-          echo "=== 查找 gstglconfig.h ==="
-          find /usr -name "gstglconfig.h" 2>/dev/null || echo "未找到 gstglconfig.h"
-          
-          # 添加 GStreamer GL 头文件路径到 CFLAGS
-          export CFLAGS="-O3 -pipe -I/usr/include/aarch64-linux-gnu/gstreamer-1.0"
-          export CXXFLAGS="-O3 -pipe -I/usr/include/aarch64-linux-gnu/gstreamer-1.0"
-          export CROSSCFLAGS="-O3 -pipe -I/usr/include/aarch64-linux-gnu/gstreamer-1.0"
-          export CROSSCXXFLAGS="-O3 -pipe -I/usr/include/aarch64-linux-gnu/gstreamer-1.0"
+          export CFLAGS="-O3 -pipe"
+          export CXXFLAGS="-O3 -pipe"
+          export CROSSCFLAGS="-O3 -pipe"
+          export CROSSCXXFLAGS="-O3 -pipe"
           export LDFLAGS="-s -L/usr/lib/aarch64-linux-gnu -Wl,--dynamic-linker=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 -Wl,-rpath=/data/data/com.termux/files/usr/glibc/lib"
           export WINE_NLS_DIR=/opt/wine64-native/nls
           
@@ -543,7 +499,6 @@ jobs:
             echo "错误: /tmp/wine-install-wow64/bin 目录不存在，安装可能不完整"
             exit 1
           fi
-
       # ------------------------------------------------------------
       # 19. 全面补全安装目录（包含 FEX DLL）
       # ------------------------------------------------------------
@@ -648,7 +603,6 @@ jobs:
           ls -la "$TARGET_PREFIX/share/wine/" || true
           ls -la "$TARGET_PREFIX/bin/" || true
           ls -la "$TARGET_PREFIX/lib/wine/" || true
-
       # ------------------------------------------------------------
       # 20. 验证安装目录内容
       # ------------------------------------------------------------
@@ -668,7 +622,6 @@ jobs:
             echo "aarch64-windows 目录内容（FEX DLL）："
             ls -la /tmp/wine-install-wow64/lib/wine/aarch64-windows/
           fi
-
       # ------------------------------------------------------------
       # 21. 打包
       # ------------------------------------------------------------
@@ -677,18 +630,15 @@ jobs:
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           mkdir -p wine-package/$PACKAGE_NAME
           cp -r /tmp/wine-install-wow64/* wine-package/$PACKAGE_NAME/
-
       - name: 创建打包文件
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
           ls -lh *.tar.xz
-
       - name: Generate checksums
         run: |
           sha256sum *.tar.xz > checksums.txt
           cat checksums.txt
-
       - name: Upload Wine WoW64 artifacts
         uses: actions/upload-artifact@v4
         with:
