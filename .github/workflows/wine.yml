@@ -317,14 +317,7 @@ jobs:
 
           sed -i '1642s/gstreamer-gl-1.0//g' configure.ac
 
-          # 修复 unixlib.c 中的 GL 头文件包含问题
-          if [ -f dlls/winegstreamer/unixlib.c ]; then
-          # 方法1：注释掉 GL 相关的 include
-          sed -i 's|^#include <gst/gl/gl.h>|/* #include <gst/gl/gl.h> */|g' dlls/winegstreamer/unixlib.c
-          sed -i 's|^#include <gst/gl/gstglapi.h>|/* #include <gst/gl/gstglapi.h> */|g' dlls/winegstreamer/unixlib.c
-          echo "已注释 unixlib.c 中的 GL 头文件"
-          fi
-
+          python3 disable_gl.py
       # ------------------------------------------------------------
       # 10. 修复 GstMapInfo 拼写错误
       # ------------------------------------------------------------
