@@ -296,6 +296,16 @@ jobs:
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
 
+          # 9. 修复 gst 问题
+      # ------------------------------------------------------------
+      - name: 修复 gst 问题
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          wget -q -O fix-build_ffmpeg.patch https://raw.githubusercontent.com/Waim908/wine-termux/main/proton/10.0/fix-build_ffmpeg.patch
+          patch -p1 -N -t < fix-build_ffmpeg.patch || true
+          rm fix-build_ffmpeg.patch
+
           sed -i '1642s/gstreamer-gl-1.0//g' configure.ac
 
       # ------------------------------------------------------------
