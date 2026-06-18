@@ -134,7 +134,26 @@ jobs:
             libxkbcommon-dev:arm64 \
             libxkbregistry-dev:arm64 \
             libwayland-dev:arm64
-            
+
+      # ------------------------------------------------------------
+      # 2.5 创建 GStreamer GL 头文件符号链接
+      # ------------------------------------------------------------
+      - name: 创建 GStreamer GL 头文件符号链接
+        run: |
+          # 查找 gstglconfig.h 的实际位置
+          echo "=== 查找 gstglconfig.h ==="
+          find /usr -name "gstglconfig.h" 2>/dev/null || echo "未找到 gstglconfig.h"
+          
+          # 如果文件在 aarch64 路径下，创建符号链接到标准路径
+          if [ -f /usr/include/aarch64-linux-gnu/gstreamer-1.0/gst/gl/gstglconfig.h ]; then
+            mkdir -p /usr/include/gstreamer-1.0/gst/gl/
+            ln -sf /usr/include/aarch64-linux-gnu/gstreamer-1.0/gst/gl/gstglconfig.h /usr/include/gstreamer-1.0/gst/gl/gstglconfig.h
+            echo "已创建 gstglconfig.h 符号链接"
+            ls -la /usr/include/gstreamer-1.0/gst/gl/gstglconfig.h
+          else
+            echo "警告: gstglconfig.h 不存在，将使用 Python 脚本禁用 GL 支持"
+          fi
+      
       # ------------------------------------------------------------
       # 4. 安装 llvm-mingw 交叉编译工具链
       # ------------------------------------------------------------
@@ -317,7 +336,11 @@ jobs:
 
           sed -i '1642s/gstreamer-gl-1.0//g' configure.ac
 
-          python3 "$GITHUB_WORKSPACE/disable_gl.py"
+          # 使用 GITHUB_WORKSPACE 调用仓库根目录的 Python 脚本
+          echo "=== 检查 Python 脚本 ==="
+          ls -la $GITHUB_WORKSPACE/disable_gl.py || echo "脚本不存在"
+          python3 $GITHUB_WORKSPACE/disable_gl.py
+
       # ------------------------------------------------------------
       # 10. 修复 GstMapInfo 拼写错误
       # ------------------------------------------------------------
@@ -487,10 +510,15 @@ jobs:
           ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer*.pc || echo "GStreamer .pc 文件不存在"
           pkg-config --modversion gstreamer-1.0 2>/dev/null || echo "pkg-config 找不到 gstreamer"
           
-          export CFLAGS="-O3 -pipe"
-          export CXXFLAGS="-O3 -pipe"
-          export CROSSCFLAGS="-O3 -pipe"
-          export CROSSCXXFLAGS="-O3 -pipe"
+          # 查找 gstglconfig.h 的实际位置
+          echo "=== 查找 gstglconfig.h ==="
+          find /usr -name "gstglconfig.h" 2>/dev/null || echo "未找到 gstglconfig.h"
+          
+          # 添加 GStreamer GL 头文件路径到 CFLAGS
+          export CFLAGS="-O3 -pipe -I/usr/include/aarch64-linux-gnu/gstreamer-1.0"
+          export CXXFLAGS="-O3 -pipe -I/usr/include/aarch64-linux-gnu/gstreamer-1.0"
+          export CROSSCFLAGS="-O3 -pipe -I/usr/include/aarch64-linux-gnu/gstreamer-1.0"
+          export CROSSCXXFLAGS="-O3 -pipe -I/usr/include/aarch64-linux-gnu/gstreamer-1.0"
           export LDFLAGS="-s -L/usr/lib/aarch64-linux-gnu -Wl,--dynamic-linker=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 -Wl,-rpath=/data/data/com.termux/files/usr/glibc/lib"
           export WINE_NLS_DIR=/opt/wine64-native/nls
           
