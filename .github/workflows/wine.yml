@@ -147,8 +147,7 @@ jobs:
           set -e
           # PATH 只在这个步骤内有效
           export PATH="/opt/${{ env.LLVMMINGW_NAME }}/bin:$PATH"
-          sudo mkdir -p /opt/FEX/install-wow64/usr/lib/wine/aarch64-windows
-          sudo mkdir -p /opt/FEX/install-arm64ec/usr/lib/wine/aarch64-windows
+          
           # 克隆 FEX 源码
           git clone --recurse-submodules https://github.com/FEX-Emu/FEX.git /opt/FEX
           cd /opt/FEX
