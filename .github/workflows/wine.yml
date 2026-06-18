@@ -147,7 +147,8 @@ jobs:
           set -e
           # PATH 只在这个步骤内有效
           export PATH="/opt/${{ env.LLVMMINGW_NAME }}/bin:$PATH"
-          
+          mkdir /opt/FEX/install-wow64/usr/lib/wine/aarch64-windows
+          mkdir /opt/FEX/install-arm64ec/usr/lib/wine/aarch64-windows
           # 克隆 FEX 源码
           git clone --recurse-submodules https://github.com/FEX-Emu/FEX.git /opt/FEX
           cd /opt/FEX
@@ -159,7 +160,7 @@ jobs:
           cmake -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
-            -DCMAKE_INSTALL_LIBDIR=/usr/lib/wine/aarch64-windows \
+            -DCMAKE_INSTALL_LIBDIR=/opt/FEX/install-arm64ec/usr/lib/wine/aarch64-windows \
             -DENABLE_LTO=False \
             -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
             -DBUILD_TESTING=False \
@@ -177,7 +178,7 @@ jobs:
           cmake -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
-            -DCMAKE_INSTALL_LIBDIR=/usr/lib/wine/aarch64-windows \
+            -DCMAKE_INSTALL_LIBDIR=/opt/FEX/install-wow64/usr/lib/wine/aarch64-windows \
             -DENABLE_LTO=False \
             -DMINGW_TRIPLE=aarch64-w64-mingw32 \
             -DBUILD_TESTING=False \
