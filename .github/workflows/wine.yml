@@ -317,7 +317,7 @@ jobs:
 
           sed -i '1642s/gstreamer-gl-1.0//g' configure.ac
 
-          python3 ${{ github.workspace }}/disable_gl.py
+          python3 "$GITHUB_WORKSPACE/disable_gl.py"
       # ------------------------------------------------------------
       # 10. 修复 GstMapInfo 拼写错误
       # ------------------------------------------------------------
