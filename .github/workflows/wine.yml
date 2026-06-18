@@ -232,7 +232,47 @@ jobs:
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
-      # ------------------------------------------------------------
+      # ----------------------------- name: 应用 fix-build_ffmpeg.patch
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          wget -q -O fix-build_ffmpeg.patch https://raw.githubusercontent.com/Waim908/wine-termux/main/proton/10.0/fix-build_ffmpeg.patch
+          patch -p1 -N -t < fix-build_ffmpeg.patch || true
+          rm fix-build_ffmpeg.patch
+      - name: 修复 GstMapInfo 拼写错误（GstBufferMapInfo → GstMapInfo）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          # 第 1023 行: GstBufferMapInfo 是 typo，正确类型是 GstMapInfo
+          if [ -f dlls/winegstreamer/media-converter/videoconv.c ]; then
+            sed -i 's/GstBufferMapInfo/GstMapInfo/g' dlls/winegstreamer/media-converter/videoconv.c
+            echo "已修复 GstBufferMapInfo → GstMapInfo"
+          else
+            echo "videoconv.c 不存在，跳过 GstMapInfo 修复"
+          fi
+      - name: 修复 SELinux 兼容性（PAGE_READWRITE → PAGE_EXECUTE_READWRITE）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          sed -i 's/&size, PAGE_READWRITE, &protect_old\[i\]/\&size, PAGE_EXECUTE_READWRITE, \&protect_old[i]/' dlls/ntdll/loader.c
+          echo "已修复 perform_relocations: PAGE_READWRITE → PAGE_EXECUTE_READWRITE"
+      - name: 缩减虚拟地址空间上限（适配 Android/Termux 受限地址空间）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          # 修复地址上限变量
+          sed -i 's/0x7fffffff0000/0x7fffff0000/g' dlls/ntdll/unix/virtual.c
+          # 删除第三个 reserve_area（起始地址 0x7ffffe000000 超出 Android 地址空间）
+          sed -i '/reserve_area.*0x7ffffe000000/d' dlls/ntdll/unix/virtual.c
+          echo "已缩减地址空间上限并移除高危 reserve_area"-------------------------------
+
+      - name: 修复 machine-id 路径（适配 Termux glibc）
+        run: |
+          set -e
+          cd ${{ env.WINE_SOURCE_DIR }}/source
+          sed -i 's|/etc/machine-id|/data/data/com.termux/files/usr/glibc/etc/machine-id|g' server/token.c
+          echo "已修复 machine-id 路径 → /data/data/com.termux/files/usr/glibc/etc/machine-id"
+      
       # 7. 应用 mfplat 补丁
       # ------------------------------------------------------------
       - name: 应用 mfplat 补丁
