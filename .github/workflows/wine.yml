@@ -564,7 +564,7 @@ jobs:
           done
           
           echo "=== 复制 FEX DLL 文件到 Wine 的 aarch64-windows 目录 ==="
-          WINE_AARCH64_DIR="$TARGET_PREFIX/usr/lib/wine/aarch64-windows"
+          WINE_AARCH64_DIR="$TARGET_PREFIX/lib/wine/aarch64-windows"
           mkdir -p "$WINE_AARCH64_DIR"
           
           # 直接使用绝对路径，不依赖环境变量
@@ -597,7 +597,7 @@ jobs:
           echo "=== 最终安装目录结构预览 ==="
           ls -la "$TARGET_PREFIX/share/wine/" || true
           ls -la "$TARGET_PREFIX/bin/" || true
-          ls -la "$TARGET_PREFIX/usr/lib/wine/" || true
+          ls -la "$TARGET_PREFIX/lib/wine/" || true
 
       # ------------------------------------------------------------
       # 20. 验证安装目录内容
