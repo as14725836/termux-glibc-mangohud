@@ -134,7 +134,6 @@ jobs:
           apt-get install -y --no-install-recommends \
             libc++-dev \
             libc++abi-dev \
-            libunwind-dev \
             libssl-dev
 
       # ------------------------------------------------------------
