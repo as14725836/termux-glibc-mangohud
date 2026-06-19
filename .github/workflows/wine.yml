@@ -28,6 +28,14 @@ on:
         options:
         - wow64
         - proton
+      disable_gl:
+        description: '禁用 GL (移除 gstreamer-gl-1.0 依赖)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+        - 'false'
+        - 'true'
 
 env:
   LLVMMINGW_DATE: 20251202
@@ -299,9 +307,10 @@ jobs:
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
       # ------------------------------------------------------------
-      # 9. 修复 gst 问题
+      # 9. 修复 gst 问题（可选 - 通过 disable_gl 开关控制）
       # ------------------------------------------------------------
       - name: 修复 gst 问题
+        if: github.event.inputs.disable_gl == 'true'
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
