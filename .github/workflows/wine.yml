@@ -149,9 +149,7 @@ jobs:
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly \
-            libgstreamer-plugins-bad1.0-dev \
-            libgstreamer-plugins-good1.0-dev
+            gstreamer1.0-plugins-ugly
           
       # ------------------------------------------------------------
       # 4. 安装 llvm-mingw 交叉编译工具链
