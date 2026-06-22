@@ -140,16 +140,6 @@ jobs:
             libwayland-dev:arm64
 
             
-      - name: 安装构建依赖
-        run: |
-          apt-get install -y --no-install-recommends \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-tools \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly
           
       # ------------------------------------------------------------
       # 4. 安装 llvm-mingw 交叉编译工具链
