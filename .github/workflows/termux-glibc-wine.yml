@@ -184,11 +184,7 @@ jobs:
           apply_patch "$GITHUB_WORKSPACE/0004-quartz-adapt-legacy-video-paths-for-winedmo.patch"
           apply_patch "$GITHUB_WORKSPACE/0005-audio-smooth-decoded-media-playback.patch"
           apply_patch "$GITHUB_WORKSPACE/0006-proton-update-runtime-support-for-media-rework.patch"
-          apply_patch "$GITHUB_WORKSPACE/0008-fix-video-playback-in-tokyo-necro.patch"
           apply_patch "$GITHUB_WORKSPACE/0009-fix-atelier-marie-remake-hang-after-intro-cutscene.patch"
-          apply_patch "$GITHUB_WORKSPACE/0009-fix-for-arcania-games-video-playback.patch"
-          apply_patch "$GITHUB_WORKSPACE/0010-add-video-playback-fix-for-trails-in-the-sky-1-2-3.patch"
-          apply_patch "$GITHUB_WORKSPACE/0012-fix-video-playback-in-tex-murphy-overseer.patch"
 
 
           echo "生成 configure 脚本..."
