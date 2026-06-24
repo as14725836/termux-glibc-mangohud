@@ -25,6 +25,7 @@ on:
         - proton_11.0
         - proton_9.0
         - experimental_10.0
+        - ge-proton11-bionic
         - bleeding-edge
       wine_branch:
         description: 'Wine 分支 (仅 Wine 构建)'
@@ -151,9 +152,9 @@ jobs:
           git clone https://github.com/GloriousEggroll/proton-ge-custom.git wine
           cd wine
 
-          git checkout "experimental_10.0"
+          git checkout "ge-proton11-bionic"
 
-          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_11.0' }}"
+          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'ge-proton11-bionic' }}"
           echo "切换到分支: $PROTON_BRANCH"
           git checkout $PROTON_BRANCH
 
