@@ -97,6 +97,8 @@ jobs:
             libdbus-1-dev \
             libssl-dev \
             libasound2-dev \
+            libswscale-dev \
+            libswresample-dev \
             libpulse-dev \
             libudev-dev \
             libcups2-dev \
