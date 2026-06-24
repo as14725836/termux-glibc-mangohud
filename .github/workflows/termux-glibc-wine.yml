@@ -149,7 +149,7 @@ jobs:
           mkdir -p $BUILD_DIR/proton
           cd $BUILD_DIR/proton
 
-          git clone https://github.com/GloriousEggroll/proton-ge-custom.git wine
+          git clone https://github.com/The412Banner/proton-wine.git wine
           cd wine
 
           git checkout "ge-proton11-bionic"
