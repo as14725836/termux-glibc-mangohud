@@ -149,12 +149,16 @@ jobs:
           mkdir -p $BUILD_DIR/proton
           cd $BUILD_DIR/proton
 
-          git clone https://github.com/The412Banner/proton-wine.git wine
+          git clone https://github.com/GloriousEggroll/proton-ge-custom.git wine
           cd wine
+          # 直接拉取 wine 子模块
+          git submodule update --init wine
 
-          git checkout "ge-proton11-bionic"
+          cd wine
+          git checkout d24caaa
 
-          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'ge-proton11-bionic' }}"
+
+          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'ge-proton11' }}"
           echo "切换到分支: $PROTON_BRANCH"
           git checkout $PROTON_BRANCH
 
@@ -174,8 +178,24 @@ jobs:
           }
 
           # 应用所有补丁
-          apply_patch "$GITHUB_WORKSPACE/0001.patch"
-          apply_patch "$GITHUB_WORKSPACE/termux-wine-fix.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0001-fshack-Implement-AMD-FSR-upscaler-for-fullscreen-hac.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0001-qcap-fix-Smart-Tee-preview-allocator-and-RGB32-negot.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0001-win32u-add-env-switch-to-disable-wm-decorations.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0001-winedmo-remove-winegstreamer-media-backend.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0002-mfreadwrite-make-source-reader-video-playback-resili.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0002-qcap-fix-wow64-media-type-marshaling-in-v4l-backend.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0003-mf-stabilize-media-session-and-media-engine-playback.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0004-quartz-adapt-legacy-video-paths-for-winedmo.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0005-audio-smooth-decoded-media-playback.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0006-proton-update-runtime-support-for-media-rework.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0007-winedmo-dsound-dmsynth-dmime-fix-audio-and-video-pla.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0008-fix-video-playback-in-tokyo-necro.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0009-fix-atelier-marie-remake-hang-after-intro-cutscene.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0009-fix-for-arcania-games-video-playback.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0010-add-video-playback-fix-for-trails-in-the-sky-1-2-3.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0012-fix-video-playback-in-tex-murphy-overseer.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0013-winedmo-respect-asf-stream-selection.patch"
+          apply_patch "$GITHUB_WORKSPACE/patches/0014-winedmo-limit-directshow-video-transform-drain.patch"
 
 
           echo "生成 configure 脚本..."
