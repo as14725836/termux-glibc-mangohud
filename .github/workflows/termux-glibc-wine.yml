@@ -156,12 +156,7 @@ jobs:
 
           cd wine
           git checkout d24caaa
-
-
-          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'ge-proton11' }}"
-          echo "切换到分支: $PROTON_BRANCH"
-          git checkout $PROTON_BRANCH
-
+          
                 
           echo "修复 Termux 路径问题..."
           find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
