@@ -167,6 +167,8 @@ jobs:
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
 
+          sed -i 's/^IMPORTS.*=.*user32 mfplat ole32 winegstreamer.*/IMPORTS      = user32 mfplat ole32 winegstreamer winedmo/' dlls/iyuv_32/Makefile.in
+
           echo "补丁应用"
           # 定义函数避免重复
           apply_patch() {
