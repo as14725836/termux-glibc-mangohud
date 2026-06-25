@@ -183,6 +183,7 @@ jobs:
           apply_patch "$GITHUB_WORKSPACE/patch/qcap_wow64_fix_applied.patch"
 
           sed -i '66,78d' include/wine/mfinternal.idl
+          sed -i '57s/]/}/' ./include/wine/mfinternal.idl
 
 
           echo "生成 configure 脚本..."
