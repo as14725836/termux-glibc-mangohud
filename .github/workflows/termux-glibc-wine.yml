@@ -168,6 +168,7 @@ jobs:
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
 
           sed -i 's/^IMPORTS.*=.*user32 mfplat ole32 winegstreamer.*/IMPORTS      = user32 mfplat ole32 winegstreamer winedmo/' dlls/iyuv_32/Makefile.in
+          mv dlls/iyuv_32 dlls/iyuv_32.bak
 
           echo "补丁应用"
           # 定义函数避免重复
