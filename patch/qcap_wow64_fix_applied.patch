@@ -1,0 +1,76 @@
+diff --git a/dlls/qcap/tests/videocapture.c b/dlls/qcap/tests/videocapture.c
+index 3569bf33da4..1cd9c145dc4 100644
+--- a/dlls/qcap/tests/videocapture.c
++++ b/dlls/qcap/tests/videocapture.c
+@@ -22,6 +22,7 @@
+ #include "dshow.h"
+ #include "wine/test.h"
+ #include "wine/strmbase.h"
++#include <dvdmedia.h>
+ 
+ static BOOL compare_media_types(const AM_MEDIA_TYPE *a, const AM_MEDIA_TYPE *b)
+ {
+@@ -29,6 +30,22 @@ static BOOL compare_media_types(const AM_MEDIA_TYPE *a, const AM_MEDIA_TYPE *b)
+             && !memcmp(a->pbFormat, b->pbFormat, a->cbFormat);
+ }
+ 
++static void check_stream_media_type(const AM_MEDIA_TYPE *format)
++{
++    ok(!format->pUnk, "Expected NULL pUnk, got %p.\n", format->pUnk);
++
++    if (IsEqualGUID(&format->formattype, &FORMAT_VideoInfo))
++    {
++        ok(format->cbFormat >= sizeof(VIDEOINFOHEADER), "Got cbFormat %lu.\n", format->cbFormat);
++        ok(!!format->pbFormat, "Expected format block.\n");
++    }
++    else if (IsEqualGUID(&format->formattype, &FORMAT_VideoInfo2))
++    {
++        ok(format->cbFormat == sizeof(VIDEOINFOHEADER2), "Got cbFormat %lu.\n", format->cbFormat);
++        ok(!!format->pbFormat, "Expected format block.\n");
++    }
++}
++
+ #define check_interface(a, b, c) check_interface_(__LINE__, a, b, c)
+ static void check_interface_(unsigned int line, void *iface_ptr, REFIID iid, BOOL supported)
+ {
+@@ -97,6 +114,7 @@ static void test_stream_config(IPin *pin)
+ 
+     hr = IAMStreamConfig_GetFormat(stream_config, &format);
+     ok(hr == S_OK, "Got hr %#lx.\n", hr);
++    check_stream_media_type(format);
+     ok(IsEqualGUID(&format->majortype, &MEDIATYPE_Video), "Got wrong majortype: %s.\n",
+             debugstr_guid(&format->majortype));
+ 
+@@ -135,6 +153,7 @@ static void test_stream_config(IPin *pin)
+ 
+     hr = IAMStreamConfig_GetFormat(stream_config, &format2);
+     ok(hr == S_OK, "Got hr %#lx.\n", hr);
++    check_stream_media_type(format2);
+     ok(IsEqualGUID(&format2->majortype, &MEDIATYPE_Video), "Got wrong majortype: %s.\n",
+             debugstr_guid(&format2->majortype));
+     video_info2 = (VIDEOINFOHEADER *)format2->pbFormat;
+@@ -191,9 +210,11 @@ static void test_stream_config(IPin *pin)
+ 
+         hr = IAMStreamConfig_SetFormat(stream_config, format);
+         ok(hr == S_OK, "Got hr %#lx.\n", hr);
++        check_stream_media_type(format);
+ 
+         hr = IAMStreamConfig_GetFormat(stream_config, &format2);
+         ok(hr == S_OK, "Got hr %#lx.\n", hr);
++        check_stream_media_type(format2);
+         ok(compare_media_types(format, format2), "Media types didn't match.\n");
+         DeleteMediaType(format2);
+ 
+diff --git a/dlls/qcap/v4l.c b/dlls/qcap/v4l.c
+index 5ab9613b4e2..d0e98b16685 100644
+--- a/dlls/qcap/v4l.c
++++ b/dlls/qcap/v4l.c
+@@ -655,6 +655,8 @@ static void put_media_type( const AM_MEDIA_TYPE *mt, struct am_media_type32 *mt3
+     mt32->bTemporalCompression = mt->bTemporalCompression;
+     mt32->lSampleSize          = mt->lSampleSize;
+     mt32->formattype           = mt->formattype;
++    mt32->pUnk                 = 0;
++    mt32->cbFormat             = mt->cbFormat;
+ }
+ 
+ static NTSTATUS wow64_v4l_device_create( void *args )

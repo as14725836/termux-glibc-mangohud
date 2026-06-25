@@ -1,0 +1,2491 @@
+diff --git a/dlls/evr/evr.c b/dlls/evr/evr.c
+index 108f13cdc89..d698cef10a0 100644
+--- a/dlls/evr/evr.c
++++ b/dlls/evr/evr.c
+@@ -349,6 +349,7 @@ static HRESULT evr_copy_sample_buffer(struct evr *filter, const GUID *subtype, I
+     IDirect3DSurface9 *surface;
+     D3DLOCKED_RECT locked_rect;
+     IMFMediaBuffer *buffer;
++    REFERENCE_TIME start, end;
+     UINT64 frame_size = 0;
+     UINT32 width, lines;
+     LONG src_stride;
+@@ -378,6 +379,13 @@ static HRESULT evr_copy_sample_buffer(struct evr *filter, const GUID *subtype, I
+         return hr;
+     }
+ 
++    if (SUCCEEDED(IMediaSample_GetTime(input_sample, &start, &end)))
++    {
++        IMFSample_SetSampleTime(*sample, start);
++        if (end >= start)
++            IMFSample_SetSampleDuration(*sample, end - start);
++    }
++
+     if (SUCCEEDED(hr = IMFSample_GetBufferByIndex(*sample, 0, &buffer)))
+     {
+         if (SUCCEEDED(hr = evr_get_service(buffer, &MR_BUFFER_SERVICE, &IID_IDirect3DSurface9, (void **)&surface)))
+diff --git a/dlls/evr/mixer.c b/dlls/evr/mixer.c
+index deedf031472..65f5501c5c4 100644
+--- a/dlls/evr/mixer.c
++++ b/dlls/evr/mixer.c
+@@ -778,7 +778,7 @@ static HRESULT video_mixer_collect_output_types(struct video_mixer *mixer, const
+                 sizeof(aperture), NULL)))
+         {
+             width = aperture.OffsetX.value + aperture.Area.cx;
+-            height = aperture.OffsetX.value + aperture.Area.cy;
++            height = aperture.OffsetY.value + aperture.Area.cy;
+         }
+         else
+         {
+diff --git a/dlls/evr/presenter.c b/dlls/evr/presenter.c
+index 7ad59ccc958..cf75b36e753 100644
+--- a/dlls/evr/presenter.c
++++ b/dlls/evr/presenter.c
+@@ -30,6 +30,7 @@
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(evr);
++WINE_DECLARE_DEBUG_CHANNEL(mfplat);
+ 
+ /*
+    Initial state represents just created object, presenter never returns to this state.
+@@ -49,6 +50,7 @@ enum presenter_state
+ enum presenter_flags
+ {
+     PRESENTER_MIXER_HAS_INPUT = 0x1,
++    PRESENTER_CURRENT_IMAGE_REQUESTED = 0x2,
+ };
+ 
+ enum streaming_thread_message
+@@ -192,6 +194,9 @@ static struct video_presenter *impl_from_IDirect3DDeviceManager9(IDirect3DDevice
+     return CONTAINING_RECORD(iface, struct video_presenter, IDirect3DDeviceManager9_iface);
+ }
+ 
++static HRESULT video_presenter_process_input(struct video_presenter *presenter);
++static HRESULT video_presenter_create_swapchain(struct video_presenter *presenter);
++
+ static void video_presenter_notify_renderer(struct video_presenter *presenter,
+         LONG event, LONG_PTR param1, LONG_PTR param2)
+ {
+@@ -372,13 +377,26 @@ static HRESULT video_presenter_invalidate_media_type(struct video_presenter *pre
+         return hr;
+ 
+     video_presenter_get_native_video_size(presenter);
++    if (presenter->swapchain && presenter->native_size.cx > 0 && presenter->native_size.cy > 0)
++    {
++        IDirect3DSwapChain9_Release(presenter->swapchain);
++        presenter->swapchain = NULL;
++    }
+ 
+     while (SUCCEEDED(hr = IMFTransform_GetOutputAvailableType(presenter->mixer, 0, idx++, &candidate_type)))
+     {
+         MFVideoArea aperture = {{ 0 }};
+ 
+         rect = presenter->dst_rect;
+-        if (!IsRectEmpty(&rect))
++        if (presenter->native_size.cx > 0 && presenter->native_size.cy > 0
++                && (IsRectEmpty(&rect)
++                || rect.right - rect.left > presenter->native_size.cx
++                || rect.bottom - rect.top > presenter->native_size.cy))
++        {
++            aperture.Area.cx = presenter->native_size.cx;
++            aperture.Area.cy = presenter->native_size.cy;
++        }
++        else if (!IsRectEmpty(&rect))
+         {
+             aperture.Area.cx = rect.right - rect.left;
+             aperture.Area.cy = rect.bottom - rect.top;
+@@ -472,17 +490,106 @@ static BOOL video_presenter_sample_queue_pop(struct video_presenter *presenter,
+     return *sample != NULL;
+ }
+ 
++static BOOL video_presenter_sample_queue_has_space(struct video_presenter *presenter)
++{
++    struct sample_queue *queue = &presenter->thread.queue;
++    BOOL has_space;
++
++    if (!queue->size)
++        return TRUE;
++
++    EnterCriticalSection(&queue->cs);
++    has_space = queue->used < queue->size;
++    LeaveCriticalSection(&queue->cs);
++
++    return has_space;
++}
++
++static IMFSample *video_presenter_sample_queue_get_last_presented(struct video_presenter *presenter)
++{
++    struct sample_queue *queue = &presenter->thread.queue;
++    IMFSample *sample;
++
++    if (!queue->size)
++        return NULL;
++
++    /* GetCurrentImage() must take a stable, non-consuming snapshot here. Using
++     * a try-lock can intermittently fail to return the last frame and causes
++     * flicker in Catherine Classic videos. */
++    EnterCriticalSection(&queue->cs);
++    if ((sample = queue->last_presented))
++        IMFSample_AddRef(sample);
++    LeaveCriticalSection(&queue->cs);
++
++    return sample;
++}
++
++static void video_presenter_sample_queue_set_last_presented(struct video_presenter *presenter, IMFSample *sample)
++{
++    struct sample_queue *queue = &presenter->thread.queue;
++    IMFSample *old_sample;
++
++    if (!queue->size)
++        return;
++
++    IMFSample_AddRef(sample);
++
++    EnterCriticalSection(&queue->cs);
++    old_sample = queue->last_presented;
++    queue->last_presented = sample;
++    LeaveCriticalSection(&queue->cs);
++
++    if (old_sample)
++        IMFSample_Release(old_sample);
++}
++
++static void video_presenter_sample_queue_clear_last_presented(struct video_presenter *presenter)
++{
++    struct sample_queue *queue = &presenter->thread.queue;
++    IMFSample *sample;
++
++    EnterCriticalSection(&queue->cs);
++    sample = queue->last_presented;
++    queue->last_presented = NULL;
++    LeaveCriticalSection(&queue->cs);
++
++    if (sample)
++        IMFSample_Release(sample);
++}
+ 
+ static void video_presenter_sample_queue_free(struct video_presenter *presenter)
+ {
+     struct sample_queue *queue = &presenter->thread.queue;
+     IMFSample *sample;
+ 
++    if (!queue->size)
++        return;
++
+     while (video_presenter_sample_queue_pop(presenter, &sample))
+         IMFSample_Release(sample);
+ 
++    video_presenter_sample_queue_clear_last_presented(presenter);
++
+     free(queue->samples);
+     DeleteCriticalSection(&queue->cs);
++    memset(queue, 0, sizeof(*queue));
++}
++
++static void video_presenter_flush_samples(struct video_presenter *presenter)
++{
++    struct sample_queue *queue = &presenter->thread.queue;
++    IMFSample *sample;
++
++    if (!queue->size)
++        return;
++
++    presenter->flags &= ~PRESENTER_MIXER_HAS_INPUT;
++
++    video_presenter_sample_queue_clear_last_presented(presenter);
++
++    while (video_presenter_sample_queue_pop(presenter, &sample))
++        IMFSample_Release(sample);
++
+ }
+ 
+ static HRESULT video_presenter_get_sample_surface(IMFSample *sample, IDirect3DSurface9 **surface)
+@@ -504,11 +611,32 @@ static HRESULT video_presenter_get_sample_surface(IMFSample *sample, IDirect3DSu
+     return hr;
+ }
+ 
++static void video_presenter_ensure_swapchain(struct video_presenter *presenter)
++{
++    HWND window;
++    HRESULT hr;
++
++    if (presenter->swapchain || (presenter->flags & PRESENTER_CURRENT_IMAGE_REQUESTED)
++            || presenter->native_size.cx <= 0 || presenter->native_size.cy <= 0)
++        return;
++
++    if (!presenter->video_window)
++    {
++        if (!(window = GetFocus()) && !(window = GetActiveWindow()))
++            window = GetForegroundWindow();
++
++        if (IsWindow(window))
++            presenter->video_window = window;
++    }
++
++    if (presenter->video_window && FAILED(hr = video_presenter_create_swapchain(presenter)))
++        WARN("Failed to create fallback swapchain, hr %#lx.\n", hr);
++}
++
+ static void video_presenter_sample_present(struct video_presenter *presenter, IMFSample *sample)
+ {
+     IDirect3DSurface9 *surface, *backbuffer;
+     IDirect3DDevice9 *device;
+-    struct sample_queue *queue = &presenter->thread.queue;
+     HRESULT hr;
+ 
+     if (FAILED(hr = video_presenter_get_sample_surface(sample, &surface)))
+@@ -517,6 +645,8 @@ static void video_presenter_sample_present(struct video_presenter *presenter, IM
+         return;
+     }
+ 
++    video_presenter_ensure_swapchain(presenter);
++
+     if (presenter->swapchain)
+     {
+         if (SUCCEEDED(hr = IDirect3DSwapChain9_GetBackBuffer(presenter->swapchain, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer)))
+@@ -534,9 +664,7 @@ static void video_presenter_sample_present(struct video_presenter *presenter, IM
+             WARN("Failed to get a backbuffer, hr %#lx.\n", hr);
+     }
+ 
+-    IMFSample_AddRef(sample);
+-    if ((sample = InterlockedExchangePointer((void **)&queue->last_presented, sample)))
+-        IMFSample_Release(sample);
++    video_presenter_sample_queue_set_last_presented(presenter, sample);
+ 
+     IDirect3DSurface9_Release(surface);
+ }
+@@ -549,6 +677,7 @@ static void video_presenter_check_queue(struct video_presenter *presenter,
+     IMFSample *sample;
+     MFTIME systime;
+     BOOL present;
++    BOOL presented = FALSE;
+     HRESULT hr;
+ 
+     while (video_presenter_sample_queue_pop(presenter, &sample))
+@@ -569,12 +698,16 @@ static void video_presenter_check_queue(struct video_presenter *presenter,
+             {
+                 /* Convert 100ns -> msec */
+                 wait = (delta - 3 * presenter->frame_time_threshold) / 10000;
++                wait = min( wait, 10 );
+                 present = FALSE;
+             }
+         }
+ 
+         if (present)
++        {
+             video_presenter_sample_present(presenter, sample);
++            presented = TRUE;
++        }
+         else
+             video_presenter_sample_queue_push(presenter, sample, TRUE);
+ 
+@@ -588,17 +721,18 @@ static void video_presenter_check_queue(struct video_presenter *presenter,
+         wait = INFINITE;
+ 
+     *next_wait = wait;
+-}
+ 
+-static void video_presenter_schedule_sample(struct video_presenter *presenter, IMFSample *sample)
+-{
+-    if (!presenter->thread.tid)
++    if (presented && (presenter->flags & PRESENTER_MIXER_HAS_INPUT))
+     {
+-        WARN("Streaming thread hasn't been started.\n");
+-        return;
++        EnterCriticalSection(&presenter->cs);
++        video_presenter_process_input(presenter);
++        LeaveCriticalSection(&presenter->cs);
+     }
++}
+ 
+-    if (presenter->clock)
++static void video_presenter_schedule_sample(struct video_presenter *presenter, IMFSample *sample)
++{
++    if (presenter->clock && presenter->thread.tid && presenter->thread.queue.size)
+     {
+         video_presenter_sample_queue_push(presenter, sample, FALSE);
+         PostThreadMessageW(presenter->thread.tid, EVRM_PRESENT, 0, 0);
+@@ -622,6 +756,9 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
+     if (!presenter->media_type)
+         return S_OK;
+ 
++    TRACE_(mfplat)("presenter %p process input state %u flags %#x mixer %p allocator %p clock %p.\n",
++            presenter, presenter->state, presenter->flags, presenter->mixer, presenter->allocator, presenter->clock);
++
+     while (hr == S_OK)
+     {
+         LONGLONG mixing_started, mixing_finished;
+@@ -630,11 +767,16 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
+         if (!(presenter->flags & PRESENTER_MIXER_HAS_INPUT))
+             break;
+ 
++        if (presenter->clock && !video_presenter_sample_queue_has_space(presenter))
++            break;
++
++        TRACE_(mfplat)("presenter %p allocating output sample.\n", presenter);
+         if (FAILED(hr = IMFVideoSampleAllocator_AllocateSample(presenter->allocator, &sample)))
+         {
+             WARN("Failed to allocate a sample, hr %#lx.\n", hr);
+             break;
+         }
++        TRACE_(mfplat)("presenter %p allocated output sample %p.\n", presenter, sample);
+ 
+         memset(&buffer, 0, sizeof(buffer));
+         buffer.pSample = sample;
+@@ -642,8 +784,10 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
+         if (presenter->clock)
+             IMFClock_GetCorrelatedTime(presenter->clock, 0, &mixing_started, &systime);
+ 
++        TRACE_(mfplat)("presenter %p processing mixer output sample %p.\n", presenter, sample);
+         if (FAILED(hr = IMFTransform_ProcessOutput(presenter->mixer, 0, 1, &buffer, &status)))
+         {
++            TRACE_(mfplat)("presenter %p processed mixer output sample %p, hr %#lx.\n", presenter, sample, hr);
+             /* FIXME: failure path probably needs to handle some errors specifically */
+             presenter->flags &= ~PRESENTER_MIXER_HAS_INPUT;
+             IMFSample_Release(sample);
+@@ -651,6 +795,8 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
+         }
+         else
+         {
++            TRACE_(mfplat)("presenter %p processed mixer output sample %p, hr %#lx status %#lx.\n",
++                    presenter, sample, hr, status);
+             if (presenter->clock)
+             {
+                 LONGLONG latency;
+@@ -663,12 +809,16 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
+             if (buffer.pEvents)
+                 IMFCollection_Release(buffer.pEvents);
+ 
++            TRACE_(mfplat)("presenter %p scheduling output sample %p.\n", presenter, sample);
+             video_presenter_schedule_sample(presenter, sample);
++            TRACE_(mfplat)("presenter %p scheduled output sample %p.\n", presenter, sample);
+ 
+             IMFSample_Release(sample);
+         }
+     }
+ 
++    TRACE_(mfplat)("presenter %p process input done, hr %#lx flags %#x.\n", presenter, hr, presenter->flags);
++
+     return S_OK;
+ }
+ 
+@@ -753,9 +903,6 @@ static HRESULT video_presenter_start_streaming(struct video_presenter *presenter
+ 
+ static HRESULT video_presenter_end_streaming(struct video_presenter *presenter)
+ {
+-    struct sample_queue *queue = &presenter->thread.queue;
+-    IMFSample *sample;
+-
+     if (!presenter->thread.hthread)
+         return S_OK;
+ 
+@@ -766,11 +913,9 @@ static HRESULT video_presenter_end_streaming(struct video_presenter *presenter)
+ 
+     TRACE("Terminated streaming thread tid %#lx.\n", presenter->thread.tid);
+ 
+-    if ((sample = InterlockedExchangePointer((void **)&queue->last_presented, NULL)))
+-        IMFSample_Release(sample);
+-
+-    video_presenter_sample_queue_free(presenter);
+-    memset(&presenter->thread, 0, sizeof(presenter->thread));
++    video_presenter_flush_samples(presenter);
++    presenter->thread.hthread = NULL;
++    presenter->thread.tid = 0;
+     video_presenter_set_allocator_callback(presenter, NULL);
+ 
+     return S_OK;
+@@ -875,6 +1020,7 @@ static ULONG WINAPI video_presenter_inner_Release(IUnknown *iface)
+     if (!refcount)
+     {
+         video_presenter_end_streaming(presenter);
++        video_presenter_sample_queue_free(presenter);
+         video_presenter_clear_container(presenter);
+         video_presenter_reset_media_type(presenter);
+         DeleteCriticalSection(&presenter->cs);
+@@ -985,10 +1131,21 @@ static HRESULT WINAPI video_presenter_ProcessMessage(IMFVideoPresenter *iface, M
+ 
+     TRACE("%p, %d, %Iu.\n", iface, message, param);
+ 
++    TRACE_(mfplat)("presenter %p entering ProcessMessage %u.\n", presenter, message);
+     EnterCriticalSection(&presenter->cs);
++    TRACE_(mfplat)("presenter %p entered ProcessMessage %u.\n", presenter, message);
+ 
+     switch (message)
+     {
++        case MFVP_MESSAGE_FLUSH:
++            if (presenter->state == PRESENTER_STATE_SHUT_DOWN)
++                hr = MF_E_SHUTDOWN;
++            else
++            {
++                video_presenter_flush_samples(presenter);
++                hr = S_OK;
++            }
++            break;
+         case MFVP_MESSAGE_INVALIDATEMEDIATYPE:
+             if (presenter->state == PRESENTER_STATE_SHUT_DOWN)
+                 hr = MF_E_SHUTDOWN;
+@@ -1013,6 +1170,7 @@ static HRESULT WINAPI video_presenter_ProcessMessage(IMFVideoPresenter *iface, M
+     }
+ 
+     LeaveCriticalSection(&presenter->cs);
++    TRACE_(mfplat)("presenter %p leaving ProcessMessage %u, hr %#lx.\n", presenter, message, hr);
+ 
+     return hr;
+ }
+@@ -1413,16 +1571,36 @@ static HRESULT video_presenter_create_swapchain(struct video_presenter *presente
+ {
+     D3DPRESENT_PARAMETERS present_params = { 0 };
+     IDirect3DDevice9 *d3d_device;
++    LONG width = 0, height = 0;
+     HRESULT hr;
+ 
+     if (SUCCEEDED(hr = video_presenter_get_device(presenter, &d3d_device)))
+     {
+-        present_params.hDeviceWindow = presenter->video_window;
+-        present_params.Windowed = TRUE;
+-        present_params.SwapEffect = D3DSWAPEFFECT_COPY;
+-        present_params.Flags = D3DPRESENTFLAG_VIDEO;
+-        present_params.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+-        hr = IDirect3DDevice9_CreateAdditionalSwapChain(d3d_device, &present_params, &presenter->swapchain);
++        if (presenter->native_size.cx <= 0 || presenter->native_size.cy <= 0)
++        {
++            IDirect3DDevice9_Release(d3d_device);
++            IDirect3DDeviceManager9_UnlockDevice(presenter->device_manager, presenter->hdevice, FALSE);
++            return MF_E_TRANSFORM_TYPE_NOT_SET;
++        }
++
++        width = presenter->native_size.cx;
++        height = presenter->native_size.cy;
++
++        if (width > 0 && height > 0)
++        {
++            present_params.BackBufferWidth = width;
++            present_params.BackBufferHeight = height;
++            present_params.hDeviceWindow = presenter->video_window;
++            present_params.Windowed = TRUE;
++            present_params.BackBufferFormat = D3DFMT_X8R8G8B8;
++            present_params.BackBufferCount = 1;
++            present_params.SwapEffect = D3DSWAPEFFECT_COPY;
++            present_params.Flags = D3DPRESENTFLAG_VIDEO;
++            present_params.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
++            hr = IDirect3DDevice9_CreateAdditionalSwapChain(d3d_device, &present_params, &presenter->swapchain);
++        }
++        else
++            hr = MF_E_TRANSFORM_TYPE_NOT_SET;
+ 
+         IDirect3DDevice9_Release(d3d_device);
+         IDirect3DDeviceManager9_UnlockDevice(presenter->device_manager, presenter->hdevice, FALSE);
+@@ -1447,7 +1625,8 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
+         if (presenter->swapchain)
+             IDirect3DSwapChain9_Release(presenter->swapchain);
+         presenter->video_window = window;
+-        hr = video_presenter_create_swapchain(presenter);
++        if (presenter->native_size.cx > 0 && presenter->native_size.cy > 0)
++            hr = video_presenter_create_swapchain(presenter);
+     }
+     LeaveCriticalSection(&presenter->cs);
+ 
+@@ -1493,7 +1672,6 @@ static HRESULT WINAPI video_presenter_control_GetCurrentImage(IMFVideoDisplayCon
+         BYTE **dib, DWORD *dib_size, LONGLONG *timestamp)
+ {
+     struct video_presenter *presenter = impl_from_IMFVideoDisplayControl(iface);
+-    struct sample_queue *queue = &presenter->thread.queue;
+     IDirect3DSurface9 *readback = NULL, *surface;
+     D3DSURFACE_DESC surface_desc;
+     D3DLOCKED_RECT mapped_rect;
+@@ -1505,8 +1683,15 @@ static HRESULT WINAPI video_presenter_control_GetCurrentImage(IMFVideoDisplayCon
+     TRACE("%p, %p, %p, %p, %p.\n", iface, header, dib, dib_size, timestamp);
+ 
+     EnterCriticalSection(&presenter->cs);
++    presenter->flags |= PRESENTER_CURRENT_IMAGE_REQUESTED;
++    if (presenter->swapchain)
++    {
++        IDirect3DSwapChain9_Release(presenter->swapchain);
++        presenter->swapchain = NULL;
++    }
++    LeaveCriticalSection(&presenter->cs);
+ 
+-    if (!(sample = InterlockedExchangePointer((void **)&queue->last_presented, NULL)))
++    if (!(sample = video_presenter_sample_queue_get_last_presented(presenter)))
+     {
+         hr = MF_E_INVALIDREQUEST;
+     }
+@@ -1570,8 +1755,6 @@ static HRESULT WINAPI video_presenter_control_GetCurrentImage(IMFVideoDisplayCon
+     if (sample)
+         IMFSample_Release(sample);
+ 
+-    LeaveCriticalSection(&presenter->cs);
+-
+     return hr;
+ }
+ 
+@@ -2186,7 +2369,7 @@ HRESULT evr_presenter_create(IUnknown *outer, void **out)
+     object->refcount = 1;
+     object->src_rect.right = object->src_rect.bottom = 1.0f;
+     object->ar_mode = MFVideoARMode_PreservePicture | MFVideoARMode_PreservePixel;
+-    object->allocator_capacity = 3;
++    object->allocator_capacity = 8;
+     InitializeCriticalSection(&object->cs);
+ 
+     if (FAILED(hr = DXVA2CreateDirect3DDeviceManager9(&object->reset_token, &object->device_manager)))
+diff --git a/dlls/evr/sample.c b/dlls/evr/sample.c
+index aa3f120b115..27f44610db6 100644
+--- a/dlls/evr/sample.c
++++ b/dlls/evr/sample.c
+@@ -1268,12 +1268,10 @@ static HRESULT WINAPI video_sample_GetSampleTime(IMFSample *iface, LONGLONG *tim
+ 
+     TRACE("%p, %p.\n", iface, timestamp);
+ 
+-    EnterCriticalSection(&sample->cs);
+     if (sample->flags & SAMPLE_PROP_HAS_TIMESTAMP)
+         *timestamp = sample->timestamp;
+     else
+         hr = MF_E_NO_SAMPLE_TIMESTAMP;
+-    LeaveCriticalSection(&sample->cs);
+ 
+     return hr;
+ }
+@@ -1284,10 +1282,8 @@ static HRESULT WINAPI video_sample_SetSampleTime(IMFSample *iface, LONGLONG time
+ 
+     TRACE("%p, %s.\n", iface, debugstr_time(timestamp));
+ 
+-    EnterCriticalSection(&sample->cs);
+     sample->timestamp = timestamp;
+     sample->flags |= SAMPLE_PROP_HAS_TIMESTAMP;
+-    LeaveCriticalSection(&sample->cs);
+ 
+     return S_OK;
+ }
+@@ -1299,12 +1295,10 @@ static HRESULT WINAPI video_sample_GetSampleDuration(IMFSample *iface, LONGLONG
+ 
+     TRACE("%p, %p.\n", iface, duration);
+ 
+-    EnterCriticalSection(&sample->cs);
+     if (sample->flags & SAMPLE_PROP_HAS_DURATION)
+         *duration = sample->duration;
+     else
+         hr = MF_E_NO_SAMPLE_DURATION;
+-    LeaveCriticalSection(&sample->cs);
+ 
+     return hr;
+ }
+@@ -1315,10 +1309,8 @@ static HRESULT WINAPI video_sample_SetSampleDuration(IMFSample *iface, LONGLONG
+ 
+     TRACE("%p, %s.\n", iface, debugstr_time(duration));
+ 
+-    EnterCriticalSection(&sample->cs);
+     sample->duration = duration;
+     sample->flags |= SAMPLE_PROP_HAS_DURATION;
+-    LeaveCriticalSection(&sample->cs);
+ 
+     return S_OK;
+ }
+diff --git a/dlls/mf/clock.c b/dlls/mf/clock.c
+index e6be05d2794..6f5611e19eb 100644
+--- a/dlls/mf/clock.c
++++ b/dlls/mf/clock.c
+@@ -294,15 +294,22 @@ static ULONG WINAPI present_clock_Release(IMFPresentationClock *iface)
+ static HRESULT WINAPI present_clock_GetClockCharacteristics(IMFPresentationClock *iface, DWORD *flags)
+ {
+     struct presentation_clock *clock = impl_from_IMFPresentationClock(iface);
++    IMFPresentationTimeSource *time_source;
+     HRESULT hr = MF_E_CLOCK_NO_TIME_SOURCE;
+ 
+     TRACE("%p, %p.\n", iface, flags);
+ 
+     EnterCriticalSection(&clock->cs);
+-    if (clock->time_source)
+-        hr = IMFPresentationTimeSource_GetClockCharacteristics(clock->time_source, flags);
++    if ((time_source = clock->time_source))
++        IMFPresentationTimeSource_AddRef(time_source);
+     LeaveCriticalSection(&clock->cs);
+ 
++    if (time_source)
++    {
++        hr = IMFPresentationTimeSource_GetClockCharacteristics(time_source, flags);
++        IMFPresentationTimeSource_Release(time_source);
++    }
++
+     return hr;
+ }
+ 
+@@ -310,15 +317,22 @@ static HRESULT WINAPI present_clock_GetCorrelatedTime(IMFPresentationClock *ifac
+         LONGLONG *clock_time, MFTIME *system_time)
+ {
+     struct presentation_clock *clock = impl_from_IMFPresentationClock(iface);
++    IMFPresentationTimeSource *time_source;
+     HRESULT hr = MF_E_CLOCK_NO_TIME_SOURCE;
+ 
+     TRACE("%p, %#lx, %p, %p.\n", iface, reserved, clock_time, system_time);
+ 
+     EnterCriticalSection(&clock->cs);
+-    if (clock->time_source)
+-        hr = IMFPresentationTimeSource_GetCorrelatedTime(clock->time_source, reserved, clock_time, system_time);
++    if ((time_source = clock->time_source))
++        IMFPresentationTimeSource_AddRef(time_source);
+     LeaveCriticalSection(&clock->cs);
+ 
++    if (time_source)
++    {
++        hr = IMFPresentationTimeSource_GetCorrelatedTime(time_source, reserved, clock_time, system_time);
++        IMFPresentationTimeSource_Release(time_source);
++    }
++
+     return hr;
+ }
+ 
+@@ -347,15 +361,22 @@ static HRESULT WINAPI present_clock_GetState(IMFPresentationClock *iface, DWORD
+ static HRESULT WINAPI present_clock_GetProperties(IMFPresentationClock *iface, MFCLOCK_PROPERTIES *props)
+ {
+     struct presentation_clock *clock = impl_from_IMFPresentationClock(iface);
++    IMFPresentationTimeSource *time_source;
+     HRESULT hr = MF_E_CLOCK_NO_TIME_SOURCE;
+ 
+     TRACE("%p, %p.\n", iface, props);
+ 
+     EnterCriticalSection(&clock->cs);
+-    if (clock->time_source)
+-        hr = IMFPresentationTimeSource_GetProperties(clock->time_source, props);
++    if ((time_source = clock->time_source))
++        IMFPresentationTimeSource_AddRef(time_source);
+     LeaveCriticalSection(&clock->cs);
+ 
++    if (time_source)
++    {
++        hr = IMFPresentationTimeSource_GetProperties(time_source, props);
++        IMFPresentationTimeSource_Release(time_source);
++    }
++
+     return hr;
+ }
+ 
+@@ -427,6 +448,7 @@ static HRESULT WINAPI present_clock_GetTimeSource(IMFPresentationClock *iface,
+ static HRESULT WINAPI present_clock_GetTime(IMFPresentationClock *iface, MFTIME *time)
+ {
+     struct presentation_clock *clock = impl_from_IMFPresentationClock(iface);
++    IMFPresentationTimeSource *time_source;
+     HRESULT hr = MF_E_CLOCK_NO_TIME_SOURCE;
+     MFTIME systime;
+ 
+@@ -436,10 +458,16 @@ static HRESULT WINAPI present_clock_GetTime(IMFPresentationClock *iface, MFTIME
+         return E_POINTER;
+ 
+     EnterCriticalSection(&clock->cs);
+-    if (clock->time_source)
+-        hr = IMFPresentationTimeSource_GetCorrelatedTime(clock->time_source, 0, time, &systime);
++    if ((time_source = clock->time_source))
++        IMFPresentationTimeSource_AddRef(time_source);
+     LeaveCriticalSection(&clock->cs);
+ 
++    if (time_source)
++    {
++        hr = IMFPresentationTimeSource_GetCorrelatedTime(time_source, 0, time, &systime);
++        IMFPresentationTimeSource_Release(time_source);
++    }
++
+     return hr;
+ }
+ 
+@@ -557,7 +585,7 @@ static HRESULT clock_call_state_change(MFTIME system_time, struct clock_state_ch
+ }
+ 
+ static HRESULT clock_change_state(struct presentation_clock *clock, enum clock_command command,
+-        struct clock_state_change_param param)
++        struct clock_state_change_param param, DWORD *remove_key)
+ {
+     static const BYTE state_change_is_allowed[MFCLOCK_STATE_PAUSED+1][CLOCK_CMD_MAX] =
+     {   /*              S  S* P, R  */
+@@ -581,6 +609,7 @@ static HRESULT clock_change_state(struct presentation_clock *clock, enum clock_c
+         /* CLOCK_CMD_SET_RATE */ CLOCK_NOTIFY_SET_RATE,
+     };
+     enum clock_notification notification;
++    IMFClockStateSink *time_source_sink;
+     struct clock_sink *sink;
+     MFCLOCK_STATE old_state;
+     IMFAsyncResult *result;
+@@ -606,7 +635,13 @@ static HRESULT clock_change_state(struct presentation_clock *clock, enum clock_c
+     else
+         notification = notifications[command];
+ 
+-    if (FAILED(hr = clock_call_state_change(system_time, param, notification, clock->time_source_sink)))
++    time_source_sink = clock->time_source_sink;
++    IMFClockStateSink_AddRef(time_source_sink);
++    LeaveCriticalSection(&clock->cs);
++    hr = clock_call_state_change(system_time, param, notification, time_source_sink);
++    EnterCriticalSection(&clock->cs);
++    IMFClockStateSink_Release(time_source_sink);
++    if (FAILED(hr))
+         return hr;
+ 
+     old_state = clock->state;
+@@ -658,15 +693,19 @@ static HRESULT WINAPI present_clock_Start(IMFPresentationClock *iface, LONGLONG
+ {
+     struct presentation_clock *clock = impl_from_IMFPresentationClock(iface);
+     struct clock_state_change_param param = {{0}};
++    DWORD remove_key = 0;
+     HRESULT hr;
+ 
+     TRACE("%p, %s.\n", iface, debugstr_time(start_offset));
+ 
+     EnterCriticalSection(&clock->cs);
+     clock->start_offset = param.u.offset = start_offset;
+-    hr = clock_change_state(clock, CLOCK_CMD_START, param);
++    hr = clock_change_state(clock, CLOCK_CMD_START, param, &remove_key);
+     LeaveCriticalSection(&clock->cs);
+ 
++    if (remove_key)
++        MFRemovePeriodicCallback(remove_key);
++
+     return hr;
+ }
+ 
+@@ -674,14 +713,18 @@ static HRESULT WINAPI present_clock_Stop(IMFPresentationClock *iface)
+ {
+     struct presentation_clock *clock = impl_from_IMFPresentationClock(iface);
+     struct clock_state_change_param param = {{0}};
++    DWORD remove_key = 0;
+     HRESULT hr;
+ 
+     TRACE("%p.\n", iface);
+ 
+     EnterCriticalSection(&clock->cs);
+-    hr = clock_change_state(clock, CLOCK_CMD_STOP, param);
++    hr = clock_change_state(clock, CLOCK_CMD_STOP, param, &remove_key);
+     LeaveCriticalSection(&clock->cs);
+ 
++    if (remove_key)
++        MFRemovePeriodicCallback(remove_key);
++
+     return hr;
+ }
+ 
+@@ -689,14 +732,18 @@ static HRESULT WINAPI present_clock_Pause(IMFPresentationClock *iface)
+ {
+     struct presentation_clock *clock = impl_from_IMFPresentationClock(iface);
+     struct clock_state_change_param param = {{0}};
++    DWORD remove_key = 0;
+     HRESULT hr;
+ 
+     TRACE("%p.\n", iface);
+ 
+     EnterCriticalSection(&clock->cs);
+-    hr = clock_change_state(clock, CLOCK_CMD_PAUSE, param);
++    hr = clock_change_state(clock, CLOCK_CMD_PAUSE, param, &remove_key);
+     LeaveCriticalSection(&clock->cs);
+ 
++    if (remove_key)
++        MFRemovePeriodicCallback(remove_key);
++
+     return hr;
+ }
+ 
+@@ -742,6 +789,7 @@ static HRESULT WINAPI present_clock_rate_SetRate(IMFRateControl *iface, BOOL thi
+ {
+     struct presentation_clock *clock = impl_from_IMFRateControl(iface);
+     struct clock_state_change_param param;
++    DWORD remove_key = 0;
+     HRESULT hr;
+ 
+     TRACE("%p, %d, %f.\n", iface, thin, rate);
+@@ -751,10 +799,13 @@ static HRESULT WINAPI present_clock_rate_SetRate(IMFRateControl *iface, BOOL thi
+ 
+     EnterCriticalSection(&clock->cs);
+     param.u.rate = rate;
+-    if (SUCCEEDED(hr = clock_change_state(clock, CLOCK_CMD_SET_RATE, param)))
++    if (SUCCEEDED(hr = clock_change_state(clock, CLOCK_CMD_SET_RATE, param, &remove_key)))
+         clock->rate = rate;
+     LeaveCriticalSection(&clock->cs);
+ 
++    if (remove_key)
++        MFRemovePeriodicCallback(remove_key);
++
+     return hr;
+ }
+ 
+@@ -988,16 +1039,21 @@ static ULONG WINAPI present_clock_shutdown_Release(IMFShutdown *iface)
+ static HRESULT WINAPI present_clock_shutdown_Shutdown(IMFShutdown *iface)
+ {
+     struct presentation_clock *clock = impl_from_IMFShutdown(iface);
++    DWORD remove_key = 0;
+ 
+     TRACE("%p.\n", iface);
+ 
+     EnterCriticalSection(&clock->cs);
+     clock->is_shut_down = TRUE;
++    if (clock->key)
++    {
++        remove_key = clock->key;
++        clock->key = 0;
++    }
+     LeaveCriticalSection(&clock->cs);
+ 
+-    return S_OK;
+-}
+-
++    if (remove_key)
++        MFRemovePeriodicCallback(remove_key);
+ static HRESULT WINAPI present_clock_shutdown_GetShutdownStatus(IMFShutdown *iface, MFSHUTDOWN_STATUS *status)
+ {
+     struct presentation_clock *clock = impl_from_IMFShutdown(iface);
+diff --git a/dlls/mf/evr.c b/dlls/mf/evr.c
+index f09cf43f8bf..36387ab941c 100644
+--- a/dlls/mf/evr.c
++++ b/dlls/mf/evr.c
+@@ -188,13 +188,22 @@ static HRESULT video_renderer_init_presenter_services(struct video_renderer *ren
+     if (SUCCEEDED(hr = IMFVideoPresenter_QueryInterface(renderer->presenter, &IID_IMFTopologyServiceLookupClient,
+             (void **)&lookup_client)))
+     {
++        EnterCriticalSection(&renderer->cs);
+         renderer->flags |= EVR_INIT_SERVICES;
++        LeaveCriticalSection(&renderer->cs);
++
+         if (SUCCEEDED(hr = IMFTopologyServiceLookupClient_InitServicePointers(lookup_client,
+                 &renderer->IMFTopologyServiceLookup_iface)))
+         {
++            EnterCriticalSection(&renderer->cs);
+             renderer->flags |= EVR_PRESENTER_INITED_SERVICES;
++            LeaveCriticalSection(&renderer->cs);
+         }
++
++        EnterCriticalSection(&renderer->cs);
+         renderer->flags &= ~EVR_INIT_SERVICES;
++        LeaveCriticalSection(&renderer->cs);
++
+         IMFTopologyServiceLookupClient_Release(lookup_client);
+     }
+ 
+@@ -204,13 +213,18 @@ static HRESULT video_renderer_init_presenter_services(struct video_renderer *ren
+ static void video_renderer_release_presenter_services(struct video_renderer *renderer)
+ {
+     IMFTopologyServiceLookupClient *lookup_client;
++    BOOL release;
++
++    EnterCriticalSection(&renderer->cs);
++    release = !!(renderer->flags & EVR_PRESENTER_INITED_SERVICES);
++    renderer->flags &= ~EVR_PRESENTER_INITED_SERVICES;
++    LeaveCriticalSection(&renderer->cs);
+ 
+-    if (renderer->flags & EVR_PRESENTER_INITED_SERVICES && SUCCEEDED(IMFVideoPresenter_QueryInterface(renderer->presenter,
++    if (release && SUCCEEDED(IMFVideoPresenter_QueryInterface(renderer->presenter,
+             &IID_IMFTopologyServiceLookupClient, (void **)&lookup_client)))
+     {
+         IMFTopologyServiceLookupClient_ReleaseServicePointers(lookup_client);
+         IMFTopologyServiceLookupClient_Release(lookup_client);
+-        renderer->flags &= ~EVR_PRESENTER_INITED_SERVICES;
+     }
+ }
+ 
+@@ -393,54 +407,62 @@ static HRESULT WINAPI video_stream_sink_GetMediaTypeHandler(IMFStreamSink *iface
+ static HRESULT WINAPI video_stream_sink_ProcessSample(IMFStreamSink *iface, IMFSample *sample)
+ {
+     struct video_stream *stream = impl_from_IMFStreamSink(iface);
+-    LONGLONG timestamp;
++    struct video_renderer *renderer = stream->parent;
++    BOOL request_sample = FALSE, prerolled = FALSE;
+     HRESULT hr = S_OK;
+ 
+     TRACE("%p, %p.\n", iface, sample);
+ 
+-    EnterCriticalSection(&stream->cs);
++    TRACE("stream %p, renderer %p, clock %p, state %u, flags %#x.\n",
++            stream, renderer, renderer ? renderer->clock : NULL, renderer ? renderer->state : 0, stream->flags);
+ 
+-    if (!stream->parent)
++    if (!renderer)
+         hr = MF_E_STREAMSINK_REMOVED;
+-    else if (!stream->parent->clock)
++    else if (!renderer->clock)
+         hr = MF_E_NO_CLOCK;
+-    else if (FAILED(hr = IMFSample_GetSampleTime(sample, &timestamp)))
+-    {
+-        WARN("No sample timestamp, hr %#lx.\n", hr);
+-    }
+-    else if (stream->parent->state == EVR_STATE_RUNNING || stream->flags & EVR_STREAM_PREROLLING)
++    else if (renderer->state == EVR_STATE_RUNNING || stream->flags & EVR_STREAM_PREROLLING)
+     {
+         if (!(stream->flags & EVR_STREAM_STARTED))
+         {
+-            IMFTransform_ProcessMessage(stream->parent->mixer, MFT_MESSAGE_NOTIFY_START_OF_STREAM, stream->id);
++            TRACE("stream %p notifying mixer start of stream %#x.\n", stream, stream->id);
++            IMFTransform_ProcessMessage(renderer->mixer, MFT_MESSAGE_NOTIFY_START_OF_STREAM, stream->id);
++            TRACE("stream %p notified mixer start of stream %#x.\n", stream, stream->id);
+             stream->flags |= EVR_STREAM_STARTED;
+         }
+ 
+-        if (SUCCEEDED(IMFTransform_ProcessInput(stream->parent->mixer, stream->id, sample, 0)))
++        TRACE("stream %p processing mixer input sample %p.\n", stream, sample);
++        hr = IMFTransform_ProcessInput(renderer->mixer, stream->id, sample, 0);
++        TRACE("stream %p processed mixer input sample %p, hr %#lx.\n", stream, sample, hr);
++        if (SUCCEEDED(hr))
+         {
+-            while ((hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_PROCESSINPUTNOTIFY, 0)) == MF_E_TRANSFORM_TYPE_NOT_SET)
++            TRACE("stream %p notifying presenter input.\n", stream);
++            while ((hr = IMFVideoPresenter_ProcessMessage(renderer->presenter, MFVP_MESSAGE_PROCESSINPUTNOTIFY, 0)) == MF_E_TRANSFORM_TYPE_NOT_SET)
+             {
+-                if (FAILED(hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_INVALIDATEMEDIATYPE, 0)))
++                if (FAILED(hr = IMFVideoPresenter_ProcessMessage(renderer->presenter, MFVP_MESSAGE_INVALIDATEMEDIATYPE, 0)))
+                     break;
+             }
++            TRACE("stream %p notified presenter input, hr %#lx.\n", stream, hr);
+         }
+ 
+         if (stream->flags & EVR_STREAM_PREROLLING)
+         {
+             if (stream->preroll_count--)
+-                IMFMediaEventQueue_QueueEventParamVar(stream->event_queue, MEStreamSinkRequestSample,
+-                        &GUID_NULL, S_OK, NULL);
++                request_sample = TRUE;
+             else
+             {
+-                IMFMediaEventQueue_QueueEventParamVar(stream->event_queue, MEStreamSinkPrerolled,
+-                        &GUID_NULL, S_OK, NULL);
+                 stream->flags &= ~EVR_STREAM_PREROLLING;
+                 stream->flags |= EVR_STREAM_PREROLLED;
++                prerolled = TRUE;
+             }
+         }
+     }
+ 
+-    LeaveCriticalSection(&stream->cs);
++    if (request_sample)
++        IMFMediaEventQueue_QueueEventParamVar(stream->event_queue, MEStreamSinkRequestSample,
++                &GUID_NULL, S_OK, NULL);
++    else if (prerolled)
++        IMFMediaEventQueue_QueueEventParamVar(stream->event_queue, MEStreamSinkPrerolled,
++                &GUID_NULL, S_OK, NULL);
+ 
+     return hr;
+ }
+@@ -575,6 +597,8 @@ static HRESULT WINAPI video_stream_typehandler_GetMediaTypeByIndex(IMFMediaTypeH
+ static HRESULT WINAPI video_stream_typehandler_SetCurrentMediaType(IMFMediaTypeHandler *iface, IMFMediaType *type)
+ {
+     struct video_stream *stream = impl_from_IMFMediaTypeHandler(iface);
++    IMFMediaType *current_type;
++    DWORD flags;
+     HRESULT hr;
+ 
+     TRACE("%p, %p.\n", iface, type);
+@@ -585,6 +609,14 @@ static HRESULT WINAPI video_stream_typehandler_SetCurrentMediaType(IMFMediaTypeH
+     if (!stream->parent)
+         return MF_E_STREAMSINK_REMOVED;
+ 
++    if (SUCCEEDED(IMFTransform_GetInputCurrentType(stream->parent->mixer, stream->id, &current_type)))
++    {
++        hr = IMFMediaType_IsEqual(current_type, type, &flags);
++        IMFMediaType_Release(current_type);
++        if (hr == S_OK)
++            return S_OK;
++    }
++
+     hr = IMFTransform_SetInputType(stream->parent->mixer, stream->id, type, 0);
+     if (SUCCEEDED(hr) && !stream->id)
+         hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_INVALIDATEMEDIATYPE, 0);
+@@ -1381,20 +1413,30 @@ static HRESULT WINAPI video_renderer_sink_GetStreamSinkById(IMFMediaSink *iface,
+ 
+ static void video_renderer_set_presentation_clock(struct video_renderer *renderer, IMFPresentationClock *clock)
+ {
++    IMFPresentationClock *old_clock;
++
++    old_clock = renderer->clock;
++    renderer->clock = clock;
+     if (renderer->clock)
++        IMFPresentationClock_AddRef(renderer->clock);
++
++    LeaveCriticalSection(&renderer->cs);
++
++    if (old_clock)
+     {
+-        IMFPresentationClock_RemoveClockStateSink(renderer->clock, &renderer->IMFClockStateSink_iface);
+-        IMFPresentationClock_Release(renderer->clock);
++        IMFPresentationClock_RemoveClockStateSink(old_clock, &renderer->IMFClockStateSink_iface);
++        IMFPresentationClock_Release(old_clock);
+     }
++
+     video_renderer_release_presenter_services(renderer);
+ 
+-    renderer->clock = clock;
+-    if (renderer->clock)
++    if (clock)
+     {
+-        IMFPresentationClock_AddRef(renderer->clock);
+-        IMFPresentationClock_AddClockStateSink(renderer->clock, &renderer->IMFClockStateSink_iface);
++        IMFPresentationClock_AddClockStateSink(clock, &renderer->IMFClockStateSink_iface);
++        video_renderer_init_presenter_services(renderer);
+     }
+-    video_renderer_init_presenter_services(renderer);
++
++    EnterCriticalSection(&renderer->cs);
+ }
+ 
+ static HRESULT WINAPI video_renderer_sink_SetPresentationClock(IMFMediaSink *iface, IMFPresentationClock *clock)
+@@ -1522,14 +1564,17 @@ static ULONG WINAPI video_renderer_preroll_Release(IMFMediaSinkPreroll *iface)
+ static HRESULT WINAPI video_renderer_preroll_NotifyPreroll(IMFMediaSinkPreroll *iface, MFTIME start_time)
+ {
+     struct video_renderer *renderer = impl_from_IMFMediaSinkPreroll(iface);
++    struct video_stream **request_streams = NULL;
++    size_t i, request_count = 0;
+     HRESULT hr = S_OK;
+-    size_t i;
+ 
+     TRACE("%p, %s.\n", iface, debugstr_time(start_time));
+ 
+     EnterCriticalSection(&renderer->cs);
+     if (renderer->flags & EVR_SHUT_DOWN)
+         hr = MF_E_SHUTDOWN;
++    else if (renderer->stream_count && !(request_streams = calloc(renderer->stream_count, sizeof(*request_streams))))
++        hr = E_OUTOFMEMORY;
+     else
+     {
+         for (i = 0; i < renderer->stream_count; ++i)
+@@ -1539,16 +1584,24 @@ static HRESULT WINAPI video_renderer_preroll_NotifyPreroll(IMFMediaSinkPreroll *
+             EnterCriticalSection(&stream->cs);
+             if (!(stream->flags & (EVR_STREAM_PREROLLING | EVR_STREAM_PREROLLED)))
+             {
+-                IMFMediaEventQueue_QueueEventParamVar(stream->event_queue, MEStreamSinkRequestSample,
+-                        &GUID_NULL, S_OK, NULL);
+                 stream->flags |= EVR_STREAM_PREROLLING;
+                 stream->preroll_count = 3;
++                request_streams[request_count++] = stream;
++                IMFStreamSink_AddRef(&stream->IMFStreamSink_iface);
+             }
+             LeaveCriticalSection(&stream->cs);
+         }
+     }
+     LeaveCriticalSection(&renderer->cs);
+ 
++    for (i = 0; i < request_count; ++i)
++    {
++        IMFMediaEventQueue_QueueEventParamVar(request_streams[i]->event_queue, MEStreamSinkRequestSample,
++                &GUID_NULL, S_OK, NULL);
++        IMFStreamSink_Release(&request_streams[i]->IMFStreamSink_iface);
++    }
++    free(request_streams);
++
+     return hr;
+ }
+ 
+@@ -2035,14 +2088,22 @@ static HRESULT WINAPI video_renderer_clock_sink_OnClockRestart(IMFClockStateSink
+ 
+     EnterCriticalSection(&renderer->cs);
+ 
+-    IMFVideoPresenter_OnClockRestart(renderer->presenter, systime);
++    renderer->state = EVR_STATE_RUNNING;
+ 
+     for (i = 0; i < renderer->stream_count; ++i)
+     {
+         struct video_stream *stream = renderer->streams[i];
++
++        EnterCriticalSection(&stream->cs);
++        stream->flags &= ~EVR_STREAM_SAMPLE_NEEDED;
++        LeaveCriticalSection(&stream->cs);
++
+         IMFMediaEventQueue_QueueEventParamVar(stream->event_queue, MEStreamSinkStarted, &GUID_NULL, S_OK, NULL);
++        IMFMediaEventQueue_QueueEventParamVar(stream->event_queue, MEStreamSinkRequestSample,
++                &GUID_NULL, S_OK, NULL);
+     }
+-    renderer->state = EVR_STATE_RUNNING;
++
++    IMFVideoPresenter_OnClockRestart(renderer->presenter, systime);
+ 
+     LeaveCriticalSection(&renderer->cs);
+ 
+diff --git a/dlls/mf/session.c b/dlls/mf/session.c
+index 81f2ae84abc..038436d2b4f 100644
+--- a/dlls/mf/session.c
++++ b/dlls/mf/session.c
+@@ -116,6 +116,7 @@ enum command_state
+     COMMAND_STATE_ENDING_STREAMS,     /* -> COMMAND_STATE_ENDING_SINKS */
+     COMMAND_STATE_ENDING_SINKS,       /* -> SESSION_STATE_STOPPED */
+     /* STARTED | PAUSED -> STOPPED transition */
++    COMMAND_STATE_ENDING_STREAMS,     /* -> COMMAND_STATE_STOPPING_SINKS */
+     COMMAND_STATE_STOPPING_SINKS,     /* -> COMMAND_STATE_STOPPING_SOURCES */
+     COMMAND_STATE_STOPPING_SOURCES,   /* -> SESSION_STATE_STOPPED */
+     /* STARTED | PAUSED | STOPPED -> CLOSED transition */
+@@ -183,6 +184,7 @@ struct transform_stream
+ enum topo_node_flags
+ {
+     TOPO_NODE_END_OF_STREAM = 0x1,
++    TOPO_NODE_TRANSFORM_NEEDS_INPUT = 0x8,
+     TOPO_NODE_SCRUB_SAMPLE_COMPLETE = 0x2,
+ };
+ 
+@@ -582,7 +584,6 @@ static HRESULT session_bind_output_nodes(IMFTopology *topology)
+     HRESULT hr;
+ 
+     hr = IMFTopology_GetNodeCount(topology, &node_count);
+-
+     for (i = 0; i < node_count; ++i)
+     {
+         if (FAILED(hr = IMFTopology_GetNode(topology, i, &node)))
+@@ -597,31 +598,34 @@ static HRESULT session_bind_output_nodes(IMFTopology *topology)
+         if (SUCCEEDED(hr = IMFTopologyNode_GetObject(node, &object)))
+         {
+             stream_sink = NULL;
+-            if (FAILED(IUnknown_QueryInterface(object, &IID_IMFStreamSink, (void **)&stream_sink)))
++            activate = NULL;
++            if (SUCCEEDED(IUnknown_QueryInterface(object, &IID_IMFActivate, (void **)&activate)))
+             {
+-                if (SUCCEEDED(hr = IUnknown_QueryInterface(object, &IID_IMFActivate, (void **)&activate)))
++                if (SUCCEEDED(hr = IMFActivate_ActivateObject(activate, &IID_IMFMediaSink, (void **)&media_sink)))
+                 {
+-                    if (SUCCEEDED(hr = IMFActivate_ActivateObject(activate, &IID_IMFMediaSink, (void **)&media_sink)))
+-                    {
+-                        if (FAILED(IMFTopologyNode_GetUINT32(node, &MF_TOPONODE_STREAMID, &stream_id)))
+-                            stream_id = 0;
+-
+-                        stream_sink = NULL;
+-                        if (FAILED(IMFMediaSink_GetStreamSinkById(media_sink, stream_id, &stream_sink)))
+-                            hr = IMFMediaSink_AddStreamSink(media_sink, stream_id, NULL, &stream_sink);
++                    if (FAILED(IMFTopologyNode_GetUINT32(node, &MF_TOPONODE_STREAMID, &stream_id)))
++                        stream_id = 0;
+ 
+-                        if (stream_sink)
+-                            hr = IMFTopologyNode_SetObject(node, (IUnknown *)stream_sink);
+-
+-                        IMFMediaSink_Release(media_sink);
++                    if (FAILED(IMFMediaSink_GetStreamSinkById(media_sink, stream_id, &stream_sink)))
++                    {
++                        hr = IMFMediaSink_AddStreamSink(media_sink, stream_id, NULL, &stream_sink);
+                     }
+ 
+-                    if (SUCCEEDED(hr))
+-                        IMFTopologyNode_SetUnknown(node, &_MF_TOPONODE_IMFActivate, (IUnknown *)activate);
++                    if (stream_sink)
++                    {
++                        hr = IMFTopologyNode_SetObject(node, (IUnknown *)stream_sink);
++                    }
+ 
+-                    IMFActivate_Release(activate);
++                    IMFMediaSink_Release(media_sink);
+                 }
++
++                if (SUCCEEDED(hr))
++                    IMFTopologyNode_SetUnknown(node, &_MF_TOPONODE_IMFActivate, (IUnknown *)activate);
++
++                IMFActivate_Release(activate);
+             }
++            else
++                IUnknown_QueryInterface(object, &IID_IMFStreamSink, (void **)&stream_sink);
+ 
+             if (stream_sink)
+                 IMFStreamSink_Release(stream_sink);
+@@ -1088,6 +1092,7 @@ static void session_flush_sinks(struct media_session *session)
+             }
+             IMFStreamSink_Flush(node->object.sink_stream);
+         }
++        node->flags |= TOPO_NODE_TRANSFORM_NEEDS_INPUT;
+     }
+ }
+ 
+@@ -1594,15 +1599,16 @@ static void session_set_rate(struct media_session *session, BOOL thin, float rat
+             if (SUCCEEDED(hr = MFGetService(source->object, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateControl,
+                     (void **)&rate_control)))
+             {
++                session->presentation.flags |= SESSION_FLAG_PENDING_RATE_CHANGE;
++                session->presentation.rate = rate;
++                session->presentation.thin = thin;
++
+                 hr = IMFRateControl_SetRate(rate_control, thin, rate);
+                 IMFRateControl_Release(rate_control);
+                 if (SUCCEEDED(hr))
+-                {
+-                    session->presentation.flags |= SESSION_FLAG_PENDING_RATE_CHANGE;
+-                    session->presentation.rate = rate;
+-                    session->presentation.thin = thin;
+                     return;
+-                }
++
++                session->presentation.flags &= ~SESSION_FLAG_PENDING_RATE_CHANGE;
+             }
+ 
+             break;
+@@ -1651,6 +1657,23 @@ static struct media_source *session_get_media_source(struct media_session *sessi
+     return NULL;
+ }
+ 
++static BOOL session_should_resubscribe_event_source(struct media_session *session, IMFMediaEventGenerator *event_source)
++{
++    BOOL ret = TRUE;
++
++    EnterCriticalSection(&session->cs);
++    if (session_get_media_source(session, (IMFMediaSource *)event_source)
++            && session->state == SESSION_STATE_STOPPED
++            && session->command_state == COMMAND_STATE_COMPLETE)
++    {
++        session->presentation.flags &= ~SESSION_FLAG_SOURCES_SUBSCRIBED;
++        ret = FALSE;
++    }
++    LeaveCriticalSection(&session->cs);
++
++    return ret;
++}
++
+ static void session_release_media_source(struct media_source *source)
+ {
+     if (source->shutdown_notify)
+@@ -1832,6 +1855,7 @@ static HRESULT session_set_transform_stream_info(struct topo_node *node)
+         }
+         node->u.transform.outputs = streams;
+         node->u.transform.output_count = output_count;
++        node->flags |= TOPO_NODE_TRANSFORM_NEEDS_INPUT;
+     }
+ 
+     return hr;
+@@ -1877,6 +1901,7 @@ static ULONG WINAPI node_sample_allocator_cb_Release(IMFVideoSampleAllocatorNoti
+ }
+ 
+ static HRESULT session_request_sample_from_node(struct media_session *session, struct topo_node *topo_node, DWORD output);
++static void session_deliver_pending_samples(struct media_session *session, struct topo_node *topo_node);
+ 
+ static HRESULT WINAPI node_sample_allocator_cb_NotifyRelease(IMFVideoSampleAllocatorNotify *iface)
+ {
+@@ -2049,9 +2074,9 @@ static HRESULT session_set_current_topology(struct media_session *session, IMFTo
+ {
+     struct media_source *source;
+     DWORD caps, object_flags;
++    IMFMediaEvent *event;
+     struct media_sink *sink;
+     struct topo_node *node;
+-    IMFMediaEvent *event;
+     HRESULT hr;
+ 
+     if (FAILED(hr = IMFTopology_CloneFrom(session->presentation.current_topology, topology)))
+@@ -2073,17 +2098,6 @@ static HRESULT session_set_current_topology(struct media_session *session, IMFTo
+         }
+     }
+ 
+-    /* FIXME: attributes are all zero for now */
+-    if (SUCCEEDED(MFCreateMediaEvent(MESessionNotifyPresentationTime, &GUID_NULL, S_OK, NULL, &event)))
+-    {
+-        IMFMediaEvent_SetUINT64(event, &MF_EVENT_START_PRESENTATION_TIME, 0);
+-        IMFMediaEvent_SetUINT64(event, &MF_EVENT_PRESENTATION_TIME_OFFSET, 0);
+-        IMFMediaEvent_SetUINT64(event, &MF_EVENT_START_PRESENTATION_TIME_AT_OUTPUT, 0);
+-
+-        IMFMediaEventQueue_QueueEvent(session->event_queue, event);
+-        IMFMediaEvent_Release(event);
+-    }
+-
+     /* Update session caps. */
+     caps = MFSESSIONCAP_START | MFSESSIONCAP_SEEK | MFSESSIONCAP_RATE_FORWARD | MFSESSIONCAP_RATE_REVERSE |
+             MFSESSIONCAP_DOES_NOT_USE_NETWORK;
+@@ -2122,6 +2136,15 @@ static HRESULT session_set_current_topology(struct media_session *session, IMFTo
+         }
+     }
+ 
++    if (SUCCEEDED(MFCreateMediaEvent(MESessionNotifyPresentationTime, &GUID_NULL, S_OK, NULL, &event)))
++    {
++        IMFMediaEvent_SetUINT64(event, &MF_EVENT_START_PRESENTATION_TIME, 0);
++        IMFMediaEvent_SetUINT64(event, &MF_EVENT_PRESENTATION_TIME_OFFSET, 0);
++        IMFMediaEvent_SetUINT64(event, &MF_EVENT_START_PRESENTATION_TIME_AT_OUTPUT, 0);
++        IMFMediaEventQueue_QueueEvent(session->event_queue, event);
++        IMFMediaEvent_Release(event);
++    }
++
+     session_set_caps(session, caps);
+ 
+     return S_OK;
+@@ -2838,8 +2861,6 @@ static HRESULT WINAPI session_commands_callback_GetParameters(IMFAsyncCallback *
+     return E_NOTIMPL;
+ }
+ 
+-static void session_deliver_pending_samples(struct media_session *session, struct topo_node *topo_node);
+-
+ static HRESULT WINAPI session_commands_callback_Invoke(IMFAsyncCallback *iface, IMFAsyncResult *result)
+ {
+     struct session_op *op = impl_op_from_IUnknown(IMFAsyncResult_GetStateNoAddRef(result));
+@@ -2960,9 +2981,7 @@ static HRESULT WINAPI session_sa_ready_callback_Invoke(IMFAsyncCallback *iface,
+ 
+     if (topo_node->u.sink.requests)
+     {
+-        if (!(up_node = session_get_topo_node_input(session, topo_node, 0, &output)))
+-            WARN("Failed to node %p/%u input\n", topo_node, 0);
+-        else
++        if ((up_node = session_get_topo_node_input(session, topo_node, 0, &output)))
+             session_deliver_pending_samples(session, up_node);
+     }
+ 
+@@ -3003,6 +3022,7 @@ static void session_handle_source_shutdown(struct media_session *session)
+         case COMMAND_STATE_ENDING_STREAMS:
+         case COMMAND_STATE_ENDING_SINKS:
+         case COMMAND_STATE_STOPPING_SINKS:
++        case COMMAND_STATE_ENDING_STREAMS:
+         case COMMAND_STATE_STOPPING_SOURCES:
+             session_clear_presentation(session);
+             session->state = SESSION_STATE_STOPPED;
+@@ -3266,7 +3286,6 @@ static void session_set_source_object_state(struct media_session *session, IUnkn
+     struct media_source *src;
+     struct media_sink *sink;
+     enum object_state state;
+-    struct topo_node *node;
+     BOOL changed = FALSE;
+     DWORD i, count;
+     HRESULT hr;
+@@ -3360,12 +3379,6 @@ static void session_set_source_object_state(struct media_session *session, IUnkn
+             }
+             else
+             {
+-                if (session->presentation.flags & SESSION_FLAG_RESTARTING)
+-                {
+-                    session->presentation.flags &= ~SESSION_FLAG_RESTARTING;
+-                    session_flush_sinks(session);
+-                }
+-
+                 if (SUCCEEDED(hr = session_start_clock(session)))
+                 {
+                     /* If sinks are already started, start session immediately. This can happen when doing a
+@@ -3433,6 +3446,7 @@ static void session_set_source_object_state(struct media_session *session, IUnkn
+         case COMMAND_STATE_PREROLLING_SINKS:
+         case COMMAND_STATE_STARTING_SINKS:
+         case COMMAND_STATE_PAUSING_SINKS:
++        case COMMAND_STATE_ENDING_STREAMS:
+         case COMMAND_STATE_STOPPING_SINKS:
+         case COMMAND_STATE_ENDING_STREAMS:
+         case COMMAND_STATE_ENDING_SINKS:
+@@ -3562,7 +3576,8 @@ static HRESULT transform_get_external_output_sample(const struct media_session *
+         return MF_E_UNEXPECTED;
+     }
+ 
+-    if (topo_node->type == MF_TOPOLOGY_OUTPUT_NODE && topo_node->u.sink.allocator)
++    if (topo_node->type == MF_TOPOLOGY_OUTPUT_NODE && topo_node->u.sink.allocator
++            && topology_node_is_d3d_aware(transform->node))
+     {
+         hr = IMFVideoSampleAllocator_AllocateSample(topo_node->u.sink.allocator, sample);
+     }
+@@ -3722,7 +3737,7 @@ static HRESULT allocate_output_samples(const struct media_session *session, stru
+ 
+         if (FAILED(hr = IMFTransform_GetOutputStreamInfo(node->object.transform, buffers[i].dwStreamID, &stream_info)))
+             return hr;
+-        if (!(stream_info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES))
++        if (!(stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)
+                 && FAILED(hr = transform_get_external_output_sample(session, node, i, &stream_info, &buffers[i].pSample)))
+             return hr;
+     }
+@@ -3775,7 +3790,7 @@ static HRESULT transform_node_pull_samples(const struct media_session *session,
+ 
+         if (buffers[i].pEvents && FAILED(hr = transform_stream_push_events(stream, buffers[i].pEvents)))
+             WARN("Failed to push transform events, hr %#lx\n", hr);
+-        if (buffers[i].dwStatus & MFT_OUTPUT_DATA_BUFFER_NO_SAMPLE)
++        if (!buffers[i].pSample || (buffers[i].dwStatus & MFT_OUTPUT_DATA_BUFFER_NO_SAMPLE))
+             continue;
+ 
+         if (SUCCEEDED(hr))
+@@ -3871,6 +3886,7 @@ static HRESULT transform_node_push_sample(const struct media_session *session, s
+ static void session_deliver_sample_to_node(struct media_session *session, struct topo_node *topo_node, unsigned int input,
+         IMFSample *sample);
+ static void transform_node_deliver_samples(struct media_session *session, struct topo_node *topo_node);
++static void session_raise_end_of_presentation(struct media_session *session);
+ 
+ static HRESULT transform_node_handle_format_change(struct media_session *session, struct topo_node *topo_node,
+         UINT input, IMFMediaType *media_type)
+@@ -4044,9 +4060,9 @@ static void session_deliver_sample_to_node(struct media_session *session, struct
+     switch (topo_node->type)
+     {
+         case MF_TOPOLOGY_OUTPUT_NODE:
+-            if (topo_node->u.sink.requests)
++            if (sample)
+             {
+-                if (sample)
++                if (topo_node->u.sink.requests)
+                 {
+                     if (FAILED(hr = IMFStreamSink_ProcessSample(topo_node->object.sink_stream, sample)))
+                     {
+@@ -4081,15 +4097,16 @@ static void session_deliver_pending_samples(struct media_session *session, struc
+     switch (topo_node->type)
+     {
+         case MF_TOPOLOGY_TRANSFORM_NODE:
++            if (!transform_node_has_requests(topo_node))
++                return;
+             transform_node_pull_samples(session, topo_node);
+             transform_node_deliver_samples(session, topo_node);
+             break;
+         default:
+-            FIXME("Unexpected node type %u.\n", topo_node->type);
++            break;
+     }
+ }
+ 
+-
+ static HRESULT session_request_sample_from_node(struct media_session *session, struct topo_node *topo_node, DWORD output)
+ {
+     struct topo_node *down_node;
+@@ -4100,12 +4117,28 @@ static HRESULT session_request_sample_from_node(struct media_session *session, s
+     {
+         case MF_TOPOLOGY_SOURCESTREAM_NODE:
+             if (FAILED(hr = IMFMediaStream_RequestSample(topo_node->object.source_stream, NULL)))
+-                WARN("Sample request failed, hr %#lx.\n", hr);
++            {
++                if (hr == MF_E_END_OF_STREAM)
++                {
++                    if (!(topo_node->flags & TOPO_NODE_END_OF_STREAM))
++                    {
++                        topo_node->flags |= TOPO_NODE_END_OF_STREAM;
++                        if ((down_node = session_get_topo_node_output(session, topo_node, output, &input)))
++                            session_deliver_sample_to_node(session, down_node, input, NULL);
++                        session_raise_end_of_presentation(session);
++                    }
++                    hr = S_OK;
++                }
++                else
++                    WARN("Sample request failed, hr %#lx.\n", hr);
++            }
+             break;
+         case MF_TOPOLOGY_TRANSFORM_NODE:
+         {
+             struct transform_stream *stream = &topo_node->u.transform.outputs[output];
+             IMFMediaEvent *event;
++            MediaEventType type;
++            BOOL had_requests = transform_node_has_requests(topo_node);
+ 
+             if (!(down_node = session_get_topo_node_output(session, topo_node, output, &input)))
+             {
+@@ -4333,6 +4366,28 @@ static void session_handle_end_of_presentation(struct media_session *session, IM
+     }
+ }
+ 
++static void session_synthesize_end_of_presentation_from_sinks(struct media_session *session)
++{
++    struct media_source *source;
++    BOOL source_eop;
++
++    if (session->command_state != COMMAND_STATE_COMPLETE
++            || !session_nodes_is_mask_set(session, MF_TOPOLOGY_SOURCESTREAM_NODE, TOPO_NODE_END_OF_STREAM)
++            || !session_nodes_is_mask_set(session, MF_TOPOLOGY_OUTPUT_NODE, TOPO_NODE_END_OF_STREAM))
++    {
++        return;
++    }
++
++    source_eop = session_nodes_is_mask_set(session, MF_TOPOLOGY_MAX, SOURCE_FLAG_END_OF_PRESENTATION);
++
++    LIST_FOR_EACH_ENTRY(source, &session->presentation.sources, struct media_source, entry)
++        source->flags |= SOURCE_FLAG_END_OF_PRESENTATION;
++
++    session->command_state = COMMAND_STATE_ENDING_STREAMS;
++    if (!source_eop)
++        IMFMediaEventQueue_QueueEventParamVar(session->event_queue, MEEndOfPresentation, &GUID_NULL, S_OK, NULL);
++}
++
+ static void session_sink_stream_marker(struct media_session *session, IMFStreamSink *stream_sink)
+ {
+     struct topo_node *node;
+@@ -4603,6 +4658,9 @@ static HRESULT WINAPI session_events_callback_Invoke(IMFAsyncCallback *iface, IM
+ 
+ failed:
+ 
++    if (!session_should_resubscribe_event_source(session, event_source))
++        goto done;
++
+     if (FAILED(hr = IMFMediaEventGenerator_BeginGetEvent(event_source, iface, (IUnknown *)event_source)))
+     {
+         if (hr == MF_E_SHUTDOWN && session_get_media_source(session, (IMFMediaSource *)event_source))
+@@ -4616,6 +4674,7 @@ failed:
+         }
+     }
+ 
++done:
+     if (event)
+         IMFMediaEvent_Release(event);
+ 
+diff --git a/dlls/mf/topology_loader.c b/dlls/mf/topology_loader.c
+index a1b201fd4d2..31429d78f28 100644
+--- a/dlls/mf/topology_loader.c
++++ b/dlls/mf/topology_loader.c
+@@ -656,6 +656,52 @@ static HRESULT topology_loader_connect_copier(struct topoloader_context *context
+     return S_OK;
+ }
+ 
++static BOOL topology_loader_types_match_for_copier(IMFTopologyNode *upstream_node, DWORD upstream_output,
++        IMFTopologyNode *downstream_node, DWORD downstream_input)
++{
++    const DWORD required_flags = MF_MEDIATYPE_EQUAL_MAJOR_TYPES | MF_MEDIATYPE_EQUAL_FORMAT_TYPES
++            | MF_MEDIATYPE_EQUAL_FORMAT_DATA;
++    IMFMediaType *up_type = NULL, *down_type = NULL;
++    DWORD flags = 0;
++    HRESULT hr;
++
++    if (FAILED(MFGetTopoNodeCurrentType(upstream_node, upstream_output, TRUE, &up_type)))
++        return FALSE;
++
++    hr = MFGetTopoNodeCurrentType(downstream_node, downstream_input, FALSE, &down_type);
++    if (SUCCEEDED(hr))
++        hr = IMFMediaType_IsEqual(up_type, down_type, &flags);
++
++    if (down_type)
++        IMFMediaType_Release(down_type);
++    IMFMediaType_Release(up_type);
++
++    return hr == S_OK || (SUCCEEDED(hr) && (flags & required_flags) == required_flags);
++}
++
++static BOOL topology_loader_types_match_for_copier(IMFTopologyNode *upstream_node, DWORD upstream_output,
++        IMFTopologyNode *downstream_node, DWORD downstream_input)
++{
++    const DWORD required_flags = MF_MEDIATYPE_EQUAL_MAJOR_TYPES | MF_MEDIATYPE_EQUAL_FORMAT_TYPES
++            | MF_MEDIATYPE_EQUAL_FORMAT_DATA;
++    IMFMediaType *up_type = NULL, *down_type = NULL;
++    DWORD flags = 0;
++    HRESULT hr;
++
++    if (FAILED(MFGetTopoNodeCurrentType(upstream_node, upstream_output, TRUE, &up_type)))
++        return FALSE;
++
++    hr = MFGetTopoNodeCurrentType(downstream_node, downstream_input, FALSE, &down_type);
++    if (SUCCEEDED(hr))
++        hr = IMFMediaType_IsEqual(up_type, down_type, &flags);
++
++    if (down_type)
++        IMFMediaType_Release(down_type);
++    IMFMediaType_Release(up_type);
++
++    return hr == S_OK || (SUCCEEDED(hr) && (flags & required_flags) == required_flags);
++}
++
+ HRESULT topology_node_set_device_manager(IMFTopologyNode *node, IUnknown *device_manager)
+ {
+     IMFTransform *transform;
+@@ -708,16 +754,36 @@ static HRESULT topology_loader_connect_d3d_aware_sink(struct topoloader_context
+         IMFTopologyNode *node, MFTOPOLOGY_DXVA_MODE dxva_mode)
+ {
+     IMFTopologyNode *upstream_node;
++    IMFMediaTypeHandler *handler;
+     IMFTransform *copier = NULL;
+     IMFStreamSink *stream_sink;
+     IUnknown *device_manager;
+     DWORD upstream_output;
++    GUID major_type;
+     HRESULT hr;
+ 
+     if (FAILED(hr = topology_node_get_object(node, &IID_IMFStreamSink, (void **)&stream_sink)))
+         return hr;
+ 
+-    if (SUCCEEDED(hr = stream_sink_get_device_manager(stream_sink, &device_manager)))
++    if (SUCCEEDED(IMFStreamSink_GetMediaTypeHandler(stream_sink, &handler)))
++    {
++        hr = IMFMediaTypeHandler_GetMajorType(handler, &major_type);
++        IMFMediaTypeHandler_Release(handler);
++        if (SUCCEEDED(hr) && !IsEqualGUID(&major_type, &MFMediaType_Video))
++        {
++            IMFStreamSink_Release(stream_sink);
++            return S_OK;
++        }
++    }
++
++    hr = stream_sink_get_device_manager(stream_sink, &device_manager);
++    if (hr == E_NOINTERFACE || hr == MF_E_UNSUPPORTED_SERVICE)
++    {
++        IMFStreamSink_Release(stream_sink);
++        return S_OK;
++    }
++
++    if (SUCCEEDED(hr))
+     {
+         if (SUCCEEDED(IMFTopologyNode_GetInput(node, 0, &upstream_node, &upstream_output)))
+         {
+@@ -732,6 +798,12 @@ static HRESULT topology_loader_connect_d3d_aware_sink(struct topoloader_context
+                         || !(info.dwFlags & (MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES | MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)))
+                     needs_copier = FALSE;
+ 
++                if (needs_copier && !topology_loader_types_match_for_copier(upstream_node, upstream_output, node, 0))
++                    needs_copier = FALSE;
++
++                if (needs_copier && !topology_loader_types_match_for_copier(upstream_node, upstream_output, node, 0))
++                    needs_copier = FALSE;
++
+                 IMFTransform_Release(transform);
+             }
+ 
+diff --git a/dlls/mfmediaengine/main.c b/dlls/mfmediaengine/main.c
+index bfbe652226c..03afc44fa25 100644
+--- a/dlls/mfmediaengine/main.c
++++ b/dlls/mfmediaengine/main.c
+@@ -99,6 +99,7 @@ enum media_engine_flags
+     FLAGS_ENGINE_SOURCE_PENDING = 0x10000,
+     FLAGS_ENGINE_PLAY_PENDING = 0x20000,
+     FLAGS_ENGINE_SEEKING = 0x40000,
++    FLAGS_ENGINE_PAUSE_PENDING = 0x100000,
+ };
+ 
+ struct vec3
+@@ -815,6 +816,31 @@ static unsigned int get_gcd(unsigned int a, unsigned int b)
+     return a;
+ }
+ 
++static HRESULT media_engine_set_frame_size_from_media_type(struct media_engine *engine, IMFMediaType *media_type)
++{
++    UINT64 size;
++    HRESULT hr;
++
++    if (FAILED(hr = IMFMediaType_GetUINT64(media_type, &MF_MT_FRAME_SIZE, &size)))
++        return hr;
++
++    engine->video_frame.size.cx = size >> 32;
++    engine->video_frame.size.cy = size;
++
++    if (engine->video_frame.size.cx && engine->video_frame.size.cy)
++    {
++        unsigned int gcd = get_gcd(engine->video_frame.size.cx, engine->video_frame.size.cy);
++
++        if (gcd)
++        {
++            engine->video_frame.ratio.cx = engine->video_frame.size.cx / gcd;
++            engine->video_frame.ratio.cy = engine->video_frame.size.cy / gcd;
++        }
++    }
++
++    return S_OK;
++}
++
+ static void media_engine_get_frame_size(struct media_engine *engine)
+ {
+     IMFMediaTypeHandler *handler;
+@@ -830,28 +856,52 @@ static void media_engine_get_frame_size(struct media_engine *engine)
+     {
+         if (SUCCEEDED(IMFMediaTypeHandler_GetCurrentMediaType(handler, &media_type)))
+         {
+-            UINT64 size;
+-            HRESULT hr = IMFMediaType_GetUINT64(media_type, &MF_MT_FRAME_SIZE, &size);
+-            if (SUCCEEDED(hr))
+-            {
+-                unsigned int gcd;
+-                engine->video_frame.size.cx = size >> 32;
+-                engine->video_frame.size.cy = size;
++            HRESULT hr = media_engine_set_frame_size_from_media_type(engine, media_type);
++            if (FAILED(hr))
++                WARN("Failed to get frame size from sink type %#lx.\n", hr);
++
++            IMFMediaType_Release(media_type);
++        }
++        IMFMediaTypeHandler_Release(handler);
++    }
++
++    if (!engine->video_frame.size.cx && !engine->video_frame.size.cy && engine->presentation.pd)
++    {
++        DWORD stream_count = 0, i;
++
++        if (FAILED(IMFPresentationDescriptor_GetStreamDescriptorCount(engine->presentation.pd, &stream_count)))
++            return;
++
++        for (i = 0; i < stream_count; ++i)
++        {
++            IMFStreamDescriptor *sd;
++            BOOL selected;
+ 
+-                if ((gcd = get_gcd(engine->video_frame.size.cx, engine->video_frame.size.cy)))
++            if (SUCCEEDED(IMFPresentationDescriptor_GetStreamDescriptorByIndex(engine->presentation.pd, i, &selected, &sd)))
++            {
++                if (selected && SUCCEEDED(IMFStreamDescriptor_GetMediaTypeHandler(sd, &handler)))
+                 {
+-                    engine->video_frame.ratio.cx = engine->video_frame.size.cx / gcd;
+-                    engine->video_frame.ratio.cy = engine->video_frame.size.cy / gcd;
++                    GUID major = {0};
++
++                    if (SUCCEEDED(IMFMediaTypeHandler_GetMajorType(handler, &major))
++                            && IsEqualGUID(&major, &MFMediaType_Video)
++                            && SUCCEEDED(IMFMediaTypeHandler_GetCurrentMediaType(handler, &media_type)))
++                    {
++                        HRESULT hr = media_engine_set_frame_size_from_media_type(engine, media_type);
++                        if (FAILED(hr))
++                            WARN("Failed to get frame size from stream type %#lx.\n", hr);
++                        IMFMediaType_Release(media_type);
++                    }
++
++                    IMFMediaTypeHandler_Release(handler);
+                 }
+-            }
+-            else
+-            {
+-                WARN("Failed to get frame size %#lx.\n", hr);
++
++                IMFStreamDescriptor_Release(sd);
+             }
+ 
+-            IMFMediaType_Release(media_type);
++            if (engine->video_frame.size.cx || engine->video_frame.size.cy)
++                break;
+         }
+-        IMFMediaTypeHandler_Release(handler);
+     }
+ }
+ 
+@@ -1438,7 +1488,7 @@ static HRESULT WINAPI media_engine_load_handler_Invoke(IMFAsyncCallback *iface,
+     engine->network_state = MF_MEDIA_ENGINE_NETWORK_LOADING;
+     IMFMediaEngineNotify_EventNotify(engine->callback, MF_MEDIA_ENGINE_EVENT_LOADSTART, 0, 0);
+ 
+-    start_playback = engine->flags & FLAGS_ENGINE_PLAY_PENDING;
++    start_playback = (engine->flags & FLAGS_ENGINE_PLAY_PENDING) || !(engine->flags & FLAGS_ENGINE_PAUSED);
+     media_engine_set_flag(engine, FLAGS_ENGINE_SOURCE_PENDING | FLAGS_ENGINE_PLAY_PENDING, FALSE);
+ 
+     if (SUCCEEDED(IMFAsyncResult_GetState(result, &state)))
+@@ -1712,10 +1762,17 @@ static HRESULT WINAPI media_engine_GetCurrentSource(IMFMediaEngineEx *iface, BST
+ static USHORT WINAPI media_engine_GetNetworkState(IMFMediaEngineEx *iface)
+ {
+     struct media_engine *engine = impl_from_IMFMediaEngineEx(iface);
++    MF_MEDIA_ENGINE_NETWORK state;
++    unsigned int flags;
+ 
+-    TRACE("%p.\n", iface);
++    EnterCriticalSection(&engine->cs);
++    state = engine->network_state;
++    flags = engine->flags;
++    LeaveCriticalSection(&engine->cs);
++
++    TRACE("%p returning %u flags %#x.\n", iface, state, flags);
+ 
+-    return engine->network_state;
++    return state;
+ }
+ 
+ static MF_MEDIA_ENGINE_PRELOAD WINAPI media_engine_GetPreload(IMFMediaEngineEx *iface)
+@@ -1814,10 +1871,9 @@ static USHORT WINAPI media_engine_GetReadyState(IMFMediaEngineEx *iface)
+     struct media_engine *engine = impl_from_IMFMediaEngineEx(iface);
+     unsigned short state;
+ 
+-    TRACE("%p.\n", iface);
+-
+     EnterCriticalSection(&engine->cs);
+     state = engine->ready_state;
++    TRACE("%p returning %u flags %#x.\n", iface, state, engine->flags);
+     LeaveCriticalSection(&engine->cs);
+ 
+     return state;
+@@ -1836,8 +1892,6 @@ static double WINAPI media_engine_GetCurrentTime(IMFMediaEngineEx *iface)
+     double ret = 0.0;
+     MFTIME clocktime;
+ 
+-    TRACE("%p.\n", iface);
+-
+     EnterCriticalSection(&engine->cs);
+     if (engine->flags & FLAGS_ENGINE_IS_ENDED)
+     {
+@@ -1851,6 +1905,10 @@ static double WINAPI media_engine_GetCurrentTime(IMFMediaEngineEx *iface)
+     {
+         ret = mftime_to_seconds(clocktime);
+     }
++    TRACE("%p returning %.6f flags %#x start position vt %u value %s.\n", iface, ret, engine->flags,
++            engine->presentation.start_position.vt,
++            wine_dbgstr_longlong(engine->presentation.start_position.vt == VT_I8
++                    ? engine->presentation.start_position.hVal.QuadPart : 0));
+     LeaveCriticalSection(&engine->cs);
+ 
+     return ret;
+@@ -1940,10 +1998,9 @@ static BOOL WINAPI media_engine_IsPaused(IMFMediaEngineEx *iface)
+     struct media_engine *engine = impl_from_IMFMediaEngineEx(iface);
+     BOOL value;
+ 
+-    TRACE("%p.\n", iface);
+-
+     EnterCriticalSection(&engine->cs);
+     value = !!(engine->flags & FLAGS_ENGINE_PAUSED);
++    TRACE("%p returning %d flags %#x.\n", iface, value, engine->flags);
+     LeaveCriticalSection(&engine->cs);
+ 
+     return value;
+@@ -2142,9 +2199,9 @@ static HRESULT WINAPI media_engine_Play(IMFMediaEngineEx *iface)
+     struct media_engine *engine = impl_from_IMFMediaEngineEx(iface);
+     HRESULT hr = S_OK;
+ 
+-    TRACE("%p.\n", iface);
+-
+     EnterCriticalSection(&engine->cs);
++    TRACE("%p enter flags %#x ready %u network %u.\n", iface, engine->flags, engine->ready_state,
++            engine->network_state);
+ 
+     if (engine->flags & FLAGS_ENGINE_SHUT_DOWN)
+         hr = MF_E_SHUTDOWN;
+@@ -2178,20 +2235,25 @@ static HRESULT WINAPI media_engine_Pause(IMFMediaEngineEx *iface)
+     struct media_engine *engine = impl_from_IMFMediaEngineEx(iface);
+     HRESULT hr = S_OK;
+ 
+-    TRACE("%p.\n", iface);
+-
+     EnterCriticalSection(&engine->cs);
++    TRACE("%p enter flags %#x ready %u network %u.\n", iface, engine->flags, engine->ready_state,
++            engine->network_state);
+ 
+     if (engine->flags & FLAGS_ENGINE_SHUT_DOWN)
+         hr = MF_E_SHUTDOWN;
+     else
+     {
+-        if (!(engine->flags & FLAGS_ENGINE_PAUSED))
++        if (engine->flags & FLAGS_ENGINE_PAUSE_PENDING)
++        {
++            media_engine_set_flag(engine, FLAGS_ENGINE_PLAY_PENDING, FALSE);
++            media_engine_set_flag(engine, FLAGS_ENGINE_PAUSED, TRUE);
++        }
++        else if (!(engine->flags & FLAGS_ENGINE_PAUSED))
+         {
+             if (SUCCEEDED(hr = IMFMediaSession_Pause(engine->session)))
+             {
+                 media_engine_set_flag(engine, FLAGS_ENGINE_WAITING | FLAGS_ENGINE_IS_ENDED, FALSE);
+-                media_engine_set_flag(engine, FLAGS_ENGINE_PAUSED, TRUE);
++                media_engine_set_flag(engine, FLAGS_ENGINE_PAUSED | FLAGS_ENGINE_PAUSE_PENDING, TRUE);
+ 
+                 IMFMediaEngineNotify_EventNotify(engine->callback, MF_MEDIA_ENGINE_EVENT_TIMEUPDATE, 0, 0);
+                 IMFMediaEngineNotify_EventNotify(engine->callback, MF_MEDIA_ENGINE_EVENT_PAUSE, 0, 0);
+@@ -2201,6 +2263,8 @@ static HRESULT WINAPI media_engine_Pause(IMFMediaEngineEx *iface)
+         IMFMediaEngineNotify_EventNotify(engine->callback, MF_MEDIA_ENGINE_EVENT_PURGEQUEUEDEVENTS, 0, 0);
+     }
+ 
++    TRACE("%p leave hr %#lx flags %#x ready %u network %u.\n", iface, hr, engine->flags,
++            engine->ready_state, engine->network_state);
+     LeaveCriticalSection(&engine->cs);
+ 
+     return hr;
+diff --git a/dlls/mfmediaengine/video_frame_sink.c b/dlls/mfmediaengine/video_frame_sink.c
+index a79cd5f8644..52227d0ddbb 100644
+--- a/dlls/mfmediaengine/video_frame_sink.c
++++ b/dlls/mfmediaengine/video_frame_sink.c
+@@ -392,6 +392,7 @@ static HRESULT WINAPI video_frame_sink_stream_ProcessSample(IMFStreamSink *iface
+ {
+     struct video_frame_sink *sink = impl_from_IMFStreamSink(iface);
+     LONGLONG sampletime;
++    BOOL requested = FALSE;
+     HRESULT hr = S_OK;
+ 
+     TRACE("%p, %p.\n", iface, sample);
+@@ -401,13 +402,15 @@ static HRESULT WINAPI video_frame_sink_stream_ProcessSample(IMFStreamSink *iface
+ 
+     EnterCriticalSection(&sink->cs);
+ 
++    requested = sink->sample_request_pending;
+     sink->sample_request_pending = FALSE;
+ 
+     if (sink->is_shut_down)
+     {
+         hr = MF_E_STREAMSINK_REMOVED;
+     }
+-    else if (sink->state == SINK_STATE_RUNNING || sink->state == SINK_STATE_PAUSED)
++    else if (sink->state == SINK_STATE_RUNNING || sink->state == SINK_STATE_PAUSED
++            || (sink->rate == 0.0f && requested))
+     {
+         hr = IMFSample_GetSampleTime(sample, &sampletime);
+ 
+@@ -423,7 +426,7 @@ static HRESULT WINAPI video_frame_sink_stream_ProcessSample(IMFStreamSink *iface
+             IMFSample_AddRef(sample);
+             video_frame_sink_sample_queue_push(sink, sample, FALSE);
+ 
+-            if (sink->queue.used != ARRAY_SIZE(sink->queue.samples))
++            if (sink->rate != 0.0f && sink->queue.used != ARRAY_SIZE(sink->queue.samples))
+                 video_frame_sink_stream_request_sample(sink);
+         }
+     }
+@@ -1084,6 +1087,8 @@ static HRESULT WINAPI video_frame_sink_clock_sink_OnClockSetRate(IMFClockStateSi
+     {
+         IMFStreamSink_QueueEvent(&sink->IMFStreamSink_iface, MEStreamSinkRateChanged, &GUID_NULL, S_OK, NULL);
+         sink->rate = rate;
++        if (rate == 0.0f && sink->state == SINK_STATE_STOPPED)
++            video_frame_sink_stream_request_sample(sink);
+     }
+ 
+     LeaveCriticalSection(&sink->cs);
+diff --git a/dlls/mfplat/buffer.c b/dlls/mfplat/buffer.c
+index 33e8728c679..b384ad34539 100644
+--- a/dlls/mfplat/buffer.c
++++ b/dlls/mfplat/buffer.c
+@@ -24,6 +24,7 @@
+ #include "rtworkq.h"
+ 
+ #include "d3d11.h"
++#include "d3d11_4.h"
+ #include "initguid.h"
+ #include "d3d9.h"
+ #include "evr.h"
+@@ -94,6 +95,33 @@ static void copy_image_nv12(BYTE *dest, LONG dest_stride, const BYTE *src, LONG
+     MFCopyImage(dest, dest_stride, src, src_stride, width, lines / 2);
+ }
+ 
++static void copy_image_i420(BYTE *dest, LONG dest_stride, const BYTE *src, LONG src_stride, DWORD width, DWORD lines)
++{
++    LONG chroma_stride = dest_stride / 2;
++    LONG src_chroma_stride = src_stride / 2;
++    DWORD chroma_width = width / 2;
++    DWORD chroma_lines = lines / 2;
++
++    MFCopyImage(dest, chroma_stride, src, src_chroma_stride, chroma_width, chroma_lines);
++    dest += chroma_stride * chroma_lines;
++    src += src_chroma_stride * chroma_lines;
++    MFCopyImage(dest, chroma_stride, src, src_chroma_stride, chroma_width, chroma_lines);
++}
++
++static void copy_image_yv12(BYTE *dest, LONG dest_stride, const BYTE *src, LONG src_stride, DWORD width, DWORD lines)
++{
++    LONG chroma_stride = dest_stride / 2;
++    LONG src_chroma_stride = src_stride / 2;
++    DWORD chroma_width = width / 2;
++    DWORD chroma_lines = lines / 2;
++    const BYTE *src_v = src;
++    const BYTE *src_u = src + src_chroma_stride * chroma_lines;
++
++    MFCopyImage(dest, chroma_stride, src_v, src_chroma_stride, chroma_width, chroma_lines);
++    dest += chroma_stride * chroma_lines;
++    MFCopyImage(dest, chroma_stride, src_u, src_chroma_stride, chroma_width, chroma_lines);
++}
++
+ static void copy_image_imc1(BYTE *dest, LONG dest_stride, const BYTE *src, LONG src_stride, DWORD width, DWORD lines)
+ {
+     MFCopyImage(dest, dest_stride, src, src_stride, width / 2, lines);
+@@ -722,9 +750,62 @@ static HRESULT WINAPI memory_2d_buffer_Lock2DSize(IMF2DBuffer2 *iface, MF2DBuffe
+ 
+ static HRESULT WINAPI memory_2d_buffer_Copy2DTo(IMF2DBuffer2 *iface, IMF2DBuffer2 *dest_buffer)
+ {
+-    FIXME("%p, %p.\n", iface, dest_buffer);
++    struct buffer *buffer = impl_from_IMF2DBuffer2(iface);
++    BYTE *src_scanline0, *src_buffer_start;
++    BYTE *dst_scanline0, *dst_buffer_start;
++    DWORD src_length, dst_length;
++    IMFMediaBuffer *media_buffer;
++    LONG src_pitch, dst_pitch;
++    HRESULT hr, hr2;
+ 
+-    return E_NOTIMPL;
++    TRACE("%p, %p.\n", iface, dest_buffer);
++
++    if (!dest_buffer)
++        return E_POINTER;
++
++    if (iface == dest_buffer)
++        return S_OK;
++
++    hr = IMF2DBuffer2_Lock2DSize(iface, MF2DBuffer_LockFlags_Read,
++            &src_scanline0, &src_pitch, &src_buffer_start, &src_length);
++    if (FAILED(hr))
++        return hr;
++
++    hr = IMF2DBuffer2_Lock2DSize(dest_buffer, MF2DBuffer_LockFlags_Write,
++            &dst_scanline0, &dst_pitch, &dst_buffer_start, &dst_length);
++    if (SUCCEEDED(hr))
++    {
++        if (dst_length < buffer->_2d.plane_size)
++            hr = E_INVALIDARG;
++        else
++        {
++            if (src_pitch < 0)
++                src_pitch = -src_pitch;
++            if (dst_pitch < 0)
++                dst_pitch = -dst_pitch;
++
++            copy_image(buffer, dst_buffer_start, dst_pitch, src_buffer_start, src_pitch,
++                    buffer->_2d.width, buffer->_2d.height);
++
++            if (SUCCEEDED(IMF2DBuffer2_QueryInterface(dest_buffer, &IID_IMFMediaBuffer, (void **)&media_buffer)))
++            {
++                IMFMediaBuffer_SetCurrentLength(media_buffer, buffer->_2d.plane_size);
++                IMFMediaBuffer_Release(media_buffer);
++            }
++        }
++
++        if (FAILED(hr2 = IMF2DBuffer2_Unlock2D(dest_buffer)))
++            WARN("Couldn't unlock destination buffer %p, hr %#lx.\n", dest_buffer, hr2);
++        if (FAILED(hr2) && SUCCEEDED(hr))
++            hr = hr2;
++    }
++
++    if (FAILED(hr2 = IMF2DBuffer2_Unlock2D(iface)))
++        WARN("Couldn't unlock source buffer %p, hr %#lx.\n", iface, hr2);
++    if (FAILED(hr2) && SUCCEEDED(hr))
++        hr = hr2;
++
++    return hr;
+ }
+ 
+ static const IMF2DBuffer2Vtbl memory_2d_buffer_vtbl =
+@@ -967,6 +1048,19 @@ static HRESULT WINAPI dxgi_1d_2d_buffer_QueryInterface(IMFMediaBuffer *iface, RE
+     return S_OK;
+ }
+ 
++static void enable_d3d11_multithread_protection(ID3D11DeviceContext *context)
++{
++    static const GUID d3d11_multithread_iid =
++            { 0x9b7e4e00, 0x342c, 0x4106, { 0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0 } };
++    ID3D11Multithread *multithread;
++
++    if (SUCCEEDED(ID3D11DeviceContext_QueryInterface(context, &d3d11_multithread_iid, (void **)&multithread)))
++    {
++        ID3D11Multithread_SetMultithreadProtected(multithread, TRUE);
++        ID3D11Multithread_Release(multithread);
++    }
++}
++
+ static HRESULT dxgi_surface_buffer_create_readback_texture(struct buffer *buffer)
+ {
+     D3D11_TEXTURE2D_DESC texture_desc;
+@@ -1003,6 +1097,7 @@ static HRESULT dxgi_surface_buffer_map(struct buffer *buffer, MF2DBuffer_LockFla
+ 
+     ID3D11Texture2D_GetDevice(buffer->dxgi_surface.texture, &device);
+     ID3D11Device_GetImmediateContext(device, &immediate_context);
++    enable_d3d11_multithread_protection(immediate_context);
+ 
+     if (flags == MF2DBuffer_LockFlags_Read || flags == MF2DBuffer_LockFlags_ReadWrite)
+     {
+@@ -1030,6 +1125,7 @@ static void dxgi_surface_buffer_unmap(struct buffer *buffer, MF2DBuffer_LockFlag
+ 
+     ID3D11Texture2D_GetDevice(buffer->dxgi_surface.texture, &device);
+     ID3D11Device_GetImmediateContext(device, &immediate_context);
++    enable_d3d11_multithread_protection(immediate_context);
+     ID3D11DeviceContext_Unmap(immediate_context, (ID3D11Resource *)buffer->dxgi_surface.rb_texture, 0);
+     memset(&buffer->dxgi_surface.map_desc, 0, sizeof(buffer->dxgi_surface.map_desc));
+ 
+@@ -1037,7 +1133,6 @@ static void dxgi_surface_buffer_unmap(struct buffer *buffer, MF2DBuffer_LockFlag
+     {
+         ID3D11DeviceContext_CopySubresourceRegion(immediate_context, (ID3D11Resource *)buffer->dxgi_surface.texture,
+                 buffer->dxgi_surface.sub_resource_idx, 0, 0, 0, (ID3D11Resource *)buffer->dxgi_surface.rb_texture, 0, NULL);
+-        ID3D11DeviceContext_Flush(immediate_context);
+     }
+ 
+     ID3D11DeviceContext_Release(immediate_context);
+@@ -1151,7 +1246,7 @@ static HRESULT dxgi_surface_buffer_lock(struct buffer *buffer, MF2DBuffer_LockFl
+         if (buffer_start)
+             *buffer_start = *scanline0;
+         if (buffer_length)
+-            *buffer_length = buffer->dxgi_surface.map_desc.DepthPitch;
++            *buffer_length = buffer->_2d.plane_size;
+     }
+ 
+     return hr;
+@@ -1432,10 +1527,14 @@ static p_copy_image_func get_2d_buffer_copy_func(DWORD fourcc)
+         case MAKEFOURCC('I','M','C','2'):
+         case MAKEFOURCC('I','M','C','4'):
+         case MAKEFOURCC('N','V','1','1'):
++            return copy_image_imc2;
++
+         case MAKEFOURCC('Y','V','1','2'):
++            return copy_image_yv12;
++
+         case MAKEFOURCC('I','4','2','0'):
+         case MAKEFOURCC('I','Y','U','V'):
+-            return copy_image_imc2;
++            return copy_image_i420;
+ 
+         case MAKEFOURCC('N','V','1','2'):
+             return copy_image_nv12;
+diff --git a/dlls/mfplat/main.c b/dlls/mfplat/main.c
+index 0a7c294294e..3723e1a929c 100644
+--- a/dlls/mfplat/main.c
++++ b/dlls/mfplat/main.c
+@@ -56,6 +56,107 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(mfplat);
+ 
++struct bytestream_read_cb
++{
++    IMFAsyncCallback IMFAsyncCallback_iface;
++    LONG refcount;
++    HANDLE event;
++    IMFAsyncResult *result;
++};
++
++static struct bytestream_read_cb *bytestream_read_cb_from_iface(IMFAsyncCallback *iface)
++{
++    return CONTAINING_RECORD(iface, struct bytestream_read_cb, IMFAsyncCallback_iface);
++}
++
++static HRESULT WINAPI bytestream_read_cb_QueryInterface(IMFAsyncCallback *iface, REFIID riid, void **obj)
++{
++    if (IsEqualIID(riid, &IID_IMFAsyncCallback) || IsEqualIID(riid, &IID_IUnknown))
++    {
++        *obj = iface;
++        IMFAsyncCallback_AddRef(iface);
++        return S_OK;
++    }
++    *obj = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG WINAPI bytestream_read_cb_AddRef(IMFAsyncCallback *iface)
++{
++    return InterlockedIncrement(&bytestream_read_cb_from_iface(iface)->refcount);
++}
++
++static ULONG WINAPI bytestream_read_cb_Release(IMFAsyncCallback *iface)
++{
++    struct bytestream_read_cb *cb = bytestream_read_cb_from_iface(iface);
++    ULONG ref = InterlockedDecrement(&cb->refcount);
++    if (!ref) { CloseHandle(cb->event); free(cb); }
++    return ref;
++}
++
++static HRESULT WINAPI bytestream_read_cb_GetParameters(IMFAsyncCallback *iface, DWORD *flags, DWORD *queue)
++{
++    return E_NOTIMPL;
++}
++
++static HRESULT WINAPI bytestream_read_cb_Invoke(IMFAsyncCallback *iface, IMFAsyncResult *result)
++{
++    struct bytestream_read_cb *cb = bytestream_read_cb_from_iface(iface);
++    cb->result = result;
++    IMFAsyncResult_AddRef(result);
++    SetEvent(cb->event);
++    return S_OK;
++}
++
++static const IMFAsyncCallbackVtbl bytestream_read_cb_vtbl =
++{
++    bytestream_read_cb_QueryInterface,
++    bytestream_read_cb_AddRef,
++    bytestream_read_cb_Release,
++    bytestream_read_cb_GetParameters,
++    bytestream_read_cb_Invoke,
++};
++
++/* Some IMFByteStream implementations only support asynchronous reads and signal
++ * this by returning pcbRead == 0xffffffff from the synchronous Read method.
++ * Fall back to BeginRead/EndRead in that case. */
++static HRESULT mfplat_bytestream_read(IMFByteStream *stream, BYTE *buffer, ULONG size, ULONG *read_size)
++{
++    struct bytestream_read_cb *cb;
++    IMFAsyncResult *result;
++    HRESULT hr;
++
++    if (FAILED(hr = IMFByteStream_Read(stream, buffer, size, read_size)))
++        return hr;
++    if (*read_size != 0xffffffff)
++        return S_OK;
++
++    if (!(cb = calloc(1, sizeof(*cb))))
++        return E_OUTOFMEMORY;
++    cb->IMFAsyncCallback_iface.lpVtbl = &bytestream_read_cb_vtbl;
++    cb->refcount = 1;
++    cb->event = CreateEventA(NULL, FALSE, FALSE, NULL);
++
++    if (FAILED(hr = IMFByteStream_BeginRead(stream, buffer, size, &cb->IMFAsyncCallback_iface, NULL)))
++    {
++        WARN("BeginRead failed, hr %#lx.\n", hr);
++        IMFAsyncCallback_Release(&cb->IMFAsyncCallback_iface);
++        return hr;
++    }
++    if (WaitForSingleObject(cb->event, 5000) != WAIT_OBJECT_0)
++    {
++        ERR("Timed out waiting for BeginRead.\n");
++        IMFAsyncCallback_Release(&cb->IMFAsyncCallback_iface);
++        return E_FAIL;
++    }
++    result = cb->result;
++    cb->result = NULL;
++    IMFAsyncCallback_Release(&cb->IMFAsyncCallback_iface);
++    hr = IMFByteStream_EndRead(stream, result, read_size);
++    IMFAsyncResult_Release(result);
++    return hr;
++}
++
+ struct local_handler
+ {
+     struct list entry;
+@@ -6142,10 +6243,26 @@ static HRESULT resolver_create_registered_handler(HKEY hkey, REFIID riid, void *
+     return hr;
+ }
+ 
++static BOOL is_asf_extension_or_mime(const WCHAR *mime, const WCHAR *extension)
++{
++    static const WCHAR *asf_extensions[] = { L".asf", L".wma", L".wmv" };
++    static const WCHAR *asf_mimes[] = { L"video/x-ms-asf", L"audio/x-ms-wma", L"video/x-ms-wmv" };
++    unsigned int i;
++
++    if (extension)
++        for (i = 0; i < ARRAY_SIZE(asf_extensions); ++i)
++            if (!lstrcmpiW(extension, asf_extensions[i])) return TRUE;
++    if (mime)
++        for (i = 0; i < ARRAY_SIZE(asf_mimes); ++i)
++            if (!lstrcmpiW(mime, asf_mimes[i])) return TRUE;
++    return FALSE;
++}
++
+ static HRESULT resolver_create_bytestream_handler(IMFByteStream *stream, DWORD flags, const WCHAR *mime,
+         const WCHAR *extension, IMFByteStreamHandler **handler)
+ {
+     static const HKEY hkey_roots[2] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
++    static const GUID CLSID_WineDMOByteStreamHandler = {0x317df618,0x5e5a,0x468a,{0x9f,0x15,0xd8,0x27,0xa9,0xa0,0x81,0x62}};
+     HRESULT hr = E_FAIL;
+     unsigned int i, j;
+ 
+@@ -6203,6 +6320,12 @@ static HRESULT resolver_create_bytestream_handler(IMFByteStream *stream, DWORD f
+             break;
+     }
+ 
++    /* Built-in fallback: if no registered ASF/WMA handler was found, try the winedmo handler directly.
++     * This avoids a dependency on the Windows registry having the handler entry populated. */
++    if (FAILED(hr) && is_asf_extension_or_mime(mime, extension))
++        hr = CoCreateInstance(&CLSID_WineDMOByteStreamHandler, NULL, CLSCTX_INPROC_SERVER,
++                &IID_IMFByteStreamHandler, (void **)handler);
++
+     return hr;
+ }
+ 
+@@ -6266,7 +6389,9 @@ static HRESULT resolver_get_bytestream_url_hint(IMFByteStream *stream, WCHAR con
+         return hr;
+     if (position && FAILED(hr = IMFByteStream_SetCurrentPosition(stream, 0)))
+         return hr;
+-    if (FAILED(hr = IMFByteStream_Read(stream, buffer, sizeof(buffer), &length)))
++    if (FAILED(hr = mfplat_bytestream_read(stream, buffer, sizeof(buffer), &length)))
++        return hr;
++    if (FAILED(hr = IMFByteStream_SetCurrentPosition(stream, position)))
+         return hr;
+ 
+     if (length < sizeof(buffer))
+@@ -6346,6 +6471,13 @@ static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHA
+         if (FAILED(hr))
+             hr = resolver_create_default_handler(handler);
+     }
++    else if (SUCCEEDED(resolver_get_bytestream_url_hint(stream, &url_ext)) && url_ext)
++    {
++        hr = resolver_create_bytestream_handler(stream, flags, NULL, url_ext, handler);
++
++        if (FAILED(hr))
++            hr = resolver_create_default_handler(handler);
++    }
+ 
+     CoTaskMemFree(mimeW);
+     CoTaskMemFree(urlW);
+@@ -7420,11 +7552,19 @@ static HRESULT WINAPI eventqueue_GetEvent(IMFMediaEventQueue *iface, DWORD flags
+ 
+ static void queue_notify_subscriber(struct event_queue *queue)
+ {
++    DWORD flags, callback_queue = MFASYNC_CALLBACK_QUEUE_STANDARD;
++    RTWQASYNCRESULT *result_data;
++
+     if (list_empty(&queue->events) || !queue->subscriber || queue->notified)
+         return;
+ 
++    result_data = (RTWQASYNCRESULT *)queue->subscriber;
++    if (FAILED(IRtwqAsyncCallback_GetParameters(result_data->pCallback, &flags, &callback_queue))
++            || callback_queue == MFASYNC_CALLBACK_QUEUE_UNDEFINED)
++        callback_queue = MFASYNC_CALLBACK_QUEUE_STANDARD;
++
+     queue->notified = TRUE;
+-    RtwqPutWorkItem(MFASYNC_CALLBACK_QUEUE_STANDARD, 0, queue->subscriber);
++    RtwqPutWorkItem(callback_queue, 0, queue->subscriber);
+ }
+ 
+ static HRESULT WINAPI eventqueue_BeginGetEvent(IMFMediaEventQueue *iface, IMFAsyncCallback *callback, IUnknown *state)
+diff --git a/dlls/mfplat/tests/mfplat.c b/dlls/mfplat/tests/mfplat.c
+index 80f1426864a..c7f890763d5 100644
+--- a/dlls/mfplat/tests/mfplat.c
++++ b/dlls/mfplat/tests/mfplat.c
+@@ -1340,7 +1340,7 @@ static void test_source_resolver(void)
+     ok(hr == S_OK, "Failed to set string value, hr %#lx.\n", hr);
+     IMFAttributes_Release(attributes);
+ 
+-    /* Start of gstreamer dependent tests */
++    /* Start of winedmo dependent tests */
+ 
+     hr = IMFSourceResolver_CreateObjectFromByteStream(resolver, stream, NULL, MF_RESOLUTION_MEDIASOURCE, NULL,
+             &obj_type, (IUnknown **)&mediasource);
+diff --git a/dlls/mfsrcsnk/media_source.c b/dlls/mfsrcsnk/media_source.c
+index b94db3fdc40..8440c77bc51 100644
+--- a/dlls/mfsrcsnk/media_source.c
++++ b/dlls/mfsrcsnk/media_source.c
+@@ -686,7 +686,7 @@ static HRESULT media_source_send_eos(struct media_source *source, struct media_s
+         if (other->active && !other->eos) return S_OK;
+     }
+ 
+-    queue_media_event_value(source->queue, MEEndOfPresentation, &empty);
++    media_source_queue_end_of_presentation(source);
+     source->state = SOURCE_STOPPED;
+     return S_OK;
+ }
+diff --git a/dlls/rtworkq/queue.c b/dlls/rtworkq/queue.c
+index 144feb98c55..5e28171b8c4 100644
+--- a/dlls/rtworkq/queue.c
++++ b/dlls/rtworkq/queue.c
+@@ -224,6 +224,7 @@ static HRESULT lock_user_queue(DWORD queue)
+ static HRESULT unlock_user_queue(DWORD queue)
+ {
+     HRESULT hr = RTWQ_E_INVALID_WORKQUEUE;
++    struct queue *queue_obj = NULL;
+     struct queue_handle *entry;
+ 
+     if (!(queue & RTWQ_CALLBACK_QUEUE_PRIVATE_MASK))
+@@ -236,14 +237,20 @@ static HRESULT unlock_user_queue(DWORD queue)
+         if (--entry->refcount == 0)
+         {
+             if (shared_mt_queue == queue) shared_mt_queue = 0;
+-            shutdown_queue((struct queue *)entry->obj);
+-            free(entry->obj);
++            queue_obj = entry->obj;
+             entry->obj = next_free_user_queue;
+             next_free_user_queue = entry;
+         }
+         hr = S_OK;
+     }
+     LeaveCriticalSection(&queues_section);
++
++    if (queue_obj)
++    {
++        shutdown_queue(queue_obj);
++        free(queue_obj);
++    }
++
+     return hr;
+ }
+ 
+@@ -816,10 +823,11 @@ static void CALLBACK scheduled_item_cancelable_callback(TP_CALLBACK_INSTANCE *in
+ static void CALLBACK periodic_item_callback(TP_CALLBACK_INSTANCE *instance, void *context, TP_TIMER *timer)
+ {
+     struct work_item *item = context;
++    RTWQASYNCRESULT *result = (RTWQASYNCRESULT *)item->result;
+ 
+     IUnknown_AddRef(&item->IUnknown_iface);
+ 
+-    invoke_async_callback(item->result);
++    IRtwqAsyncCallback_Invoke(result->pCallback, item->result);
+ 
+     IUnknown_Release(&item->IUnknown_iface);
+ }
+diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
+index f1bd833f53b..b0732844cc7 100644
+--- a/dlls/win32u/vulkan.c
++++ b/dlls/win32u/vulkan.c
+@@ -175,6 +175,120 @@ static VkResult win32u_vkCreateWin32SurfaceKHR( VkInstance client_instance, cons
+     return VK_SUCCESS;
+ }
+ 
++static VkResult record_fsr_cmd(struct vulkan_device *device, struct swapchain *swapchain, struct fs_hack_image *hack)
++{
++    VkImageMemoryBarrier barriers[3] = {{0}};
++    VkCommandBufferBeginInfo beginInfo = {0};
++    union
++    {
++        uint32_t uint[16];
++        float    fp[16];
++    } c;
++    VkResult result;
++
++    TRACE("recording compute command\n");
++
++    init_barrier(&barriers[0]);
++    init_barrier(&barriers[1]);
++    init_barrier(&barriers[2]);
++
++    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
++    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
++
++    device->p_vkBeginCommandBuffer(hack->cmd, &beginInfo);
++
++    barriers[0].oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
++    barriers[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    barriers[0].image = hack->user_image;
++    barriers[0].srcAccessMask = 0;
++    barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
++
++    barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barriers[1].image = hack->swapchain_image;
++    barriers[1].srcAccessMask = 0;
++    barriers[1].dstAccessMask = 0;
++
++    device->p_vkCmdPipelineBarrier( hack->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
++                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL, 0, NULL, 2, barriers );
++
++    c.fp[0] = swapchain->extents.width * (1.0f / swapchain->host_extents.width);
++    c.fp[1] = swapchain->extents.height * (1.0f / swapchain->host_extents.height);
++    c.fp[2] = 0.5f * c.fp[0] - 0.5f;
++    c.fp[3] = 0.5f * c.fp[1] - 0.5f;
++    c.fp[4] = 1.0f / swapchain->extents.width;
++    c.fp[5] = 1.0f / swapchain->extents.height;
++    c.fp[6] =  1.0f * c.fp[4];
++    c.fp[7] = -1.0f * c.fp[5];
++    c.fp[8] = -1.0f * c.fp[4];
++    c.fp[9] =  2.0f * c.fp[5];
++    c.fp[10] =  1.0f * c.fp[4];
++    c.fp[11] =  2.0f * c.fp[5];
++    c.fp[12] =  0.0f * c.fp[4];
++    c.fp[13] =  4.0f * c.fp[5];
++    c.uint[14] = swapchain->host_extents.width;
++    c.uint[15] = swapchain->host_extents.height;
++
++    bind_pipeline(device, hack->cmd, &swapchain->fsr_easu_pipeline, hack->descriptor_set, c.uint);
++
++    device->p_vkCmdDispatch(hack->cmd, (swapchain->host_extents.width + 7) / 8,
++            (swapchain->host_extents.height + 7) / 8, 1);
++
++    barriers[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    barriers[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
++    barriers[0].image = hack->user_image;
++    barriers[0].srcAccessMask = 0;
++    barriers[0].dstAccessMask = 0;
++
++    barriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    barriers[1].image = hack->swapchain_image;
++    barriers[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
++    barriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
++
++    barriers[2].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barriers[2].newLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barriers[2].image = hack->swapchain_image;
++    barriers[2].srcAccessMask = 0;
++    barriers[2].dstAccessMask = 0;
++
++    device->p_vkCmdPipelineBarrier(hack->cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++                                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 3, barriers);
++
++    c.fp[0] = exp2f(-swapchain->upscaler.fsr.sharpness);
++    c.uint[2] = swapchain->host_extents.width;
++    c.uint[3] = swapchain->host_extents.height;
++    c.uint[4] = 0;
++    c.uint[5] = 0;
++    c.uint[6] = 0 + swapchain->host_extents.width;
++    c.uint[7] = 0 + swapchain->host_extents.height;
++
++    bind_pipeline(device, hack->cmd, &swapchain->fsr_rcas_pipeline, hack->fsr_set, c.uint);
++
++    device->p_vkCmdDispatch(hack->cmd, (swapchain->host_extents.width + 7) / 8,
++            (swapchain->host_extents.height + 7) / 8, 1);
++
++    barriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barriers[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    barriers[0].image = hack->swapchain_image;
++    barriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
++    barriers[0].dstAccessMask = 0;
++
++    device->p_vkCmdPipelineBarrier(hack->cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++                                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, barriers);
++
++    result = device->p_vkEndCommandBuffer(hack->cmd);
++    if (result != VK_SUCCESS)
++    {
++        ERR("vkEndCommandBuffer: %d\n", result);
++        return result;
++    }
++
++    return VK_SUCCESS;
++}
++
++
++
+ static void win32u_vkDestroySurfaceKHR( VkInstance client_instance, VkSurfaceKHR client_surface,
+                                         const VkAllocationCallbacks *allocator )
+ {
+@@ -1306,11 +1420,17 @@ static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentI
+                     return VK_ERROR_DEVICE_LOST;
+                 }
+ 
+-                if (queue->device->queue_props[queue_idx].queueFlags & VK_QUEUE_COMPUTE_BIT) /* TODO */
+-                    res = record_compute_cmd( queue->device, swapchain, hack );
++                if (queue->device->queue_props[queue_idx].queueFlags & VK_QUEUE_COMPUTE_BIT)
++                {
++                    if (swapchain->upscaler.is_fsr)
++                        res = record_fsr_cmd( queue->device, swapchain, hack );
++                    else
++                        res = record_compute_cmd( queue->device, swapchain, hack );
++                }
+                 else
+                 {
+-                    ERR( "Present queue does not support compute!\n" );
++                    ERR( "Present queue does not support compute!
++" );
+                     res = VK_ERROR_DEVICE_LOST;
+                 }
+ 
+diff --git a/dlls/win32u/win32u_private.h b/dlls/win32u/win32u_private.h
+index 1fb8030f1de..f1b538bfc25 100644
+--- a/dlls/win32u/win32u_private.h
++++ b/dlls/win32u/win32u_private.h
+@@ -214,6 +214,7 @@ struct vulkan_gpu
+ 
+ extern BOOL get_vulkan_gpus( struct list *gpus );
+ extern void free_vulkan_gpu( struct vulkan_gpu *gpu );
++extern BOOL fs_hack_is_fsr(BOOL *lite, float *sharpness);
+ extern BOOL get_vulkan_uuid_from_luid( const LUID *luid, GUID *uuid );
+ 
+ /* winstation.c */
