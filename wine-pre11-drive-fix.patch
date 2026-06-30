@@ -1,0 +1,34 @@
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index b641e4ca..12dcc810 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -3651,6 +3651,7 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
+         }
+ 
+         status = find_file_in_dir( root_fd, unix_name, pos, name, end - name, is_unix );
++#ifndef WINE_DISABLE_REPARSE_RESOLVE
+ 
+         /* try to resolve it as a reparse point */
+         if (status == STATUS_OBJECT_NAME_NOT_FOUND && (reparse_name = malloc( (end - name + 1) * sizeof(WCHAR) )))
+@@ -3678,6 +3679,21 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
+             }
+             free( reparse_name );
+         }
++#else
++        /*
++         * Pre-11.0 behavior: skip NT reparse resolution and rely on
++         * the kernel symlink following for dosdevices entries.
++         * This restores compatibility with custom drive letter
++         * mappings that broke when IO_REPARSE_TAG_MOUNT_POINT /
++         * IO_REPARSE_TAG_SYMLINK resolution was introduced.
++         */
++        if (status == STATUS_OBJECT_NAME_NOT_FOUND)
++        {
++            TRACE( "skipping reparse resolution for %s, "
++                   "falling back to direct symlink follow\n",
++                   debugstr_wn(name, end - name) );
++        }
++#endif
+ 
+         /* if this is the last element, not finding it is not necessarily fatal */
+         if (!name_len)
