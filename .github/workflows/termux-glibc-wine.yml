@@ -496,7 +496,7 @@ jobs:
 
           elif [ "$WINE_BRANCH" = "vanilla" ]; then
             echo "处理 Vanilla 分支"
-            git clone https://github.com/The412Banner/proton-wine.git wine
+            git clone https://github.com/brunodev85/wine-9.2-custom.git wine
             SOURCE_DIR="wine"
             cd "$SOURCE_DIR"
 
