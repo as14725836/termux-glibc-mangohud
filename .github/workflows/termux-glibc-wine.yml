@@ -519,11 +519,11 @@ jobs:
           echo "构建名称: $BUILD_NAME"
 
           echo "修复 Termux 路径问题..."
-          find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/data/data/com.winlator/files/rootfs" {} \; | xargs sed -i 's|/data/data/com.winlator/files/rootfs/|/data/data/com.termux/files/usr/tmp/|g'
-          find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/data/data/com.winlator/files/rootfs"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "file.c" -exec sed -i 's|"/data/data/com.winlator/files/rootfs"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "loader.c" -exec sed -i 's|"/data/data/com.winlator/files/rootfs"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "server.c" -exec sed -i 's|"/data/data/com.winlator/files/rootfs"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+          find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/data/data/com.winlator/files/rootfs" {} \; | xargs sed -i 's|/data/data/com.winlator/files/rootfs/|/data/data/com.termux/files/usr/|g'
+          find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/data/data/com.winlator/files/rootfs"|"/data/data/com.termux/files/usr/"|g' {} +
+          find . -name "file.c" -exec sed -i 's|"/data/data/com.winlator/files/rootfs"|"/data/data/com.termux/files/usr"|g' {} +
+          find . -name "loader.c" -exec sed -i 's|"/data/data/com.winlator/files/rootfs"|"/data/data/com.termux/files/usr"|g' {} +
+          find . -name "server.c" -exec sed -i 's|"/data/data/com.winlator/files/rootfs"|"/data/data/com.termux/files/usr"|g' {} +
           
           echo "补丁应用"
           # 定义函数避免重复
