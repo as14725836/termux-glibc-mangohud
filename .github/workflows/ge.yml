@@ -158,7 +158,6 @@ jobs:
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           
           echo "生成 configure 脚本..."
-          ./autogen.sh
           mkdir -p build-wow64
           cd build-wow64
           export CROSSCC="x86_64-w64-mingw32-gcc"
