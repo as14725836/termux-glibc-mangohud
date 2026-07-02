@@ -143,13 +143,12 @@ jobs:
           rm -rf $BUILD_DIR/proton
           mkdir -p $BUILD_DIR/proton
           cd $BUILD_DIR/proton
-          git clone https://github.com/GameNative/proton-wine.git wine
+          git clone https://github.com/GloriousEggroll/proton-ge-custom.git wine
           cd wine
-          
-          git checkout "proton_10.0"
-          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
-          echo "切换到分支: $PROTON_BRANCH"
-          git checkout $PROTON_BRANCH
+          # 直接拉取 wine 子模块
+          git submodule update --init wine
+          cd wine
+          git checkout experimental-wine-bleeding-edge-10.0-347276-20260421-p3a484d-w5edc83-dd4486d-vf036a7
           
                 
           echo "修复 Termux 路径问题..."
@@ -158,20 +157,7 @@ jobs:
           find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          echo "补丁应用"
-          # 定义函数避免重复
-          apply_patch() {
-          patch -p1 -N -f < "$1" || true
-          find . -name "*.rej" -delete 2>/dev/null || true
-          }
-          # 应用所有补丁
-          apply_patch "$GITHUB_WORKSPACE/patch/0001-qcap-fix-Smart-Tee-preview-allocator-and-RGB32-negot.patch"
-          apply_patch "$GITHUB_WORKSPACE/patch/0002-mfreadwrite-make-source-reader-video-playback-resili.patch"
-          apply_patch "$GITHUB_WORKSPACE/patch/0003-mf-stabilize-media-session-and-media-engine-playback.patch"
-          apply_patch "$GITHUB_WORKSPACE/patch/qcap_wow64_fix_applied.patch"
-          sed -i '66,78d' include/wine/mfinternal.idl
-          sed -i '57s/]/}/' ./include/wine/mfinternal.idl
-          sed -i '48,55d' ./include/wine/mfinternal.idl
+          
           echo "生成 configure 脚本..."
           ./autogen.sh
           mkdir -p build-wow64
