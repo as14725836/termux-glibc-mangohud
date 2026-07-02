@@ -19,7 +19,7 @@ on:
       proton_branch:
         description: 'Proton 分支 (仅 Proton 构建)'
         required: false
-        default: 'proton_11.0'
+        default: 'proton_8.0'
         type: choice
         options:
         - proton_11.0
