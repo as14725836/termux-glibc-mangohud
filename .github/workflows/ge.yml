@@ -150,13 +150,12 @@ jobs:
           cd $BUILD_DIR/proton
           
           # 克隆仓库
-          git clone https://github.com/GloriousEggroll/wine-ge-custom.git wine
+          git clone https://github.com/GloriousEggroll/proton-ge-custom.git wine
           cd wine
-          
-          # 拉取子模块
-          git submodule update --init proton-wine
-          cd proton-wine
-          git checkout 39021e6
+          # 直接拉取 wine 子模块
+          git submodule update --init wine
+          cd wine
+          git checkout proton-wine-10.0-4
           
           apply_patch() {
           patch -p1 -N -f < "$1" || true
@@ -165,7 +164,10 @@ jobs:
           # 应用所有补丁
           apply_patch "$GITHUB_WORKSPACE/ge-8-25.patch"
           apply_patch "$GITHUB_WORKSPACE/fix-address-space.diff"
-          
+
+
+          echo "生成 configure 脚本..."
+          ./autogen.sh
           # 创建构建目录并配置
           echo "生成 configure 脚本..."
           mkdir -p build-wow64
