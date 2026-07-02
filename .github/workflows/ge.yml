@@ -146,7 +146,7 @@ jobs:
           cd wine
           # 直接拉取 wine 子模块
           git submodule update --init wine
-          cd wine
+          cd proton-wine
           git checkout 39021e6
           
                 
