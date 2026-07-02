@@ -145,7 +145,7 @@ jobs:
           git clone https://github.com/GloriousEggroll/wine-ge-custom.git wine
           cd wine
           # 直接拉取 wine 子模块
-          git submodule update --init wine
+          git submodule update --init proton-wine
           cd proton-wine
           git checkout 39021e6
           
