@@ -149,7 +149,7 @@ jobs:
 
           git submodule update --init wine
           cd wine
-          git checkout "experimental_10.0"
+          git checkout "experimental_11.0"
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
           echo "切换到分支: $PROTON_BRANCH"
           git checkout $PROTON_BRANCH
