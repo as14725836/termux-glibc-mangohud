@@ -146,7 +146,9 @@ jobs:
           cd $BUILD_DIR/proton
           git clone https://github.com/ValveSoftware/Proton.git wine
           cd wine
-          
+
+          git submodule update --init wine
+          cd wine
           git checkout "proton_10.0"
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
           echo "切换到分支: $PROTON_BRANCH"
