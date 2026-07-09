@@ -161,13 +161,7 @@ jobs:
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           echo "补丁应用"
           # 定义函数避免重复
-          apply_patch() {
-          patch -p1 -N -f < "$1" || true
-          find . -name "*.rej" -delete 2>/dev/null || true
-          }
-          # 应用所有补丁
-          apply_patch "$GITHUB_WORKSPACE/3d1a73c.patch"
-          echo "生成 configure 脚本..."
+          
           ./autogen.sh
           mkdir -p build-wow64
           cd build-wow64
