@@ -1,0 +1,69 @@
+From 3d1a73cbf4d84a831e69e42190867bef57d82c35 Mon Sep 17 00:00:00 2001
+From: Conor McCarthy <cmccarthy@codeweavers.com>
+Date: Fri, 6 Mar 2026 13:15:27 +1000
+Subject: [PATCH] winegstreamer: Do not copy the incorrect buffer.
+
+If a dynamic format change occurs in a stream, the resulting flush may
+cause another stream to first set stream->buffer to null, and then
+replace it with a new buffer which does not match the info subsequently
+used by wg_parser_stream_copy_buffer(). If the new buffer is smaller, the
+result is an assertion failure.
+
+This issue has been observed in SHOGUN: Total War Collection and
+Ys I & II Chronicles.
+
+(cherry picked from commit 24e09df9a064193243f05b9d66798bf257b2682e)
+
+CW-Bug-Id: #26683
+---
+ dlls/winegstreamer/wg_parser.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/winegstreamer/wg_parser.c b/dlls/winegstreamer/wg_parser.c
+index 4d7b9574141e..18f5786f2f54 100644
+--- a/dlls/winegstreamer/wg_parser.c
++++ b/dlls/winegstreamer/wg_parser.c
+@@ -126,7 +126,7 @@ struct wg_parser_stream
+     GstBuffer *buffer;
+     GstMapInfo map_info;
+ 
+-    bool flushing, eos, enabled, has_tags, has_buffer, no_more_pads, fix_nv12;
++    bool flushing, eos, enabled, has_tags, has_buffer, no_more_pads, fix_nv12, get_buffer_called;
+ 
+     uint64_t duration;
+     gchar *tags[WG_PARSER_TAG_COUNT];
+@@ -389,6 +389,8 @@ static NTSTATUS wg_parser_stream_get_buffer(void *args)
+     wg_buffer->size = gst_buffer_get_size(buffer);
+     wg_buffer->stream = stream->number;
+ 
++    stream->get_buffer_called = true;
++
+     pthread_mutex_unlock(&parser->mutex);
+     return S_OK;
+ }
+@@ -403,7 +405,7 @@ static NTSTATUS wg_parser_stream_copy_buffer(void *args)
+ 
+     pthread_mutex_lock(&parser->mutex);
+ 
+-    if (!stream->buffer)
++    if (!stream->buffer || !stream->get_buffer_called)
+     {
+         pthread_mutex_unlock(&parser->mutex);
+         return VFW_E_WRONG_STATE;
+@@ -431,6 +433,8 @@ static NTSTATUS wg_parser_stream_release_buffer(void *args)
+         stream->buffer = NULL;
+     }
+ 
++    stream->get_buffer_called = false;
++
+     pthread_mutex_unlock(&parser->mutex);
+     pthread_cond_signal(&stream->event_empty_cond);
+ 
+@@ -747,6 +751,8 @@ static gboolean sink_event_cb(GstPad *pad, GstObject *parent, GstEvent *event)
+                 stream->buffer = NULL;
+             }
+ 
++            stream->get_buffer_called = false;
++
+             pthread_mutex_unlock(&parser->mutex);
+             break;
