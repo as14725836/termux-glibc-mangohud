@@ -509,6 +509,7 @@ jobs:
             --with-gettext \
             --with-opengl \
             --with-sdl \
+            --with-wayland \
             --enable-nls \
             --disable-winemenubuilder \
             --disable-win16 \
@@ -528,8 +529,8 @@ jobs:
             --without-udev \
             --without-unwind \
             --without-usb \
-            --without-v4l2 \
-            --without-wayland
+            --without-v4l2
+            
           echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
           make -j$(nproc)
           make install
