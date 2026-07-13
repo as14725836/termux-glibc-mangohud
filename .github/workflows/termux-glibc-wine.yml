@@ -507,10 +507,12 @@ jobs:
             --with-fontconfig \
             --with-gstreamer \
             --with-gettext \
+            --with-opengl \
             --with-sdl \
             --enable-nls \
             --disable-winemenubuilder \
             --disable-win16 \
+            --without-ffmpeg \
             --disable-tests \
             --without-ldap \
             --without-capi \
