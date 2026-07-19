@@ -81,7 +81,6 @@ jobs:
             libxext-dev \
             libxi-dev \
             pkg-config \
-            libwayland-egl1-mesa-dev \
             libegl-dev \
             libgbm-dev \
             libdrm-dev \
@@ -307,7 +306,6 @@ jobs:
             libx11-dev \
             libxext-dev \
             libxi-dev \
-            libwayland-egl1-mesa-dev \
             libegl-dev \
             libgbm-dev \
             libdrm-dev \
