@@ -117,8 +117,6 @@ jobs:
             libwayland-dev \
             wayland-protocols \
             libxkbcommon-dev \
-            libwayland-egl-dev \
-            wayland-scanner \
             locales \
             language-pack-zh-hans"
           sudo apt install -y $BASE_DEPS
