@@ -156,8 +156,6 @@ jobs:
           cd $BUILD_DIR/proton
           git clone https://github.com/Pipetto-crypto/wine.git wine
           cd wine
-          git submodule update --init wine
-          cd wine
           git checkout "experimental_11.0"
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
           echo "切换到分支: $PROTON_BRANCH"
