@@ -526,8 +526,8 @@ jobs:
             --with-gettext \
             --with-opengl \
             --with-sdl \
-            --with-wayland \
             --enable-nls \
+            --without-wayland \
             --disable-winemenubuilder \
             --disable-win16 \
             --without-ffmpeg \
