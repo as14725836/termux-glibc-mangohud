@@ -154,7 +154,7 @@ jobs:
           rm -rf $BUILD_DIR/proton
           mkdir -p $BUILD_DIR/proton
           cd $BUILD_DIR/proton
-          git clone https://github.com/Pipetto-crypto/wine.git wine
+          git clone https://github.com/ValveSoftware/wine.git wine
           cd wine
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
           echo "切换到分支: $PROTON_BRANCH"
