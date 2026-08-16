@@ -469,7 +469,7 @@ jobs:
           
           echo "补丁应用"
           # 定义函数避免重复
-          for patch in $GITHUB_WORKSPACE/patch/*.patch; do
+          for patch in $GITHUB_WORKSPACE/patch-winlator/*.patch; do
           echo "Applying $patch..."
           patch -p1 < "$patch"
           done
