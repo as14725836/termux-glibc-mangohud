@@ -1,4 +1,4 @@
-name: Wine and Proton 无bootBuilder
+name: termux-glibc Wine and Proton
 
 on:
   schedule:
@@ -46,6 +46,14 @@ on:
         required: false
         default: 'latest'
         type: string
+      apply_dxgi_patch:
+        description: '应用 DXGI 补丁 (修复 MFCreateDXGIDeviceManager 重复定义)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+        - 'true'
+        - 'false'
 
 env:
   USE_CCACHE: true
@@ -128,6 +136,7 @@ jobs:
             locales \
             language-pack-zh-hans"
           sudo apt install -y $BASE_DEPS
+      
       - name: 安装多媒体和音频依赖
         run: |
           sudo apt update
@@ -138,12 +147,14 @@ jobs:
             gstreamer1.0-* \
             libmpg123-dev \
             libopenal-dev
+      
       - name: 设置中文语言环境
         run: |
           sudo locale-gen zh_CN.UTF-8
           sudo update-locale LANG=zh_CN.UTF-8
           export LANG=zh_CN.UTF-8
           export LC_ALL=zh_CN.UTF-8
+      
       - name: 构建 Proton WOW64 版本
         run: |
           set -e
@@ -161,7 +172,6 @@ jobs:
           echo "切换到分支: $PROTON_BRANCH"
           git checkout $PROTON_BRANCH
           
-                
           echo "修复 Termux 路径问题..."
           find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
           find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
@@ -169,7 +179,6 @@ jobs:
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           echo "补丁应用"
-          # 定义函数避免重复
           
           ./autogen.sh
           mkdir -p build-wow64
@@ -222,20 +231,24 @@ jobs:
           PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
           echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
           echo "BUILD_NAME=proton-${PROTON_VERSION}-wow64" >> $GITHUB_ENV
+      
       - name: 准备打包
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           mkdir -p wine-package/$PACKAGE_NAME
           cp -r /tmp/wine-install-proton/* wine-package/$PACKAGE_NAME/
+      
       - name: 创建打包文件
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
           ls -lh *.tar.xz
+      
       - name: Generate checksums
         run: |
           sha256sum *.tar.xz > checksums.txt
           cat checksums.txt
+      
       - name: Upload Proton artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -348,6 +361,7 @@ jobs:
             locales \
             language-pack-zh-hans"
           sudo apt install -y $BASE_DEPS
+      
       - name: 安装多媒体和音频依赖
         run: |
           sudo apt update
@@ -376,27 +390,32 @@ jobs:
             libx265-dev \
             libvpx-dev \
             libtheora-dev
+      
       - name: 设置中文语言环境
         run: |
           sudo locale-gen zh_CN.UTF-8
           sudo update-locale LANG=zh_CN.UTF-8
           export LANG=zh_CN.UTF-8
           export LC_ALL=zh_CN.UTF-8
+      
       - name: 构建 Wine WOW64 版本
         run: |
           set -e
           export WINE_BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
           export WINE_VERSION="${{ github.event.inputs.wine_version || 'latest' }}"
+          export APPLY_DXGI_PATCH="${{ github.event.inputs.apply_dxgi_patch || 'true' }}"
           export BUILD_DIR="/tmp/build_wine_${WINE_BRANCH}_${WINE_VERSION}"
           echo "开始构建 Wine WOW64 版本..."
           echo "分支: $WINE_BRANCH"
           echo "版本: $WINE_VERSION"
+          echo "应用 DXGI 补丁: $APPLY_DXGI_PATCH"
           export LANG=zh_CN.UTF-8
           export LC_ALL=zh_CN.UTF-8
           export LANGUAGE=zh_CN:zh:en_US:en
           rm -rf "$BUILD_DIR"
           mkdir -p "$BUILD_DIR"
           cd "$BUILD_DIR"
+          
           if [ "$WINE_BRANCH" = "staging-tkg" ] || [ "$WINE_BRANCH" = "staging-tkg-fsync" ]; then
             echo "处理 TKG 系列分支: $WINE_BRANCH"
             if [ "$WINE_BRANCH" = "staging-tkg" ]; then
@@ -463,54 +482,67 @@ jobs:
             echo "未知的 Wine 分支: $WINE_BRANCH"
             exit 1
           fi
+          
           echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
+          echo "WINE_VERSION_ACTUAL=$WINE_VERSION_ACTUAL" >> $GITHUB_ENV
           echo "当前源码目录: $(pwd)"
           echo "构建名称: $BUILD_NAME"
           
           echo "补丁应用"
-          # 定义函数避免重复
+          # 应用自定义补丁
           for patch in $GITHUB_WORKSPACE/patch-winlator/*.patch; do
-          echo "Applying $patch..."
-          patch -p1 < "$patch"
+            if [ -f "$patch" ]; then
+              echo "Applying $patch..."
+              patch -p1 < "$patch" || true
+            fi
           done
           
-          PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
-          VERSION_MAJOR=$(echo "$PURE_VERSION" | cut -d. -f1)
-          VERSION_MINOR=$(echo "$PURE_VERSION" | cut -d. -f2)
-          echo "Wine 版本: $WINE_VERSION_ACTUAL"
-          echo "纯版本号: $PURE_VERSION"
-          echo "主版本: $VERSION_MAJOR, 次版本: $VERSION_MINOR"
-          if [ "$VERSION_MAJOR" -gt 9 ] || [ "$VERSION_MAJOR" -eq 9 -a "$VERSION_MINOR" -ge 10 ]; then
-            echo "使用 9.10+ 版本的修复方式 (wine_do_not_create_dxgi_manager2.patch)"
-            wget https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
-            if [ -f "dlls/mfplat/main.c" ]; then
-              echo "找到目标文件 dlls/mfplat/main.c，准备应用补丁..."
-              if patch -p1 < wine_do_not_create_dxgi_manager2.patch; then
-                echo "✅ 补丁应用成功"
+          # ===== DXGI 补丁应用逻辑 =====
+          if [ "$APPLY_DXGI_PATCH" = "true" ]; then
+            echo "✅ 已启用 DXGI 补丁，开始应用..."
+            PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
+            VERSION_MAJOR=$(echo "$PURE_VERSION" | cut -d. -f1)
+            VERSION_MINOR=$(echo "$PURE_VERSION" | cut -d. -f2)
+            echo "Wine 版本: $WINE_VERSION_ACTUAL"
+            echo "纯版本号: $PURE_VERSION"
+            echo "主版本: $VERSION_MAJOR, 次版本: $VERSION_MINOR"
+            
+            if [ "$VERSION_MAJOR" -gt 9 ] || [ "$VERSION_MAJOR" -eq 9 -a "$VERSION_MINOR" -ge 10 ]; then
+              echo "使用 9.10+ 版本的修复方式 (wine_do_not_create_dxgi_manager2.patch)"
+              wget -O wine_do_not_create_dxgi_manager2.patch https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
+              if [ -f "dlls/mfplat/main.c" ]; then
+                echo "找到目标文件 dlls/mfplat/main.c，准备应用补丁..."
+                if patch -p1 < wine_do_not_create_dxgi_manager2.patch; then
+                  echo "✅ 补丁应用成功"
+                else
+                  echo "❌ 补丁应用失败"
+                  exit 1
+                fi
               else
-                echo "❌ 补丁应用失败"
+                echo "❌ 错误：目标文件 dlls/mfplat/main.c 不存在"
                 exit 1
               fi
             else
-              echo "❌ 错误：目标文件 dlls/mfplat/main.c 不存在"
-              exit 1
+              echo "使用 9.10 以下版本的修复方式 (fix_wine9.2_mfplat.sh)"
+              wget -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
+              chmod +x fix_wine9.2_mfplat.sh
+              ./fix_wine9.2_mfplat.sh
+              echo "✅ 9.10 以下版本修复完成"
             fi
           else
-            echo "使用 9.10 以下版本的修复方式 (fix_wine9.2_mfplat.sh)"
-            wget -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
-            chmod +x fix_wine9.2_mfplat.sh
-            ./fix_wine9.2_mfplat.sh
-            echo "✅ 9.10 以下版本修复完成"
+            echo "⏭️ DXGI 补丁已禁用，跳过应用"
           fi
+          # ===== DXGI 补丁应用逻辑结束 =====
+          
           mkdir -p build-wow64
           cd build-wow64
           export CROSSCC="x86_64-w64-mingw32-gcc"
           export CROSSCXX="x86_64-w64-mingw32-g++"
-          export CFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
+          export CFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe -DWINE_DISABLE_REPARSE_RESOLVE"
           export CXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
           export CROSSCFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
           export CROSSCXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
-          export CFLAGS="-DWINE_DISABLE_REPARSE_RESOLVE"
+          
           ../configure \
             --enable-win64 \
             --enable-archs=i386,x86_64 \
@@ -550,20 +582,24 @@ jobs:
           echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
           make -j$(nproc)
           make install
+      
       - name: 准备打包
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           mkdir -p wine-package/$PACKAGE_NAME
           cp -r /tmp/wine-install-wow64/* wine-package/$PACKAGE_NAME/
+      
       - name: 创建打包文件
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
           ls -lh *.tar.xz
+      
       - name: Generate checksums
         run: |
           sha256sum *.tar.xz > checksums.txt
           cat checksums.txt
+      
       - name: Upload Wine WoW64 artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -588,6 +624,7 @@ jobs:
             - **平台**: Termux (Android)
             - **图形 API**: Vulkan 支持已启用
             - **多媒体**: 完整 GStreamer 支持
+            - **DXGI 补丁**: ${{ github.event.inputs.apply_dxgi_patch || 'true' }}
             ## 特性
             ✓ 真正的 WOW64 架构
             ✓ 同时支持 32 位和 64 位 Windows 应用程序
