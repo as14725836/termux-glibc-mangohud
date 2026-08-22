@@ -26,6 +26,7 @@ on:
         - proton_9.0
         - experimental_10.0
         - experimental_11.0
+        - proton_11.0-2
         - proton-9.0-arm64ec
         - ge-proton11-5-bionic-staging
         - proton_10.0
