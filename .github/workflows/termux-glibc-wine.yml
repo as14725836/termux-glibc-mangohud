@@ -492,7 +492,7 @@ jobs:
           
           echo "补丁应用"
           # 应用自定义补丁
-          for patch in $GITHUB_WORKSPACE/patch-winlator/*.patch; do
+          for patch in $GITHUB_WORKSPACE/patch11.16/*.patch; do
             if [ -f "$patch" ]; then
               echo "Applying $patch..."
               patch -p1 < "$patch" || true
