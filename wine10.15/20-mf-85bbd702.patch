@@ -1,0 +1,74 @@
+From 85bbd70273976cab87f0f6ce24b064b6f30cece7 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bernhard=20K=C3=B6lbl?= <bkoelbl@codeweavers.com>
+Date: Fri, 8 Aug 2025 17:17:49 +0200
+Subject: [PATCH] mf: Handle start request when session is already running.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Bernhard Kölbl <bkoelbl@codeweavers.com>
+---
+ dlls/mf/session.c  | 12 +++++++++++-
+ dlls/mf/tests/mf.c | 15 +++++++++++++++
+ 2 files changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/mf/session.c b/dlls/mf/session.c
+index 87af5b95..6f6c9873 100644
+--- a/dlls/mf/session.c
++++ b/dlls/mf/session.c
+@@ -1076,15 +1076,25 @@ static void session_start(struct media_session *session, const GUID *time_format
+ {
+     struct media_source *source;
+     struct topo_node *topo_node;
++    BOOL keep_position;
+     MFTIME duration;
+     HRESULT hr;
+     UINT i;
+ 
++    keep_position = IsEqualGUID(time_format, &GUID_NULL) && start_position->vt == VT_EMPTY;
++
++    /* No position change - nothing to do. */
++    if (session->state == SESSION_STATE_STARTED && keep_position)
++    {
++        session_command_complete_with_event(session, MESessionStarted, S_OK, NULL);
++        return;
++    }
++
+     switch (session->state)
+     {
+         case SESSION_STATE_PAUSED:
+         case SESSION_STATE_STARTED:
+-            if (!IsEqualGUID(time_format, &GUID_NULL) || start_position->vt != VT_EMPTY)
++            if (!keep_position)
+             {
+                 session->command_state = COMMAND_STATE_RESTARTING_SOURCES;
+ 
+diff --git a/dlls/mf/tests/mf.c b/dlls/mf/tests/mf.c
+index a02f2859..c56e59fb 100644
+--- a/dlls/mf/tests/mf.c
++++ b/dlls/mf/tests/mf.c
+@@ -7919,6 +7919,21 @@ static void test_media_session_seek(void)
+ 
+     compare_object_states(&actual_object_state_record, &expected_sample_request_and_delivery_records);
+ 
++    SET_EXPECT(test_media_sink_GetPresentationClock);
++    SET_EXPECT(test_media_sink_GetStreamSinkCount);
++
++    PropVariantClear(&propvar);
++    hr = IMFMediaSession_Start(session, NULL, &propvar);
++    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
++
++    hr = wait_media_event(session, callback, MESessionStarted, 1000, &propvar);
++    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
++
++    todo_wine
++    CHECK_CALLED(test_media_sink_GetPresentationClock);
++    todo_wine
++    CHECK_CALLED(test_media_sink_GetStreamSinkCount);
++
+     memset(&actual_object_state_record, 0, sizeof(actual_object_state_record));
+     hr = IMFMediaSession_Pause(session);
+     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+-- 
+2.43.0
+

@@ -1,0 +1,51 @@
+From 12e77160ef94f8b56046a6b2e541daef5d682ad4 Mon Sep 17 00:00:00 2001
+From: Aric Stewart <aric@codeweavers.com>
+Date: Wed, 12 Nov 2025 12:36:43 -0600
+Subject: [PATCH] mf: Return E_NOINTERFACE if service is missing.
+
+Signed-off-by: Aric Stewart <aric@codeweavers.com>
+---
+ dlls/mf/session.c  | 3 +++
+ dlls/mf/tests/mf.c | 4 ++++
+ 2 files changed, 7 insertions(+)
+
+diff --git a/dlls/mf/session.c b/dlls/mf/session.c
+index 30bfdd62..8d2ca079 100644
+--- a/dlls/mf/session.c
++++ b/dlls/mf/session.c
+@@ -2732,7 +2732,10 @@ static HRESULT WINAPI session_get_service_GetService(IMFGetService *iface, REFGU
+         hr = session_get_audio_render_service(session, service, riid, obj);
+     }
+     else
++    {
+         FIXME("Unsupported service %s.\n", debugstr_guid(service));
++        hr = E_NOINTERFACE;
++    }
+ 
+     LeaveCriticalSection(&session->cs);
+ 
+diff --git a/dlls/mf/tests/mf.c b/dlls/mf/tests/mf.c
+index fab0e4e8..0a6241d8 100644
+--- a/dlls/mf/tests/mf.c
++++ b/dlls/mf/tests/mf.c
+@@ -89,6 +89,8 @@ HRESULT (WINAPI *pMFCreateMediaBufferFromMediaType)(IMFMediaType *media_type, LO
+         DWORD min_alignment, IMFMediaBuffer **buffer);
+ BOOL has_video_processor;
+ 
++DEFINE_GUID(InvalidServiceGUID, 0x12345678, 0x1234, 0x5678, 0x12, 0x34, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33);
++
+ static BOOL is_vista(void)
+ {
+     return !pMFGetTopoNodeCurrentType;
+@@ -2763,6 +2765,8 @@ static void test_media_session(void)
+     hr = MFCreateMediaSession(NULL, &session);
+     ok(hr == S_OK, "Failed to create media session, hr %#lx.\n", hr);
+ 
++    check_service_interface(session, &InvalidServiceGUID, &InvalidServiceGUID, FALSE);
++
+     check_interface(session, &IID_IMFGetService, TRUE);
+     check_interface(session, &IID_IMFRateSupport, TRUE);
+     check_interface(session, &IID_IMFRateControl, TRUE);
+-- 
+2.43.0
+
