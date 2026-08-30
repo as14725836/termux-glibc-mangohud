@@ -1,15 +1,14 @@
 --- a/dlls/winegstreamer/quartz_parser.c
 +++ b/dlls/winegstreamer/quartz_parser.c
-@@ -42,6 +42,8 @@
+@@ -42,6 +42,7 @@
  static const GUID MEDIASUBTYPE_MP3  = {WAVE_FORMAT_MPEGLAYER3, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
  static const GUID MEDIASUBTYPE_WMV_Unknown = {0x7ce12ca9, 0xbfbf, 0x43d9, {0x9d, 0x00, 0x82, 0xb8, 0xed, 0x54, 0x31, 0x6b}};
  DEFINE_GUID(MEDIASUBTYPE_ABGR32,D3DFMT_A8B8G8R8,0x524f,0x11ce,0x9f,0x53,0x00,0x20,0xaf,0x0b,0xa7,0x70);
-+static const GUID MEDIASUBTYPE_H264 = {mmioFOURCC('H','2','6','4'), 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
 +static const GUID MEDIASUBTYPE_RAW_AAC1 = {WAVE_FORMAT_RAW_AAC1, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
  
  struct parser
  {
-@@ -346,6 +348,45 @@
+@@ -346,6 +347,45 @@
      return true;
  }
  
@@ -55,7 +54,7 @@
  #define ALIGN(n, alignment) (((n) + (alignment) - 1) & ~((alignment) - 1))
  
  static unsigned int wg_format_get_max_size_video_raw(enum wg_video_format format, unsigned int width, unsigned int height)
-@@ -464,10 +505,14 @@
+@@ -464,10 +504,14 @@
               * so let's just use one second of decompressed size and hope it works. */
              return format->u.audio.rate * format->u.audio.channels * format->u.audio.depth / 8;
  
@@ -73,7 +72,7 @@
  
          case WG_MAJOR_TYPE_UNKNOWN:
              FIXME("Cannot guess maximum sample size for unknown format.\n");
-@@ -768,19 +813,58 @@
+@@ -768,19 +812,58 @@
      return true;
  }
  
@@ -136,7 +135,7 @@
      case WG_MAJOR_TYPE_AUDIO:
          return amt_from_wg_format_audio(mt, format);
  
-@@ -972,6 +1056,68 @@
+@@ -972,6 +1055,68 @@
      return true;
  }
  
@@ -205,7 +204,7 @@
  static bool amt_to_wg_format_video(const AM_MEDIA_TYPE *mt, struct wg_format *format)
  {
      static const struct
-@@ -1170,12 +1316,16 @@
+@@ -1170,12 +1315,16 @@
              return amt_to_wg_format_video_wmv(mt, format);
          if (IsEqualGUID(&mt->subtype, &MEDIASUBTYPE_MPEG1Payload))
              return amt_to_wg_format_video_mpeg1(mt, format);
