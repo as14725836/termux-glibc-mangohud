@@ -1,0 +1,24 @@
+Adapted to wine-10.15 by Operit.
+From: GE-Proton <git@localhost>
+Subject: [PATCH] winepulse: Reset stream timing state after an underflow.
+
+diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
+index 9a218e7..32791f5 100644
+--- a/dlls/winepulse.drv/pulse.c
++++ b/dlls/winepulse.drv/pulse.c
+@@ -381,6 +381,15 @@ static void pulse_underflow_callback(pa_stream *s, void *userdata)
+     struct pulse_stream *stream = userdata;
+     WARN("%p: Underflow\n", userdata);
+     stream->just_underran = TRUE;
++    stream->pa_started = FALSE;
++    stream->timeline_start_period_time = 0;
++    stream->timeline_start_stream_time = 0;
++
++    if (stream->period && stream->period->timer_stream == stream)
++    {
++        stream->period->timer_stream = NULL;
++        stream->period->adjust = 0;
++    }
+ }
+ 
+ static void pulse_started_callback(pa_stream *s, void *userdata)

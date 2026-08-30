@@ -1,0 +1,30 @@
+Adapted to wine-10.15 by Operit.
+From: GloriousEggroll <gloriouseggroll@proton.me>
+Subject: [PATCH] mfmediaengine: Read media type stream attributes
+
+diff --git a/dlls/mfmediaengine/main.c b/dlls/mfmediaengine/main.c
+index 388bf51..b58f4f6 100644
+--- a/dlls/mfmediaengine/main.c
++++ b/dlls/mfmediaengine/main.c
+@@ -3099,6 +3099,21 @@ static HRESULT WINAPI media_engine_GetStreamAttribute(IMFMediaEngineEx *iface, D
+                 stream_index, &selected, &sd)))
+         {
+             hr = IMFStreamDescriptor_GetItem(sd, attribute, value);
++            if (hr == MF_E_ATTRIBUTENOTFOUND)
++            {
++                IMFMediaTypeHandler *handler;
++                IMFMediaType *media_type;
++
++                if (SUCCEEDED(hr = IMFStreamDescriptor_GetMediaTypeHandler(sd, &handler)))
++                {
++                    if (SUCCEEDED(hr = IMFMediaTypeHandler_GetCurrentMediaType(handler, &media_type)))
++                    {
++                        hr = IMFMediaType_GetItem(media_type, attribute, value);
++                        IMFMediaType_Release(media_type);
++                    }
++                    IMFMediaTypeHandler_Release(handler);
++                }
++            }
+             IMFStreamDescriptor_Release(sd);
+         }
+     }

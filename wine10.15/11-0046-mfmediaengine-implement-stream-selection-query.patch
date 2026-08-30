@@ -1,0 +1,48 @@
+Adapted to wine-10.15 by Operit.
+From: GloriousEggroll <gloriouseggroll@proton.me>
+Subject: [PATCH] mfmediaengine: Implement stream selection query
+
+diff --git a/dlls/mfmediaengine/main.c b/dlls/mfmediaengine/main.c
+index b58f4f6..2e39d16 100644
+--- a/dlls/mfmediaengine/main.c
++++ b/dlls/mfmediaengine/main.c
+@@ -3124,9 +3124,37 @@ static HRESULT WINAPI media_engine_GetStreamAttribute(IMFMediaEngineEx *iface, D
+ 
+ static HRESULT WINAPI media_engine_GetStreamSelection(IMFMediaEngineEx *iface, DWORD stream_index, BOOL *enabled)
+ {
+-    FIXME("%p, %ld, %p stub.\n", iface, stream_index, enabled);
++    struct media_engine *engine = impl_from_IMFMediaEngineEx(iface);
++    IMFStreamDescriptor *sd;
++    BOOL selected = FALSE;
++    HRESULT hr = E_FAIL;
+ 
+-    return E_NOTIMPL;
++    TRACE("%p, %lu, %p.\n", iface, stream_index, enabled);
++
++    if (!enabled)
++        return E_POINTER;
++
++    *enabled = FALSE;
++
++    EnterCriticalSection(&engine->cs);
++    if (engine->flags & FLAGS_ENGINE_SHUT_DOWN)
++        hr = MF_E_SHUTDOWN;
++    else if (engine->presentation.pd)
++    {
++        hr = IMFPresentationDescriptor_GetStreamDescriptorByIndex(engine->presentation.pd,
++                stream_index, &selected, &sd);
++        if (SUCCEEDED(hr))
++        {
++            *enabled = selected;
++            IMFStreamDescriptor_Release(sd);
++        }
++    }
++    if (isinf(engine->duration))
++        WARN("Live stream selection: stream %lu, selected %u, hr %#lx.\n",
++                stream_index, *enabled, hr);
++    LeaveCriticalSection(&engine->cs);
++
++    return hr;
+ }
+ 
+ static HRESULT WINAPI media_engine_SetStreamSelection(IMFMediaEngineEx *iface, DWORD stream_index, BOOL enabled)

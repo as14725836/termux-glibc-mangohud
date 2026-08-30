@@ -1,0 +1,34 @@
+Adapted to wine-10.15 by Operit.
+From: Proton GE Team <proton-ge@example.com>
+Subject: [PATCH] mfmediaengine: Honor autoplay when Load is requested.
+
+diff --git a/dlls/mfmediaengine/main.c b/dlls/mfmediaengine/main.c
+index aab5fd6..008acc0 100644
+--- a/dlls/mfmediaengine/main.c
++++ b/dlls/mfmediaengine/main.c
+@@ -1775,17 +1775,23 @@ static HRESULT WINAPI media_engine_GetBuffered(IMFMediaEngineEx *iface, IMFMedia
+ static HRESULT WINAPI media_engine_Load(IMFMediaEngineEx *iface)
+ {
+     struct media_engine *engine = impl_from_IMFMediaEngineEx(iface);
+-    HRESULT hr = E_NOTIMPL;
++    BOOL autoplay = FALSE;
++    HRESULT hr = S_OK;
+ 
+-    FIXME("(%p): stub.\n", iface);
++    TRACE("(%p).\n", iface);
+ 
+     EnterCriticalSection(&engine->cs);
+ 
+     if (engine->flags & FLAGS_ENGINE_SHUT_DOWN)
+         hr = MF_E_SHUTDOWN;
++    else
++        autoplay = !!(engine->flags & FLAGS_ENGINE_AUTO_PLAY);
+ 
+     LeaveCriticalSection(&engine->cs);
+ 
++    if (autoplay)
++        hr = IMFMediaEngineEx_Play(iface);
++
+     return hr;
+ }
+ 

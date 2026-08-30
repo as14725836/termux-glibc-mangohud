@@ -1,0 +1,18 @@
+Adapted to wine-10.15 by Operit.
+From: Proton GE Team <proton-ge@example.com>
+Subject: [PATCH] mfmediaengine: Report live source ranges compatibly.
+
+diff --git a/dlls/mfmediaengine/main.c b/dlls/mfmediaengine/main.c
+index 008acc0..3543a35 100644
+--- a/dlls/mfmediaengine/main.c
++++ b/dlls/mfmediaengine/main.c
+@@ -2064,7 +2064,8 @@ static HRESULT WINAPI media_engine_GetSeekable(IMFMediaEngineEx *iface, IMFMedia
+         if (SUCCEEDED(hr) && !isnan(engine->duration) && engine->presentation.source)
+         {
+             hr = IMFMediaSource_GetCharacteristics(engine->presentation.source, &flags);
+-            if (SUCCEEDED(hr) && (flags & MFBYTESTREAM_IS_SEEKABLE))
++            if (SUCCEEDED(hr) && (isinf(engine->duration)
++                    || (flags & MFMEDIASOURCE_CAN_SEEK)))
+                 hr = IMFMediaTimeRange_AddRange(time_range, 0.0, engine->duration);
+         }
+     }

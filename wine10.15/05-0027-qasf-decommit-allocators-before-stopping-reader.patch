@@ -1,0 +1,59 @@
+Adapted to wine-10.15 by Operit.
+From: GloriousEggroll <gloriouseggroll@gmail.com>
+Subject: [PATCH] qasf: Decommit allocators before stopping the asynchronous
+
+diff --git a/dlls/qasf/asfreader.c b/dlls/qasf/asfreader.c
+index 91fdc6f..8dcaf0b 100644
+--- a/dlls/qasf/asfreader.c
++++ b/dlls/qasf/asfreader.c
+@@ -507,26 +507,13 @@ static HRESULT asf_reader_cleanup_stream(struct strmbase_filter *iface)
+ 
+     TRACE("iface %p\n", iface);
+ 
+-    EnterCriticalSection(&filter->status_cs);
+-    if (SUCCEEDED(hr = IWMReader_Stop(filter->reader)))
+-    {
+-        filter->status = -1;
+-        while (filter->status != WMT_STOPPED)
+-            SleepConditionVariableCS(&filter->status_cv, &filter->status_cs, INFINITE);
+-        hr = filter->result;
+-    }
+-    LeaveCriticalSection(&filter->status_cs);
+-
+-    if (FAILED(hr))
+-        WARN("Failed to stop WMReader %p, hr %#lx\n", filter->reader, hr);
+-
++    /* Decommit stream allocators before stopping the reader so the reader
++     * cannot be blocked waiting for buffers the allocators no longer own. */
+     for (i = 0; i < filter->stream_count; ++i)
+     {
+         struct asf_stream *stream = filter->streams + i;
+-
+         if (!stream->source.pin.peer)
+             continue;
+-
+         if (FAILED(hr = IMemAllocator_Decommit(stream->source.pAllocator)))
+         {
+             WARN("Failed to decommit stream %u allocator, hr %#lx\n", i, hr);
+@@ -534,9 +521,20 @@ static HRESULT asf_reader_cleanup_stream(struct strmbase_filter *iface)
+         }
+     }
+ 
++    EnterCriticalSection(&filter->status_cs);
++    if (SUCCEEDED(hr = IWMReader_Stop(filter->reader)))
++    {
++        filter->status = -1;
++        while (filter->status != WMT_STOPPED)
++            SleepConditionVariableCS(&filter->status_cv, &filter->status_cs, INFINITE);
++        hr = filter->result;
++    }
++    LeaveCriticalSection(&filter->status_cs);
++    if (FAILED(hr))
++        WARN("Failed to stop WMReader %p, hr %#lx\n", filter->reader, hr);
++
+     return hr;
+ }
+-
+ static const struct strmbase_filter_ops filter_ops =
+ {
+     .filter_get_pin = asf_reader_get_pin,

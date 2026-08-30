@@ -1,0 +1,31 @@
+Adapted to wine-10.15 by Operit.
+From: GloriousEggroll <gloriouseggroll@proton.me>
+Subject: [PATCH] mfmediaengine: Use system-memory sink for live video
+
+diff --git a/dlls/mfmediaengine/main.c b/dlls/mfmediaengine/main.c
+index e86e476..62c83e2 100644
+--- a/dlls/mfmediaengine/main.c
++++ b/dlls/mfmediaengine/main.c
+@@ -1201,7 +1201,11 @@ static HRESULT media_engine_create_video_renderer(struct media_engine *engine, I
+     IMFMediaType_SetGUID(media_type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video);
+     IMFMediaType_SetGUID(media_type, &MF_MT_SUBTYPE, &subtype);
+ 
+-    hr = create_video_frame_sink(media_type, (IUnknown *)engine->device_manager, &engine->sink_events, &engine->presentation.frame_sink);
++    if (isinf(engine->duration))
++        WARN("Using a system-memory video sink for live media.\n");
++    hr = create_video_frame_sink(media_type,
++            isinf(engine->duration) ? NULL : (IUnknown *)engine->device_manager,
++            &engine->sink_events, &engine->presentation.frame_sink);
+     IMFMediaType_Release(media_type);
+     if (FAILED(hr))
+         return hr;
+@@ -2814,7 +2818,8 @@ static HRESULT media_engine_transfer_d3d11(struct media_engine *engine, ID3D11Te
+     hr = get_d3d11_resource_from_sample(sample, &src_texture, &subresource);
+     if (FAILED(hr))
+     {
+-        hr = media_engine_transfer_d3d11_memory(engine, sample, dst_texture, src_rect, dst_rect);
++        if (!isinf(engine->duration))
++            hr = media_engine_transfer_d3d11_memory(engine, sample, dst_texture, src_rect, dst_rect);
+         IMFSample_Release(sample);
+         return hr;
+     }
