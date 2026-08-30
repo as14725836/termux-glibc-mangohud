@@ -1,0 +1,22 @@
+From bce2756e4ec0b9e37bde6f0362d5ab8f03c8a379 Mon Sep 17 00:00:00 2001
+From: Yuxuan Shui <yshui@codeweavers.com>
+Date: Mon, 24 Nov 2025 17:11:18 +0000
+Subject: [PATCH] winegstreamer: Reject SetOutput with a different number of
+ channels.
+
+
+diff --git a/dlls/winegstreamer/wma_decoder.c b/dlls/winegstreamer/wma_decoder.c
+index ba9547e9..76308a8e 100644
+--- a/dlls/winegstreamer/wma_decoder.c
++++ b/dlls/winegstreamer/wma_decoder.c
+@@ -801,6 +801,10 @@ static HRESULT WINAPI media_object_SetOutputType(IMediaObject *iface, DWORD inde
+     if (!IsEqualGUID(&type->formattype, &FORMAT_WaveFormatEx))
+         return DMO_E_TYPE_NOT_ACCEPTED;
+ 
++    if (((WAVEFORMATEX *)decoder->input_type.pbFormat)->nChannels !=
++            ((WAVEFORMATEX *)type->pbFormat)->nChannels)
++        return DMO_E_TYPE_NOT_ACCEPTED;
++
+     if (FAILED(hr = wg_transform_create_quartz(&decoder->input_type, type, &attrs, &new_transform)))
+         return hr;
+ 

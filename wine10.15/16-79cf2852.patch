@@ -1,0 +1,34 @@
+From 79cf285222f8f01b66afe04d06c8d090b04c2e0e Mon Sep 17 00:00:00 2001
+From: Conor McCarthy <cmccarthy@codeweavers.com>
+Date: Wed, 3 Dec 2025 15:40:25 +1000
+Subject: [PATCH] winegstreamer: Support null type in resampler
+ SetOutputType().
+
+
+diff --git a/dlls/winegstreamer/resampler.c b/dlls/winegstreamer/resampler.c
+index e861c86f..fcaadac1 100644
+--- a/dlls/winegstreamer/resampler.c
++++ b/dlls/winegstreamer/resampler.c
+@@ -412,11 +412,21 @@ static HRESULT WINAPI transform_SetOutputType(IMFTransform *iface, DWORD id, IMF
+ 
+     if (FAILED(hr = check_media_type(type)))
+         return hr;
+-    if (FAILED(hr = IMFMediaType_GetUINT32(type, &MF_MT_AUDIO_BLOCK_ALIGNMENT, &block_alignment)))
++    if (type && FAILED(hr = IMFMediaType_GetUINT32(type, &MF_MT_AUDIO_BLOCK_ALIGNMENT, &block_alignment)))
+         return MF_E_INVALIDMEDIATYPE;
+     if (flags & MFT_SET_TYPE_TEST_ONLY)
+         return S_OK;
+ 
++    if (!type)
++    {
++        if (impl->output_type)
++        {
++            IMFMediaType_Release(impl->output_type);
++            impl->output_type = NULL;
++        }
++        return S_OK;
++    }
++
+     if (!impl->output_type && FAILED(hr = MFCreateMediaType(&impl->output_type)))
+         return hr;
+ 

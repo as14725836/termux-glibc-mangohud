@@ -1,0 +1,42 @@
+From da244ee6c51c7812ee4e70fa3df3db3188529e14 Mon Sep 17 00:00:00 2001
+From: Yuxuan Shui <yshui@codeweavers.com>
+Date: Mon, 24 Nov 2025 10:02:47 +0000
+Subject: [PATCH] winegstreamer: Implement
+ media_object_Get{Input,Output}CurrentType.
+
+
+diff --git a/dlls/winegstreamer/video_decoder.c b/dlls/winegstreamer/video_decoder.c
+index f2bef5ee..a0b738b4 100644
+--- a/dlls/winegstreamer/video_decoder.c
++++ b/dlls/winegstreamer/video_decoder.c
+@@ -1334,14 +1334,26 @@ static HRESULT WINAPI media_object_SetOutputType(IMediaObject *iface, DWORD inde
+ 
+ static HRESULT WINAPI media_object_GetInputCurrentType(IMediaObject *iface, DWORD index, DMO_MEDIA_TYPE *type)
+ {
+-    FIXME("iface %p, index %lu, type %p stub!\n", iface, index, type);
+-    return E_NOTIMPL;
++    struct video_decoder *decoder = impl_from_IMediaObject(iface);
++    TRACE("iface %p, index %lu, type %p stub!\n", iface, index, type);
++
++    if (index != 0) return DMO_E_INVALIDSTREAMINDEX;
++    if (!type) return E_POINTER;
++    if (IsEqualGUID(&decoder->dmo_input_type.majortype, &GUID_NULL)) return DMO_E_TYPE_NOT_SET;
++
++    return CopyMediaType(type, &decoder->dmo_input_type);
+ }
+ 
+ static HRESULT WINAPI media_object_GetOutputCurrentType(IMediaObject *iface, DWORD index, DMO_MEDIA_TYPE *type)
+ {
+-    FIXME("iface %p, index %lu, type %p stub!\n", iface, index, type);
+-    return E_NOTIMPL;
++    struct video_decoder *decoder = impl_from_IMediaObject(iface);
++    TRACE("iface %p, index %lu, type %p stub!\n", iface, index, type);
++
++    if (index != 0) return DMO_E_INVALIDSTREAMINDEX;
++    if (!type) return E_POINTER;
++    if (IsEqualGUID(&decoder->dmo_output_type.majortype, &GUID_NULL)) return DMO_E_TYPE_NOT_SET;
++
++    return CopyMediaType(type, &decoder->dmo_output_type);
+ }
+ 
+ static HRESULT WINAPI media_object_GetInputSizeInfo(IMediaObject *iface, DWORD index, DWORD *size,

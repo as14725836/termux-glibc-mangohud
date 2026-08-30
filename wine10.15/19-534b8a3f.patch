@@ -1,0 +1,40 @@
+From 534b8a3fdb0ba3066fc2832d70a782f68f7f2759 Mon Sep 17 00:00:00 2001
+From: Yuxuan Shui <yshui@codeweavers.com>
+Date: Wed, 3 Dec 2025 19:47:53 +0000
+Subject: [PATCH] winegstreamer: Fix buffer info when returning S_FALSE from
+ ProcessOutput.
+
+In commit 300079ac1a666fa526e7f53bbd096f313c221f5f I made ProcessOutput return S_FALSE instead of
+MF_E_TRANSFORM_NEED_MORE_INPUT. But since we are no longer returning an error, we need to make sure
+the DMO_OUTPUT_DATA_BUFFER structure is filled in properly, previously it was left undefined.
+
+diff --git a/dlls/winegstreamer/video_decoder.c b/dlls/winegstreamer/video_decoder.c
+index ee24bc05..7e8b7de7 100644
+--- a/dlls/winegstreamer/video_decoder.c
++++ b/dlls/winegstreamer/video_decoder.c
+@@ -1485,7 +1485,10 @@ static HRESULT WINAPI media_object_ProcessOutput(IMediaObject *iface, DWORD flag
+     if (SUCCEEDED(hr))
+         wg_sample_queue_flush(decoder->wg_sample_queue, false);
+     else if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT)
++    {
++        buffers[0].dwStatus = 0;
+         hr = S_FALSE;
++    }
+ 
+     return hr;
+ }
+diff --git a/dlls/winegstreamer/wma_decoder.c b/dlls/winegstreamer/wma_decoder.c
+index 6c0bfa3e..e5e6cc61 100644
+--- a/dlls/winegstreamer/wma_decoder.c
++++ b/dlls/winegstreamer/wma_decoder.c
+@@ -974,7 +974,10 @@ static HRESULT WINAPI media_object_ProcessOutput(IMediaObject *iface, DWORD flag
+         wg_sample_queue_flush(decoder->wg_sample_queue, false);
+     }
+     else if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT)
++    {
++        buffers[0].dwStatus = 0;
+         hr = S_FALSE;
++    }
+ 
+ 
+     return hr;

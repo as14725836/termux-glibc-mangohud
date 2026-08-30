@@ -1,0 +1,23 @@
+From ef50cbd69ff3bb01e4a2ac4fda5adcae47694fac Mon Sep 17 00:00:00 2001
+From: Elizabeth Figura <zfigura@codeweavers.com>
+Date: Tue, 9 Dec 2025 18:20:11 -0600
+Subject: [PATCH] winegstreamer: Fix a double free (Coverity).
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reported by Bernhard Übelacker.
+
+diff --git a/dlls/winegstreamer/quartz_transform.c b/dlls/winegstreamer/quartz_transform.c
+index 8b828993..5b4b9e77 100644
+--- a/dlls/winegstreamer/quartz_transform.c
++++ b/dlls/winegstreamer/quartz_transform.c
+@@ -358,8 +358,6 @@ static HRESULT WINAPI transform_sink_receive(struct strmbase_sink *pin, IMediaSa
+                     &filter->source_mt, &attrs, &filter->transform)))
+                 ERR("Failed to recreate transform, hr %#lx.\n", hr);
+         }
+-
+-        DeleteMediaType(mt);
+     }
+     else if (hr != S_FALSE)
+     {

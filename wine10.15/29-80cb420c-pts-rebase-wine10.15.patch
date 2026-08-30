@@ -1,0 +1,96 @@
+diff --git a/dlls/winegstreamer/quartz_parser.c b/dlls/winegstreamer/quartz_parser.c
+index 9a26c86..e43251e 100644
+--- a/dlls/winegstreamer/quartz_parser.c
++++ b/dlls/winegstreamer/quartz_parser.c
+@@ -2752,9 +2752,9 @@ HRESULT mpeg_splitter_create(IUnknown *outer, IUnknown **out)
+     struct parser *object;
+     HRESULT hr;
+ 
+-    if (FAILED(hr = parser_create(WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED, &object)))
++    if (FAILED(hr = parser_create(WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED |
++                                  WG_PARSER_CREATE_FLAG_PTS_REBASED, &object)))
+         return hr;
+-
+     strmbase_filter_init(&object->filter, outer, &CLSID_MPEG1Splitter, &mpeg_splitter_ops);
+     strmbase_sink_init(&object->sink, &object->filter, L"Input", &mpeg_splitter_sink_ops, NULL);
+     object->IAMStreamSelect_iface.lpVtbl = &stream_select_vtbl;
+diff --git a/dlls/winegstreamer/unixlib.h b/dlls/winegstreamer/unixlib.h
+index 3c42e0d..3cfa570 100644
+--- a/dlls/winegstreamer/unixlib.h
++++ b/dlls/winegstreamer/unixlib.h
+@@ -221,6 +221,7 @@ enum wg_parser_create_flag
+ {
+     WG_PARSER_CREATE_FLAG_NONE = 0,
+     WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED = 1,
++    WG_PARSER_CREATE_FLAG_PTS_REBASED = 2,
+ };
+ 
+ struct wg_parser_create_params
+diff --git a/dlls/winegstreamer/wg_parser.c b/dlls/winegstreamer/wg_parser.c
+index 2fb31a7..44e6aa8 100644
+--- a/dlls/winegstreamer/wg_parser.c
++++ b/dlls/winegstreamer/wg_parser.c
+@@ -69,6 +69,7 @@ struct wg_parser
+     GstPad *my_src;
+ 
+     guint64 file_size, start_offset, next_offset, stop_offset;
++    GstClockTime base_pts;
+     guint64 next_pull_offset;
+     gchar *uri;
+ 
+@@ -77,7 +78,7 @@ struct wg_parser
+     pthread_mutex_t mutex;
+ 
+     pthread_cond_t init_cond;
+-    bool output_compressed;
++    bool output_compressed, pts_rebased;
+     bool no_more_pads, has_duration, error;
+     bool err_on, warn_on;
+ 
+@@ -367,8 +368,16 @@ static NTSTATUS wg_parser_stream_get_buffer(void *args)
+      * that this will need modification to wg_parser_stream_notify_qos() as
+      * well. */
+ 
++    /* Because mpegpsdemux reports a non-zero PTS for the earliest buffer among
++     * all streams, we rebase the PTS by subtracting base_pts so that our
++     * stream starts at zero for the MPEG-I Splitter in quartz. */
+     if ((wg_buffer->has_pts = GST_BUFFER_PTS_IS_VALID(buffer)))
+-        wg_buffer->pts = GST_BUFFER_PTS(buffer) / 100;
++    {
++        if (parser->pts_rebased && GST_CLOCK_TIME_IS_VALID(parser->base_pts))
++            wg_buffer->pts = (GST_BUFFER_PTS(buffer) - parser->base_pts) / 100;
++        else
++            wg_buffer->pts = GST_BUFFER_PTS(buffer) / 100;
++    }
+     if ((wg_buffer->has_duration = GST_BUFFER_DURATION_IS_VALID(buffer)))
+         wg_buffer->duration = GST_BUFFER_DURATION(buffer) / 100;
+     wg_buffer->discontinuity = GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DISCONT);
+@@ -735,6 +744,17 @@ static GstFlowReturn sink_chain_cb(GstPad *pad, GstObject *parent, GstBuffer *bu
+     if (!stream->has_buffer)
+     {
+         stream->has_buffer = true;
++
++        /* Keep the earliest PTS for adjusting. */
++        if (!stream->has_initial_gap &&
++            GST_BUFFER_PTS_IS_VALID(buffer) &&
++            (GST_BUFFER_PTS(buffer) < parser->base_pts))
++        {
++            parser->base_pts = GST_BUFFER_PTS(buffer);
++            GST_LOG("Updated base PTS to %" GST_TIME_FORMAT ".",
++                    GST_TIME_ARGS(parser->base_pts));
++        }
++
+         pthread_cond_signal(&parser->init_cond);
+     }
+ 
+@@ -1891,8 +1911,10 @@ static NTSTATUS wg_parser_create(void *args)
+     pthread_cond_init(&parser->read_cond, NULL);
+     pthread_cond_init(&parser->read_done_cond, NULL);
+     parser->output_compressed = params->flags & WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED;
++    parser->pts_rebased = params->flags & WG_PARSER_CREATE_FLAG_PTS_REBASED;
+     parser->err_on = params->err_on;
+     parser->warn_on = params->warn_on;
++    parser->base_pts = GST_CLOCK_TIME_NONE;
+     GST_DEBUG("Created winegstreamer parser %p.", parser);
+     params->parser = (wg_parser_t)(ULONG_PTR)parser;
+     return S_OK;

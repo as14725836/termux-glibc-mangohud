@@ -1,0 +1,26 @@
+From d8646199d8181b0b2ab713ab33d351459f154d3d Mon Sep 17 00:00:00 2001
+From: Yuxuan Shui <yshui@codeweavers.com>
+Date: Wed, 22 Oct 2025 10:09:26 +0100
+Subject: [PATCH] winegstreamer: Return NS_E_NO_MORE_SAMPLES from WMSyncReader
+ if sample fails to read.
+
+If allocator fails, native returns NS_E_NO_MORE_SAMPLES whereas we propagate the allocator's failure
+code. Some games checks this return value and will raise an error/exception if anything other than
+NS_E_NO_MORE_SAMPLES is returned, for example any game using the KiriKiri movie player [0] will do
+this.
+
+[0]: https://github.com/krkrz/krkrz/blob/fd5c4baa6a2ef5978db1bd043634351f48667daf/movie/win32/CWMReader.cpp#L177
+
+diff --git a/dlls/winegstreamer/wm_reader.c b/dlls/winegstreamer/wm_reader.c
+index 467662b9..fe033285 100644
+--- a/dlls/winegstreamer/wm_reader.c
++++ b/dlls/winegstreamer/wm_reader.c
+@@ -1774,7 +1774,7 @@ static HRESULT wm_reader_read_stream_sample(struct wm_reader *reader, struct wg_
+     {
+         ERR("Failed to allocate sample of %lu bytes, hr %#lx.\n", capacity, hr);
+         wg_parser_stream_release_buffer(stream->wg_stream);
+-        return hr;
++        return NS_E_NO_MORE_SAMPLES;
+     }
+ 
+     if (FAILED(hr = INSSBuffer_GetBufferAndLength(*sample, &data, &size)))

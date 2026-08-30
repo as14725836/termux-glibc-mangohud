@@ -1,0 +1,53 @@
+From 964cd76c020dfb8c72dea0b005d6795ab6531102 Mon Sep 17 00:00:00 2001
+From: Conor McCarthy <cmccarthy@codeweavers.com>
+Date: Tue, 10 Feb 2026 15:25:28 +1000
+Subject: [PATCH] winegstreamer: Free the stream objects during reader
+ destruction.
+
+
+diff --git a/dlls/winegstreamer/wm_reader.c b/dlls/winegstreamer/wm_reader.c
+index b5065c57..26fed099 100644
+--- a/dlls/winegstreamer/wm_reader.c
++++ b/dlls/winegstreamer/wm_reader.c
+@@ -1471,6 +1471,25 @@ static void free_stream_buffers(struct wm_reader *reader)
+     }
+ }
+ 
++static void free_streams(struct wm_reader *reader)
++{
++    unsigned int i;
++
++    for (i = 0; i < reader->stream_count; ++i)
++    {
++        struct wm_stream *stream = &reader->streams[i];
++
++        if (stream->output_allocator)
++            IWMReaderAllocatorEx_Release(stream->output_allocator);
++        stream->output_allocator = NULL;
++        if (stream->stream_allocator)
++            IWMReaderAllocatorEx_Release(stream->stream_allocator);
++        stream->stream_allocator = NULL;
++
++        free(stream);
++    }
++}
++
+ static HRESULT init_stream(struct wm_reader *reader)
+ {
+     wg_parser_t wg_parser;
+@@ -1668,6 +1687,7 @@ out_destroy_parser:
+         reader->read_sem = NULL;
+     }
+     free_stream_buffers(reader);
++    free_streams(reader);
+     wg_parser_destroy(reader->wg_parser);
+     reader->wg_parser = 0;
+ 
+@@ -1949,6 +1969,7 @@ static HRESULT WINAPI reader_Close(IWMSyncReader2 *iface)
+     ReleaseSemaphore(reader->read_sem, 1, NULL);
+ 
+     free_stream_buffers(reader);
++    free_streams(reader);
+ 
+     wg_parser_disconnect(reader->wg_parser);
+ 

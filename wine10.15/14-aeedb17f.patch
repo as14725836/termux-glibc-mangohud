@@ -1,0 +1,25 @@
+From aeedb17f1b8398d3c4dd3fbdb74aae7df3535c17 Mon Sep 17 00:00:00 2001
+From: Conor McCarthy <cmccarthy@codeweavers.com>
+Date: Thu, 8 Jan 2026 14:56:23 +1000
+Subject: [PATCH] winegstreamer: Do not clear the output type in resampler
+ SetInputType().
+
+The audio resampler does not implement this behaviour.
+
+diff --git a/dlls/winegstreamer/resampler.c b/dlls/winegstreamer/resampler.c
+index 910d109c..2b79a613 100644
+--- a/dlls/winegstreamer/resampler.c
++++ b/dlls/winegstreamer/resampler.c
+@@ -374,12 +374,6 @@ static HRESULT WINAPI transform_SetInputType(IMFTransform *iface, DWORD id, IMFM
+     if (!impl->input_type && FAILED(hr = MFCreateMediaType(&impl->input_type)))
+         return hr;
+ 
+-    if (impl->output_type)
+-    {
+-        IMFMediaType_Release(impl->output_type);
+-        impl->output_type = NULL;
+-    }
+-
+     if (SUCCEEDED(hr = IMFMediaType_CopyAllItems(type, (IMFAttributes *)impl->input_type)))
+         impl->input_info.cbSize = block_alignment;
+     else

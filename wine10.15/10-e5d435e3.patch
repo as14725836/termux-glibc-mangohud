@@ -1,0 +1,154 @@
+From e5d435e3b8090c5ea8593bcd1039c78b90220b3e Mon Sep 17 00:00:00 2001
+From: Elizabeth Figura <zfigura@codeweavers.com>
+Date: Tue, 9 Dec 2025 14:12:20 -0600
+Subject: [PATCH] winegstreamer: Support dynamic reconnection in the DirectShow
+ transform.
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=58171
+
+diff --git a/dlls/winegstreamer/quartz_transform.c b/dlls/winegstreamer/quartz_transform.c
+index 343df3ec..8b828993 100644
+--- a/dlls/winegstreamer/quartz_transform.c
++++ b/dlls/winegstreamer/quartz_transform.c
+@@ -36,6 +36,11 @@ struct transform
+     struct strmbase_source source;
+     struct strmbase_passthrough passthrough;
+ 
++    /* Dynamic reconnection changes the source media type, but the mpeg video
++     * decoder does not reflect it in ConnectionMediaType().
++     * [Note that this differs from other filters, viz. avidec, which does.] */
++    AM_MEDIA_TYPE source_mt;
++
+     IQualityControl sink_IQualityControl_iface;
+     IQualityControl source_IQualityControl_iface;
+     IQualityControl *qc_sink;
+@@ -106,6 +111,7 @@ static HRESULT transform_init_stream(struct strmbase_filter *iface)
+         if (FAILED(hr = wg_sample_queue_create(&filter->sample_queue)))
+             return hr;
+ 
++        CopyMediaType(&filter->source_mt, &filter->source.pin.mt);
+         if (FAILED(hr = wg_transform_create_quartz(&filter->sink.pin.mt, &filter->source.pin.mt,
+                 &attrs, &filter->transform)))
+         {
+@@ -133,6 +139,7 @@ static HRESULT transform_cleanup_stream(struct strmbase_filter *iface)
+         wg_transform_destroy(filter->transform);
+         wg_sample_queue_destroy(filter->sample_queue);
+         LeaveCriticalSection(&filter->filter.stream_cs);
++        FreeMediaType(&filter->source_mt);
+     }
+ 
+     return S_OK;
+@@ -291,10 +298,21 @@ static HRESULT transform_sink_query_interface(struct strmbase_pin *pin, REFIID i
+     return S_OK;
+ }
+ 
++static bool compare_media_types(const AM_MEDIA_TYPE *a, const AM_MEDIA_TYPE *b)
++{
++    return IsEqualGUID(&a->majortype, &b->majortype)
++            && IsEqualGUID(&a->subtype, &b->subtype)
++            && IsEqualGUID(&a->formattype, &b->formattype)
++            && a->cbFormat == b->cbFormat
++            && !memcmp(a->pbFormat, b->pbFormat, a->cbFormat);
++}
++
+ static HRESULT WINAPI transform_sink_receive(struct strmbase_sink *pin, IMediaSample *sample)
+ {
+     struct transform *filter = impl_from_strmbase_filter(pin->pin.filter);
+     struct wg_sample *wg_sample;
++    IMediaSample *output_sample;
++    AM_MEDIA_TYPE *mt;
+     HRESULT hr;
+ 
+     /* We do not expect pin connection state to change while the filter is
+@@ -313,33 +331,51 @@ static HRESULT WINAPI transform_sink_receive(struct strmbase_sink *pin, IMediaSa
+     if (filter->sink.flushing)
+         return S_FALSE;
+ 
+-    hr = wg_sample_create_quartz(sample, &wg_sample);
+-    if (FAILED(hr))
++    if (FAILED(hr = IMemAllocator_GetBuffer(filter->source.pAllocator, &output_sample, NULL, NULL, 0)))
+         return hr;
+ 
+-    hr = wg_transform_push_quartz(filter->transform, wg_sample, filter->sample_queue);
+-    if (FAILED(hr))
+-        return hr;
+-
+-    for (;;)
++    if ((hr = IMediaSample_GetMediaType(output_sample, &mt)) == S_OK)
+     {
+-        IMediaSample *output_sample;
+-        AM_MEDIA_TYPE *mt;
++        struct wg_transform_attrs attrs = {0};
+ 
+-        hr = IMemAllocator_GetBuffer(filter->source.pAllocator, &output_sample, NULL, NULL, 0);
+-        if (FAILED(hr))
+-            return hr;
+-
+-        if ((hr = IMediaSample_GetMediaType(sample, &mt)) == S_OK)
++        if (compare_media_types(mt, &filter->source_mt))
+         {
+-            FIXME("Dynamic format change.\n");
+             DeleteMediaType(mt);
+         }
+-        else if (hr != S_FALSE)
++        else
+         {
+-            ERR("Failed to get media type, hr %#lx.\n", hr);
++            TRACE("Executing dynamic format change. Current format:\n");
++            strmbase_dump_media_type(&filter->source_mt);
++            TRACE("New format:\n");
++            strmbase_dump_media_type(mt);
++
++            FreeMediaType(&filter->source_mt);
++            filter->source_mt = *mt;
++            CoTaskMemFree(mt);
++
++            wg_transform_destroy(filter->transform);
++            if (FAILED(hr = wg_transform_create_quartz(&filter->sink.pin.mt,
++                    &filter->source_mt, &attrs, &filter->transform)))
++                ERR("Failed to recreate transform, hr %#lx.\n", hr);
+         }
+ 
++        DeleteMediaType(mt);
++    }
++    else if (hr != S_FALSE)
++    {
++        ERR("Failed to get media type, hr %#lx.\n", hr);
++    }
++
++    hr = wg_sample_create_quartz(sample, &wg_sample);
++    if (FAILED(hr))
++        return hr;
++
++    hr = wg_transform_push_quartz(filter->transform, wg_sample, filter->sample_queue);
++    if (FAILED(hr))
++        return hr;
++
++    for (;;)
++    {
+         hr = wg_sample_create_quartz(output_sample, &wg_sample);
+         if (FAILED(hr))
+         {
+@@ -371,6 +407,9 @@ static HRESULT WINAPI transform_sink_receive(struct strmbase_sink *pin, IMediaSa
+         }
+ 
+         IMediaSample_Release(output_sample);
++
++        if (FAILED(hr = IMemAllocator_GetBuffer(filter->source.pAllocator, &output_sample, NULL, NULL, 0)))
++            return hr;
+     }
+ 
+     return S_OK;
+diff --git a/dlls/winegstreamer/wg_sample.c b/dlls/winegstreamer/wg_sample.c
+index 2fc26793..3882d18e 100644
+--- a/dlls/winegstreamer/wg_sample.c
++++ b/dlls/winegstreamer/wg_sample.c
+@@ -430,7 +430,7 @@ HRESULT wg_transform_read_quartz(wg_transform_t transform, struct wg_sample *wg_
+     }
+ 
+     if (FAILED(hr = IMediaSample_SetActualDataLength(sample->u.quartz.sample, wg_sample->size)))
+-        return hr;
++        ERR("SetActualDataLength() returned %#lx.\n", hr);
+ 
+     if (wg_sample->flags & WG_SAMPLE_FLAG_HAS_PTS)
+     {

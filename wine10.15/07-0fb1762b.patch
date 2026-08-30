@@ -1,0 +1,23 @@
+From 0fb1762beea938871e1d8a86c45a33afc3e2548f Mon Sep 17 00:00:00 2001
+From: Yuxuan Shui <yshui@codeweavers.com>
+Date: Wed, 3 Dec 2025 18:32:04 +0000
+Subject: [PATCH] winegstreamer: Fix SetOutputType of the wma decoder DMO.
+
+In 60d5afc914e6e5aaee96022834a7f0d5f6a38e94 I moved transform creation to before the
+decoder->output_type is set, resulting in the decoder trying to create wg_transform with an empty
+type.
+
+diff --git a/dlls/winegstreamer/wma_decoder.c b/dlls/winegstreamer/wma_decoder.c
+index 951a50f7..4aa90b85 100644
+--- a/dlls/winegstreamer/wma_decoder.c
++++ b/dlls/winegstreamer/wma_decoder.c
+@@ -798,8 +798,7 @@ static HRESULT WINAPI media_object_SetOutputType(IMediaObject *iface, DWORD inde
+     if (IsEqualGUID(&decoder->input_type.majortype, &GUID_NULL))
+         return DMO_E_TYPE_NOT_SET;
+ 
+-    if (FAILED(hr = wg_transform_create_quartz(&decoder->input_type, &decoder->output_type,
+-            &attrs, &new_transform)))
++    if (FAILED(hr = wg_transform_create_quartz(&decoder->input_type, type, &attrs, &new_transform)))
+         return hr;
+ 
+     if (flags & DMO_SET_TYPEF_TEST_ONLY)

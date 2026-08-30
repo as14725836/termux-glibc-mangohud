@@ -1,0 +1,39 @@
+From 42b8735ae5dfbd2c38bd55fc42cc4b77532627be Mon Sep 17 00:00:00 2001
+From: Brendan McGrath <bmcgrath@codeweavers.com>
+Date: Tue, 24 Mar 2026 10:12:50 +1100
+Subject: [PATCH] winegstreamer: Place 'videoconvert' prior to 'deinterlace'
+ element.
+
+
+diff --git a/dlls/winegstreamer/wg_parser.c b/dlls/winegstreamer/wg_parser.c
+index f1926e3f..da414af6 100644
+--- a/dlls/winegstreamer/wg_parser.c
++++ b/dlls/winegstreamer/wg_parser.c
+@@ -915,11 +915,9 @@ static bool stream_create_post_processing_elements(GstPad *pad, struct wg_parser
+ 
+     if (!strcmp(name, "video/x-raw"))
+     {
+-        /* DirectShow can express interlaced video, but downstream filters can't
+-         * necessarily consume it. In particular, the video renderer can't. */
+-        if (!(element = create_element("deinterlace", "good"))
+-                || !append_element(parser->container, element, &first, &last))
+-            return false;
++        /* decodebin doesn't provide framerate for raw video. This causes the
++         * the deinterlace element to reject the caps. So we need to go through
++         * videoconvert first (as it fixates the framerate) */
+ 
+         /* decodebin considers many YUV formats to be "raw", but some quartz
+          * filters can't handle those. Also, videoflip can't handle all "raw"
+@@ -928,6 +926,12 @@ static bool stream_create_post_processing_elements(GstPad *pad, struct wg_parser
+                 || !append_element(parser->container, element, &first, &last))
+             return false;
+ 
++        /* DirectShow can express interlaced video, but downstream filters can't
++         * necessarily consume it. In particular, the video renderer can't. */
++        if (!(element = create_element("deinterlace", "good"))
++                || !append_element(parser->container, element, &first, &last))
++            return false;
++
+         /* Let GStreamer choose a default number of threads. */
+         gst_util_set_object_arg(G_OBJECT(element), "n-threads", "0");
+ 

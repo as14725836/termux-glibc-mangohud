@@ -1,0 +1,20 @@
+From 3f5e40dcecd7080940a9ed94ac2b034d9089becb Mon Sep 17 00:00:00 2001
+From: Yuxuan Shui <yshui@codeweavers.com>
+Date: Tue, 26 May 2026 12:53:47 +0100
+Subject: [PATCH] winegstreamer: Video processor shouldn't have a preferred
+ size.
+
+
+diff --git a/dlls/winegstreamer/video_processor.c b/dlls/winegstreamer/video_processor.c
+index 229fe0d4..301a76ca 100644
+--- a/dlls/winegstreamer/video_processor.c
++++ b/dlls/winegstreamer/video_processor.c
+@@ -436,8 +436,6 @@ static HRESULT WINAPI video_processor_GetOutputAvailableType(IMFTransform *iface
+         goto done;
+     if (FAILED(hr = IMFMediaType_SetGUID(media_type, &MF_MT_SUBTYPE, &subtype)))
+         goto done;
+-    if (FAILED(hr = IMFMediaType_SetUINT64(media_type, &MF_MT_FRAME_SIZE, frame_size)))
+-        goto done;
+ 
+     IMFMediaType_AddRef((*type = media_type));
+ 

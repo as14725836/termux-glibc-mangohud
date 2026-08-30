@@ -1,0 +1,21 @@
+From a9df023466b37178dcbdf7db5b3d11de46a3f507 Mon Sep 17 00:00:00 2001
+From: Akihiro Sagawa <sagawa.aki@gmail.com>
+Date: Sun, 22 Mar 2026 22:46:38 +0900
+Subject: [PATCH] winegstreamer: Increase the buffer count in the MPEG video
+ output.
+
+Otherwise, it sticks after seek.
+
+diff --git a/dlls/winegstreamer/quartz_parser.c b/dlls/winegstreamer/quartz_parser.c
+index 712a10be..38971f2f 100644
+--- a/dlls/winegstreamer/quartz_parser.c
++++ b/dlls/winegstreamer/quartz_parser.c
+@@ -2303,7 +2303,7 @@ static HRESULT WINAPI GSTOutPin_DecideBufferSize(struct strmbase_source *iface,
+     {
+         MPEG1VIDEOINFO *format = (MPEG1VIDEOINFO *)pin->pin.pin.mt.pbFormat;
+         buffer_size = format->hdr.bmiHeader.biSizeImage;
+-        buffer_count = 8;
++        buffer_count = 30;
+     }
+     else if (IsEqualGUID(&pin->pin.pin.mt.formattype, &FORMAT_WaveFormatEx)
+             && (IsEqualGUID(&pin->pin.pin.mt.subtype, &MEDIASUBTYPE_PCM)

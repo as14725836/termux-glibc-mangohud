@@ -1,0 +1,25 @@
+From 0093652b2fb4440ea39e65b9fabb1e24a63baac3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bernhard=20=C3=9Cbelacker?= <bernhardu@mailbox.org>
+Date: Fri, 13 Feb 2026 10:49:22 +0100
+Subject: [PATCH] winegstreamer: Use a single call to free the streams array
+ (ASan).
+
+Followup of 964cd76c.
+
+diff --git a/dlls/winegstreamer/wm_reader.c b/dlls/winegstreamer/wm_reader.c
+index 26fed099..4f41f1a1 100644
+--- a/dlls/winegstreamer/wm_reader.c
++++ b/dlls/winegstreamer/wm_reader.c
+@@ -1485,9 +1485,10 @@ static void free_streams(struct wm_reader *reader)
+         if (stream->stream_allocator)
+             IWMReaderAllocatorEx_Release(stream->stream_allocator);
+         stream->stream_allocator = NULL;
+-
+-        free(stream);
+     }
++
++    free(reader->streams);
++    reader->streams = NULL;
+ }
+ 
+ static HRESULT init_stream(struct wm_reader *reader)
