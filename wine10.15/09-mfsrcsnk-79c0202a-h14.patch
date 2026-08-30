@@ -1,8 +1,0 @@
-diff --git a/dlls/mfsrcsnk/media_source.c b/dlls/mfsrcsnk/media_source.c
---- a/dlls/mfsrcsnk/media_source.c
-+++ b/dlls/mfsrcsnk/media_source.c
-@@ -1083,6 +1083,7 @@ static HRESULT media_source_async_set_rate(struct media_source *source, IMFAsync
-     EnterCriticalSection(&source->cs);
-     source->rate = params->rate;
-+    source->thin = params->thin;
-     LeaveCriticalSection(&source->cs);
