@@ -1,0 +1,24 @@
+From 2720651bc00c045a12d447cb817f347f93e2b1d0 Mon Sep 17 00:00:00 2001
+From: Brendan McGrath <bmcgrath@codeweavers.com>
+Date: Fri, 12 Dec 2025 14:53:45 +1100
+Subject: [PATCH] mfsrcsnk: Remain in running state on EOP.
+
+---
+ dlls/mfsrcsnk/media_source.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/dlls/mfsrcsnk/media_source.c b/dlls/mfsrcsnk/media_source.c
+index b6f5654f..b084db6e 100644
+--- a/dlls/mfsrcsnk/media_source.c
++++ b/dlls/mfsrcsnk/media_source.c
+@@ -684,7 +684,6 @@ static HRESULT media_source_send_eos(struct media_source *source, struct media_s
+     }
+ 
+     queue_media_event_value(source->queue, MEEndOfPresentation, &empty);
+-    source->state = SOURCE_STOPPED;
+     return S_OK;
+ }
+ 
+-- 
+2.43.0
+
