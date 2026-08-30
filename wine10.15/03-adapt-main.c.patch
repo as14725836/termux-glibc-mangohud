@@ -1,0 +1,37 @@
+From: Operit <operit@local>
+Subject: tkg-mf-adapt 3: dlls/mfmediaengine/main.c
+
+---
+--- a/dlls/mfmediaengine/main.c
++++ b/dlls/mfmediaengine/main.c
+@@ -2529,28 +2529,6 @@
+     IMFSample_Release(sample);
+ }
+ 
+-static HRESULT get_d3d11_resource_from_sample(IMFSample *sample, ID3D11Texture2D **resource, UINT *subresource)
+-{
+-    IMFDXGIBuffer *dxgi_buffer;
+-    IMFMediaBuffer *buffer;
+-    HRESULT hr;
+-
+-    *resource = NULL;
+-    *subresource = 0;
+-
+-    if (FAILED(hr = IMFSample_GetBufferByIndex(sample, 0, &buffer)))
+-        return hr;
+-
+-    if (SUCCEEDED(hr = IMFMediaBuffer_QueryInterface(buffer, &IID_IMFDXGIBuffer, (void **)&dxgi_buffer)))
+-    {
+-        IMFDXGIBuffer_GetSubresourceIndex(dxgi_buffer, subresource);
+-        hr = IMFDXGIBuffer_GetResource(dxgi_buffer, &IID_ID3D11Texture2D, (void **)resource);
+-        IMFDXGIBuffer_Release(dxgi_buffer);
+-    }
+-
+-    IMFMediaBuffer_Release(buffer);
+-    return hr;
+-}
+ 
+ static unsigned int media_engine_get_d3d11_format_size(DXGI_FORMAT format)
+ {
+-- 
+2.49.0
