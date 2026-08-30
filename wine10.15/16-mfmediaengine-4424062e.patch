@@ -1,0 +1,49 @@
+From 4424062e2412f095772a277f4a8aa125578b031c Mon Sep 17 00:00:00 2001
+From: Matteo Bruni <mbruni@codeweavers.com>
+Date: Thu, 11 Dec 2025 14:49:36 +0100
+Subject: [PATCH] mfmediaengine: Apply stream volume instead of session-wide.
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=59047
+---
+ dlls/mfmediaengine/main.c | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/mfmediaengine/main.c b/dlls/mfmediaengine/main.c
+index 23acc733..1f3e43e7 100644
+--- a/dlls/mfmediaengine/main.c
++++ b/dlls/mfmediaengine/main.c
+@@ -867,19 +867,26 @@ static void media_engine_get_frame_size(struct media_engine *engine, IMFTopology
+ 
+ static void media_engine_apply_volume(const struct media_engine *engine)
+ {
+-    IMFSimpleAudioVolume *sa_volume;
++    IMFAudioStreamVolume *as_volume;
++    UINT32 count = 0;
++    unsigned int i;
+     HRESULT hr;
+ 
+     if (!engine->session)
+         return;
+ 
+-    if (FAILED(MFGetService((IUnknown *)engine->session, &MR_POLICY_VOLUME_SERVICE, &IID_IMFSimpleAudioVolume, (void **)&sa_volume)))
++    if (FAILED(MFGetService((IUnknown *)engine->session, &MR_STREAM_VOLUME_SERVICE, &IID_IMFAudioStreamVolume, (void **)&as_volume)))
+         return;
+ 
+-    if (FAILED(hr = IMFSimpleAudioVolume_SetMasterVolume(sa_volume, engine->volume)))
+-        WARN("Failed to set master volume, hr %#lx.\n", hr);
++    if (FAILED(hr = IMFAudioStreamVolume_GetChannelCount(as_volume, &count)))
++        WARN("Failed to get channel count, hr %#lx.\n", hr);
++    for (i = 0; i < count; i++)
++    {
++        if (FAILED(hr = IMFAudioStreamVolume_SetChannelVolume(as_volume, i, engine->volume)))
++            WARN("Failed to set volume, hr %#lx.\n", hr);
++    }
+ 
+-    IMFSimpleAudioVolume_Release(sa_volume);
++    IMFAudioStreamVolume_Release(as_volume);
+ }
+ 
+ static HRESULT WINAPI media_engine_callback_QueryInterface(IMFAsyncCallback *iface, REFIID riid, void **obj)
+-- 
+2.43.0
+

@@ -1,0 +1,42 @@
+From ef0c506d491e32407a07618d21e5445940b7f016 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Fri, 5 Dec 2025 11:12:15 +0100
+Subject: [PATCH] mfsrcsnk: Peek for stream token presence without removing it.
+
+---
+ dlls/mfsrcsnk/media_source.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/mfsrcsnk/media_source.c b/dlls/mfsrcsnk/media_source.c
+index 895b8041..e4ce376a 100644
+--- a/dlls/mfsrcsnk/media_source.c
++++ b/dlls/mfsrcsnk/media_source.c
+@@ -324,17 +324,17 @@ static HRESULT media_source_send_sample(struct media_source *source, UINT index,
+     if (!(stream = media_stream_from_index(source, index)) || !stream->active)
+         return S_FALSE;
+ 
+-    if (SUCCEEDED(hr = object_queue_pop(&stream->tokens, &token)))
++    if (list_empty(&stream->tokens))
+     {
+-        media_stream_send_sample(stream, sample, token);
+-        if (token) IUnknown_Release(token);
+-        return S_OK;
++        if (FAILED(hr = object_queue_push(&stream->samples, (IUnknown *)sample)))
++            return hr;
++        return S_FALSE;
+     }
+ 
+-    if (FAILED(hr = object_queue_push(&stream->samples, (IUnknown *)sample)))
+-        return hr;
+-
+-    return S_FALSE;
++    object_queue_pop(&stream->tokens, &token);
++    media_stream_send_sample(stream, sample, token);
++    if (token) IUnknown_Release(token);
++    return S_OK;
+ }
+ 
+ static void queue_media_event_object(IMFMediaEventQueue *queue, MediaEventType type, IUnknown *object)
+-- 
+2.43.0
+

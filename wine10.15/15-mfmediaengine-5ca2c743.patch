@@ -1,0 +1,33 @@
+From 5ca2c743e4829a9834ecf10d5623641c3f5fdb32 Mon Sep 17 00:00:00 2001
+From: Matteo Bruni <mbruni@codeweavers.com>
+Date: Thu, 11 Dec 2025 14:51:12 +0100
+Subject: [PATCH] mfmediaengine: Set SAR session ID to a random GUID.
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=59047
+---
+ dlls/mfmediaengine/main.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/dlls/mfmediaengine/main.c b/dlls/mfmediaengine/main.c
+index 1f3e43e7..2ababd67 100644
+--- a/dlls/mfmediaengine/main.c
++++ b/dlls/mfmediaengine/main.c
+@@ -1159,12 +1159,15 @@ static HRESULT media_engine_create_audio_renderer(struct media_engine *engine, I
+     unsigned int category, role;
+     IMFActivate *sar_activate;
+     HRESULT hr;
++    GUID guid;
+ 
+     *node = NULL;
+ 
+     if (FAILED(hr = MFCreateAudioRendererActivate(&sar_activate)))
+         return hr;
+ 
++    CoCreateGuid(&guid);
++    IMFActivate_SetGUID(sar_activate, &MF_AUDIO_RENDERER_ATTRIBUTE_SESSION_ID, &guid);
+     /* Configuration attributes keys differ between Engine and SAR. */
+     if (SUCCEEDED(IMFAttributes_GetUINT32(engine->attributes, &MF_MEDIA_ENGINE_AUDIO_CATEGORY, &category)))
+         IMFActivate_SetUINT32(sar_activate, &MF_AUDIO_RENDERER_ATTRIBUTE_STREAM_CATEGORY, category);
+-- 
+2.43.0
+

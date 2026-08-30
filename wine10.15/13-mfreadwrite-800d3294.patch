@@ -1,0 +1,128 @@
+From 800d32944e8a81ffe019d720d5900160f86f04f5 Mon Sep 17 00:00:00 2001
+From: Ziqing Hui <zhui@codeweavers.com>
+Date: Tue, 11 Mar 2025 09:46:04 +0800
+Subject: [PATCH] mfreadwrite: Implement sink_writer_SetInputMediaType.
+
+---
+ dlls/mfreadwrite/tests/mfplat.c |  3 --
+ dlls/mfreadwrite/writer.c       | 69 +++++++++++++++++++++++++++++----
+ 2 files changed, 61 insertions(+), 11 deletions(-)
+
+diff --git a/dlls/mfreadwrite/tests/mfplat.c b/dlls/mfreadwrite/tests/mfplat.c
+index c0b31f6d..a95675cf 100644
+--- a/dlls/mfreadwrite/tests/mfplat.c
++++ b/dlls/mfreadwrite/tests/mfplat.c
+@@ -1844,15 +1844,12 @@ static void test_sink_writer_add_stream(void)
+     init_media_type(input_type, video_input_type_desc, -1);
+ 
+     hr = IMFSinkWriter_SetInputMediaType(writer, 0xdeadbeef, NULL, NULL);
+-    todo_wine
+     ok(hr == E_INVALIDARG, "SetInputMediaType returned %#lx.\n", hr);
+ 
+     hr = IMFSinkWriter_SetInputMediaType(writer, 0, NULL, NULL);
+-    todo_wine
+     ok(hr == E_INVALIDARG, "SetInputMediaType returned %#lx.\n", hr);
+ 
+     hr = IMFSinkWriter_SetInputMediaType(writer, 0xdeadbeef, input_type, NULL);
+-    todo_wine
+     ok(hr == MF_E_INVALIDSTREAMNUMBER, "SetInputMediaType returned %#lx.\n", hr);
+ 
+     hr = IMFSinkWriter_SetInputMediaType(writer, 0, input_type, NULL);
+diff --git a/dlls/mfreadwrite/writer.c b/dlls/mfreadwrite/writer.c
+index cbd63de1..e57bf476 100644
+--- a/dlls/mfreadwrite/writer.c
++++ b/dlls/mfreadwrite/writer.c
+@@ -177,6 +177,26 @@ static void stream_release_transforms(struct stream *stream)
+     stream->encoder = NULL;
+ }
+ 
++static HRESULT stream_get_type(struct stream *stream, IMFMediaType **out_type)
++{
++    IMFMediaTypeHandler *type_handler;
++    HRESULT hr;
++
++    if (FAILED(hr = IMFStreamSink_GetMediaTypeHandler(stream->stream_sink, &type_handler)))
++        return hr;
++    hr = IMFMediaTypeHandler_GetCurrentMediaType(type_handler, out_type);
++
++    IMFMediaTypeHandler_Release(type_handler);
++    return hr;
++}
++
++static struct stream *sink_writer_get_stream(const struct sink_writer *writer, DWORD index)
++{
++    if (index >= writer->streams.count)
++        return NULL;
++    return &writer->streams.items[index];
++}
++
+ static void sink_writer_release_pending_item(struct pending_item *item)
+ {
+     list_remove(&item->entry);
+@@ -320,9 +340,48 @@ static HRESULT WINAPI sink_writer_AddStream(IMFSinkWriterEx *iface, IMFMediaType
+ static HRESULT WINAPI sink_writer_SetInputMediaType(IMFSinkWriterEx *iface, DWORD index, IMFMediaType *type,
+         IMFAttributes *parameters)
+ {
+-    FIXME("%p, %lu, %p, %p.\n", iface, index, type, parameters);
++    struct sink_writer *writer = impl_from_IMFSinkWriterEx(iface);
++    IMFMediaType *stream_type = NULL;
++    struct stream *stream;
++    DWORD flags;
++    HRESULT hr;
+ 
+-    return E_NOTIMPL;
++    TRACE("%p, %lu, %p, %p.\n", iface, index, type, parameters);
++
++    if (!type)
++        return E_INVALIDARG;
++
++    EnterCriticalSection(&writer->cs);
++
++    if (!(stream = sink_writer_get_stream(writer, index)))
++    {
++        hr = MF_E_INVALIDSTREAMNUMBER;
++        goto done;
++    }
++
++    if (FAILED(hr = stream_get_type(stream, &stream_type))
++            || FAILED(hr = IMFMediaType_IsEqual(type, stream_type, &flags)))
++        goto done;
++
++    if (!(flags & MF_MEDIATYPE_EQUAL_MAJOR_TYPES))
++    {
++        hr = MF_E_INVALIDMEDIATYPE;
++        goto done;
++    }
++
++    /* Types are not compatible, create transforms. */
++    if (!(flags & MF_MEDIATYPE_EQUAL_FORMAT_DATA))
++    {
++        /* TODO: Try only using converter first, then try again with encoder. */
++        FIXME("Not implemented.\n");
++        hr = E_NOTIMPL;
++    }
++
++done:
++    if (stream_type)
++        IMFMediaType_Release(stream_type);
++    LeaveCriticalSection(&writer->cs);
++    return hr;
+ }
+ 
+ static HRESULT sink_writer_set_presentation_clock(struct sink_writer *writer)
+@@ -387,12 +446,6 @@ static HRESULT WINAPI sink_writer_BeginWriting(IMFSinkWriterEx *iface)
+     return hr;
+ }
+ 
+-static struct stream * sink_writer_get_stream(const struct sink_writer *writer, DWORD index)
+-{
+-    if (index >= writer->streams.count) return NULL;
+-    return &writer->streams.items[index];
+-}
+-
+ static HRESULT sink_writer_get_buffer_length(IMFSample *sample, LONGLONG *timestamp, DWORD *length)
+ {
+     IMFMediaBuffer *buffer;
+-- 
+2.43.0
+
