@@ -1,16 +1,8 @@
-From 79c0202a00000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Wine Bot <wine@winehq.org>
-Subject: [PATCH] mfsrcsnk: Store thinning flag on rate change (backport hunk)
-
----
- dlls/mfsrcsnk/media_source.c | 1 +
- 1 file changed, 1 insertion(+)
-
+diff --git a/dlls/mfsrcsnk/media_source.c b/dlls/mfsrcsnk/media_source.c
+--- a/dlls/mfsrcsnk/media_source.c
++++ b/dlls/mfsrcsnk/media_source.c
 @@ -1083,6 +1083,7 @@ static HRESULT media_source_async_set_rate(struct media_source *source, IMFAsync
- 
      EnterCriticalSection(&source->cs);
      source->rate = params->rate;
 +    source->thin = params->thin;
      LeaveCriticalSection(&source->cs);
- 
-     queue_media_event_value(source->queue, MESourceRateChanged, NULL);
