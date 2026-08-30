@@ -1,0 +1,22 @@
+From: Operit <operit@local>
+Subject: tkg-mf-adapt 5: dlls/winegstreamer/wg_parser.c
+
+---
+--- a/dlls/winegstreamer/wg_parser.c
++++ b/dlls/winegstreamer/wg_parser.c
+@@ -1064,6 +1064,13 @@
+         /* decodebin doesn't provide framerate for raw video. This causes the
+          * the deinterlace element to reject the caps. So we need to go through
+          * videoconvert first (as it fixates the framerate) */
++
++        /* Hack: Flatten colorimetry to defaults (Proton media-converter). */
++        if (!(element = create_element("capssetter", "good"))
++                || !append_element(parser->container, element, &first, &last))
++            return false;
++        gst_util_set_object_arg(G_OBJECT(element), "join", "true");
++        gst_util_set_object_arg(G_OBJECT(element), "caps", "video/x-raw,colorimetry=0:0:0:0");
+ 
+         /* decodebin considers many YUV formats to be "raw", but some quartz
+          * filters can't handle those. Also, videoflip can't handle all "raw"
+-- 
+2.49.0

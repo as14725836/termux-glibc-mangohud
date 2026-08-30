@@ -1,0 +1,16 @@
+From: Operit <operit@local>
+Subject: tkg-mf-adapt 2: dlls/winegstreamer/main.c
+
+---
+--- a/dlls/winegstreamer/main.c
++++ b/dlls/winegstreamer/main.c
+@@ -166,6 +166,7 @@
+     struct wg_parser_create_params params =
+     {
+         .flags = flags,
++        .use_opengl = FALSE,
+         .err_on = ERR_ON(quartz),
+         .warn_on = WARN_ON(quartz),
+     };
+-- 
+2.49.0
