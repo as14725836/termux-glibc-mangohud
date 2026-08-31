@@ -525,7 +525,7 @@ jobs:
             fi
           done
           # XMA GUID 兜底（patch1 的 Hunk#1 可能因基线差异失败，hunk2/3/4 引用它）
-          if ! grep -q 'MEDIASUBTYPE_XMAUDIO2' dlls/winegstreamer/quartz_parser.c; then
+          if ! grep -q 'static const GUID MEDIASUBTYPE_XMAUDIO2' dlls/winegstreamer/quartz_parser.c; then
             sed -i '/DEFINE_GUID(MEDIASUBTYPE_ABGR32/a static const GUID MEDIASUBTYPE_XMAUDIO2 = {0x0166, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};' dlls/winegstreamer/quartz_parser.c
             echo "已补加 MEDIASUBTYPE_XMAUDIO2 定义"
           fi
