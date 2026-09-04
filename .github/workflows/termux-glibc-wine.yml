@@ -498,7 +498,6 @@ jobs:
               patch -p1 < "$patch" || true
             fi
           done
-
           # 应用 wine10.15 目录补丁
           for patch in $GITHUB_WORKSPACE/wine10.15/*.patch; do
             if [ -f "$patch" ]; then
@@ -507,40 +506,6 @@ jobs:
             fi
           done
           
-          # ===== proton-mf (gstreamer) 补丁应用 =====
-          RAW_MF_URL="https://raw.githubusercontent.com/Frogging-Family/wine-tkg-git/master/wine-tkg-git/wine-tkg-patches"
-          echo "下载 proton-mf 补丁..."
-          curl -fsSL -o gstreamer-patch1.patch "$RAW_MF_URL/proton/proton-mf-patch/gstreamer-patch1.patch" || echo "⚠️ patch1 下载失败"
-          curl -fsSL -o gstreamer-patch2.patch "$RAW_MF_URL/proton/proton-mf-patch/gstreamer-patch2.patch" || echo "⚠️ patch2 下载失败"
-          echo "应用 gstreamer-patch1（宽容模式，FAILED 由适配补丁修复）..."
-          patch -p1 -N -t -f < gstreamer-patch1.patch || true
-          echo "应用 gstreamer-patch2 (staging，宽容模式)..."
-          patch -p1 -N -t -f < gstreamer-patch2.patch || true
-          echo "跳过 proton_mf_hacks（2019 旧补丁，10.15 上会导致 reader.c 编译错误）"
-          echo "应用 patch-mf 适配补丁（严格要求成功）..."
-          for patch in $GITHUB_WORKSPACE/patch-mf/*.patch; do
-            if [ -f "$patch" ]; then
-              echo "Applying $patch..."
-              patch -p1 -N -t -f < "$patch" || { echo "❌ $patch 应用失败"; exit 1; }
-            fi
-          done
-          # XMA GUID 兜底（patch1 的 Hunk#1 可能因基线差异失败，hunk2/3/4 引用它）
-          if ! grep -q 'static const GUID MEDIASUBTYPE_XMAUDIO2' dlls/winegstreamer/quartz_parser.c; then
-            sed -i '/DEFINE_GUID(MEDIASUBTYPE_ABGR32/a static const GUID MEDIASUBTYPE_XMAUDIO2 = {0x0166, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};' dlls/winegstreamer/quartz_parser.c
-            echo "已补加 MEDIASUBTYPE_XMAUDIO2 定义"
-          fi
-          # 新版 gst 的 API 适配（GstBufferMapInfo -> GstMapInfo）
-          if [ -f dlls/winegstreamer/media-converter/videoconv.c ]; then
-            sed -i 's/GstBufferMapInfo/GstMapInfo/g' dlls/winegstreamer/media-converter/videoconv.c || true
-            echo "已修复 GstBufferMapInfo → GstMapInfo"
-          fi
-          # 无 GL 开发包时去掉 gstreamer-gl-1.0 依赖
-          sed -i 's/gstreamer-gl-1.0//g' configure.ac || true
-          echo "GL 兜底清理（无 GL 构建，幂等）..."
-          python3 "$GITHUB_WORKSPACE/patch-mf/gl_cleanup.py" || true
-          echo "proton-mf 补丁应用完成"
-          # ===== proton-mf 补丁应用结束 =====
-
           # ===== DXGI 补丁应用逻辑 =====
           if [ "$APPLY_DXGI_PATCH" = "true" ]; then
             echo "✅ 已启用 DXGI 补丁，开始应用..."
@@ -556,12 +521,10 @@ jobs:
               wget -O wine_do_not_create_dxgi_manager2.patch https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
               if [ -f "dlls/mfplat/main.c" ]; then
                 echo "找到目标文件 dlls/mfplat/main.c，准备应用补丁..."
-                if grep -q 'WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER' dlls/mfplat/main.c; then
-                  echo "✅ DXGI 补丁内容已由 proton-mf 补丁提供，跳过应用"
-                elif patch -p1 -N -t -f < wine_do_not_create_dxgi_manager2.patch; then
+                if patch -p1 < wine_do_not_create_dxgi_manager2.patch; then
                   echo "✅ 补丁应用成功"
                 else
-                  echo "⚠️ 补丁应用失败（无 proton-mf 时需人工检查）"
+                  echo "❌ 补丁应用失败"
                   exit 1
                 fi
               else
@@ -689,4 +652,3 @@ jobs:
             ${{ github.workspace }}/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
