@@ -1,0 +1,73 @@
+diff --git a/dlls/win32u/freetype.c b/dlls/win32u/freetype.c
+index a302f54..042fe03 100644
+--- a/dlls/win32u/freetype.c
++++ b/dlls/win32u/freetype.c
+@@ -1866,10 +1866,68 @@ sym_not_found:
+ /*************************************************************
+  * freetype_load_fonts
+  */
++static BOOL ReadFontDir(const char *dirname, BOOL external_fonts)
++{
++    DIR *dir;
++    struct dirent *dent;
++    char *path;
++
++    TRACE("Loading fonts from %s\n", debugstr_a(dirname));
++    dir = opendir(dirname);
++    if (!dir)
++    {
++        WARN("Can't open directory %s\n", debugstr_a(dirname));
++        return FALSE;
++    }
++    while ((dent = readdir(dir)) != NULL)
++    {
++        struct stat statbuf;
++
++        if (!strcmp(dent->d_name, ".") || !strcmp(dent->d_name, ".."))
++            continue;
++
++        path = malloc(strlen(dirname) + strlen(dent->d_name) + 2);
++        if (!path) continue;
++        sprintf(path, "%s/%s", dirname, dent->d_name);
++
++        if (stat(path, &statbuf) == -1)
++        {
++            WARN("Can't stat %s\n", debugstr_a(path));
++            free(path);
++            continue;
++        }
++        if (S_ISDIR(statbuf.st_mode))
++            ReadFontDir(path, external_fonts);
++        else
++        {
++            DWORD addfont_flags = 0;
++            if (external_fonts) addfont_flags |= ADDFONT_EXTERNAL_FONT;
++            AddFontToList(NULL, path, NULL, 0, addfont_flags);
++        }
++        free(path);
++    }
++    closedir(dir);
++    return TRUE;
++}
++
+ static void freetype_load_fonts(void)
+ {
+ #ifdef SONAME_LIBFONTCONFIG
+     load_fontconfig_fonts();
++
++    if (!fontconfig_enabled)
++    {
++        static const char * const fallback_dirs[] = {
++            "/system/fonts",
++            "/data/data/com.termux/files/usr/share/fonts",
++            NULL
++        };
++        const char * const *dir;
++
++        default_aa_flags = GGO_GRAY4_BITMAP;
++        for (dir = fallback_dirs; *dir; dir++)
++            ReadFontDir(*dir, TRUE);
++    }
+ #elif defined(__APPLE__)
+     load_mac_fonts();
+ #endif
