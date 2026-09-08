@@ -181,6 +181,13 @@ jobs:
           find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
           echo "补丁应用"
+          patch_file="$GITHUB_WORKSPACE/0001-ohos-default-to-grayscale-font-antialiasing.patch"
+          if [ -f "$patch_file" ]; then
+          echo "Applying $patch_file..."
+          patch -p1 < "$patch_file"
+          else
+          echo "Warning: Patch file not found: $patch_file"
+          fi
           
           ./autogen.sh
           mkdir -p build-wow64
