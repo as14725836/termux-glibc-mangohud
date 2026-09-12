@@ -519,7 +519,7 @@ jobs:
             
             if [ "$VERSION_MAJOR" -gt 9 ] || [ "$VERSION_MAJOR" -eq 9 -a "$VERSION_MINOR" -ge 10 ]; then
               echo "使用 9.10+ 版本的修复方式 (wine_do_not_create_dxgi_manager2.patch)"
-              wget -O wine_do_not_create_dxgi_device_manager2.patch https://github.com/as14725836/wine-termux/blob/main/wine_do_not_create_dxgi_device_manager2.patch
+              wget -O wine_do_not_create_dxgi_device_manager2.patch https://raw.githubusercontent.com/as14725836/wine-termux/main/wine_do_not_create_dxgi_device_manager2.patch
               if [ -f "dlls/mfplat/main.c" ]; then
                 echo "找到目标文件 dlls/mfplat/main.c，准备应用补丁..."
                 if patch -p1 < wine_do_not_create_dxgi_device_manager2.patch; then
