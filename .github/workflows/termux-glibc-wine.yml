@@ -4,8 +4,10 @@ on:
   schedule:
     # Proton 构建 - 每月1号和15号
     - cron: '0 0 1,15 * *'
+
     # Wine 构建 - 每月5号和20号
     - cron: '0 2 5,20 * *'
+
   workflow_dispatch:
     inputs:
       build_type:
@@ -14,47 +16,51 @@ on:
         default: 'proton'
         type: choice
         options:
-        - proton
-        - wine-wow64
+          - proton
+          - wine-wow64
+
       proton_branch:
         description: 'Proton 分支 (仅 Proton 构建)'
         required: false
         default: 'proton_11.0'
         type: choice
         options:
-        - proton_11.0
-        - proton_9.0
-        - experimental_10.0
-        - experimental_11.0
-        - proton_11.0-2
-        - proton-9.0-arm64ec
-        - ge-proton11-5-bionic-staging
-        - proton_10.0
-        - ge-proton11-bionic
-        - bleeding-edge
+          - proton_11.0
+          - proton_9.0
+          - experimental_10.0
+          - experimental_11.0
+          - proton_11.0-2
+          - proton-9.0-arm64ec
+          - ge-proton11-5-bionic-staging
+          - proton_10.0
+          - ge-proton11-bionic
+          - bleeding-edge
+
       wine_branch:
         description: 'Wine 分支 (仅 Wine 构建)'
         required: false
         default: 'staging'
         type: choice
         options:
-        - vanilla
-        - staging
-        - staging-tkg
-        - staging-tkg-fsync
+          - vanilla
+          - staging
+          - staging-tkg
+          - staging-tkg-fsync
+
       wine_version:
         description: 'Wine 版本 (仅 Wine 构建)'
         required: false
         default: 'latest'
         type: string
+
       apply_dxgi_patch:
-        description: '应用 DXGI 补丁 (修复 MFCreateDXGIDeviceManager 重复定义)'
+        description: '应用 DXGI 补丁'
         required: false
         default: 'true'
         type: choice
         options:
-        - 'true'
-        - 'false'
+          - 'true'
+          - 'false'
 
 env:
   USE_CCACHE: true
@@ -63,19 +69,51 @@ env:
 permissions:
   contents: write
 
+
+# ============================================================
+# Proton
+# ============================================================
+
 jobs:
+
   build-proton:
+
     runs-on: ubuntu-24.04
-    if: github.event.inputs.build_type == 'proton' || (github.event_name == 'schedule' && github.event.schedule == '0 0 1,15 * *')
+
+    if: >
+      github.event.inputs.build_type == 'proton'
+      ||
+      (
+        github.event_name == 'schedule'
+        &&
+        github.event.schedule == '0 0 1,15 * *'
+      )
+
     timeout-minutes: 240
 
     steps:
-      - uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      # --------------------------------------------------------
+      # 构建依赖
+      # --------------------------------------------------------
 
       - name: 安装构建依赖
         run: |
+
+          set -e
+
           sudo apt update
+
           sudo apt --fix-broken install -y
+
           BASE_DEPS="\
             debootstrap \
             perl \
@@ -137,11 +175,21 @@ jobs:
             locales \
             language-pack-zh-hans \
             ccache"
+
           sudo apt install -y $BASE_DEPS
-      
+
+
+      # --------------------------------------------------------
+      # GStreamer
+      # --------------------------------------------------------
+
       - name: 安装多媒体和音频依赖
         run: |
+
+          set -e
+
           sudo apt update
+
           sudo apt install -y \
             libunwind-dev \
             libgstreamer1.0-dev \
@@ -149,76 +197,229 @@ jobs:
             gstreamer1.0-* \
             libmpg123-dev \
             libopenal-dev
-      
+
+
+      # --------------------------------------------------------
+      # Locale
+      # --------------------------------------------------------
+
       - name: 设置中文语言环境
         run: |
+
           sudo locale-gen zh_CN.UTF-8
           sudo update-locale LANG=zh_CN.UTF-8
-          export LANG=zh_CN.UTF-8
-          export LC_ALL=zh_CN.UTF-8
-      
+
+          echo "LANG=zh_CN.UTF-8" >> "$GITHUB_ENV"
+          echo "LC_ALL=zh_CN.UTF-8" >> "$GITHUB_ENV"
+          echo "LANGUAGE=zh_CN:zh:en_US:en" >> "$GITHUB_ENV"
+
+
+      # --------------------------------------------------------
+      # ccache
+      # --------------------------------------------------------
+
       - name: 启用 ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ github.job }}-${{ github.ref }}
           max-size: 5G
-      
-      - name: 构建 Proton WOW64 版本
+
+
+      # --------------------------------------------------------
+      # Proton Build
+      # --------------------------------------------------------
+
+      - name: 构建 Proton WOW64
         run: |
+
           set -e
-          echo "开始构建 Proton WOW64 版本..."
-          echo "分支: ${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
+
+          echo "=========================================="
+          echo "开始构建 Proton WOW64"
+          echo "=========================================="
+
           export LANG=zh_CN.UTF-8
           export LC_ALL=zh_CN.UTF-8
           export LANGUAGE=zh_CN:zh:en_US:en
-          rm -rf $BUILD_DIR/proton
-          mkdir -p $BUILD_DIR/proton
-          cd $BUILD_DIR/proton
-          git clone https://github.com/Pipetto-crypto/wine.git wine
+
+          rm -rf "$BUILD_DIR/proton"
+
+          mkdir -p "$BUILD_DIR/proton"
+
+          cd "$BUILD_DIR/proton"
+
+
+          # ----------------------------------------------------
+          # Clone
+          # ----------------------------------------------------
+
+          git clone \
+            https://github.com/Pipetto-crypto/wine.git \
+            wine
+
           cd wine
+
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
-          echo "切换到分支: $PROTON_BRANCH"
-          git checkout $PROTON_BRANCH
+
+          echo "Proton 分支: $PROTON_BRANCH"
+
+          git checkout "$PROTON_BRANCH"
+
           git submodule update --init --recursive
-          
+
+
+          # ----------------------------------------------------
+          # Termux / Android /tmp 路径修复
+          # ----------------------------------------------------
+
           echo "修复 Termux 路径问题..."
-          find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
-          find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          echo "补丁应用"
-          patch_file="$GITHUB_WORKSPACE/0001-ohos-default-to-grayscale-font-antialiasing.patch"
-          if [ -f "$patch_file" ]; then
-          echo "Applying $patch_file..."
-          patch -p1 < "$patch_file"
+
+          find . \
+            -type f \
+            \( \
+              -name "*.c" \
+              -o -name "*.h" \
+              -o -name "*.in" \
+              -o -name "*.spec" \
+            \) \
+            -exec grep -l "/tmp" {} \; \
+            | xargs -r sed -i \
+              's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
+
+          find server \
+            -type f \
+            \( -name "*.c" -o -name "*.h" \) \
+            -exec sed -i \
+              's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+
+          find . \
+            -name "file.c" \
+            -exec sed -i \
+              's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+
+          find . \
+            -name "loader.c" \
+            -exec sed -i \
+              's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+
+          find . \
+            -name "server.c" \
+            -exec sed -i \
+              's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+
+
+          # ----------------------------------------------------
+          # 自定义补丁
+          # ----------------------------------------------------
+
+          PATCH_FILE="$GITHUB_WORKSPACE/0001-ohos-default-to-grayscale-font-antialiasing.patch"
+
+          if [ -f "$PATCH_FILE" ]; then
+
+            echo "Applying $PATCH_FILE..."
+
+            patch -p1 < "$PATCH_FILE"
+
           else
-          echo "Warning: Patch file not found: $patch_file"
+
+            echo "Warning: Patch file not found"
+
           fi
-          
+
+
+          # ----------------------------------------------------
+          # Autogen
+          # ----------------------------------------------------
+
           ./autogen.sh
+
+
+          # ----------------------------------------------------
+          # Build directory
+          # ----------------------------------------------------
+
           mkdir -p build-wow64
+
           cd build-wow64
-          
-          # ===== 编译优化参数（性能 + 体积） =====
+
+
+          # ====================================================
+          # 编译优化
+          # ====================================================
+
           export CC="ccache gcc"
           export CXX="ccache g++"
+
           export CROSSCC="ccache x86_64-w64-mingw32-gcc"
           export CROSSCXX="ccache x86_64-w64-mingw32-g++"
 
-          export CFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe \
-            -fno-plt -fno-semantic-interposition -fvisibility=hidden \
-            -fno-math-errno -fno-trapping-math \
-            -ffunction-sections -fdata-sections -fmerge-all-constants -fno-ident"
+
+          # ----------------------------------------------------
+          # Unix compiler
+          # ----------------------------------------------------
+
+          export CFLAGS="\
+          -march=x86-64 \
+          -msse3 \
+          -mfpmath=sse \
+          -O2 \
+          -pipe \
+          -fno-plt \
+          -fno-semantic-interposition \
+          -fno-math-errno \
+          -fno-trapping-math \
+          -ffunction-sections \
+          -fdata-sections \
+          -fmerge-all-constants \
+          -fno-ident"
+
           export CXXFLAGS="$CFLAGS"
-          export CROSSCFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe \
-            -fno-plt -fno-math-errno \
-            -ffunction-sections -fdata-sections -fmerge-all-constants -fno-ident"
+
+
+          # ----------------------------------------------------
+          # PE compiler
+          # ----------------------------------------------------
+
+          export CROSSCFLAGS="\
+          -march=x86-64 \
+          -msse3 \
+          -mfpmath=sse \
+          -O2 \
+          -pipe \
+          -fno-plt \
+          -fno-math-errno \
+          -ffunction-sections \
+          -fdata-sections \
+          -fmerge-all-constants \
+          -fno-ident"
+
           export CROSSCXXFLAGS="$CROSSCFLAGS"
-          export LDFLAGS="-Wl,-O1,--sort-common,--as-needed \
-            -Wl,--gc-sections -Wl,--build-id=none -Wl,-s"
-          # ===== 优化参数结束 =====
-          
+
+
+          # ----------------------------------------------------
+          # Linker
+          # ----------------------------------------------------
+
+          export LDFLAGS="\
+          -Wl,-O2 \
+          -Wl,--as-needed \
+          -Wl,--gc-sections \
+          -Wl,--build-id=none"
+
+
+          echo "=========================================="
+          echo "CFLAGS:"
+          echo "$CFLAGS"
+          echo
+          echo "LDFLAGS:"
+          echo "$LDFLAGS"
+          echo "=========================================="
+
+
+          # ====================================================
+          # Configure
+          # ====================================================
+
           ../configure \
             --enable-win64 \
             --enable-archs=i386,x86_64 \
@@ -252,94 +453,348 @@ jobs:
             --without-usb \
             --without-v4l2 \
             --without-wayland
-          echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Proton..."
-          make -j$(nproc)
+
+
+          # ====================================================
+          # Build
+          # ====================================================
+
+          echo "开始构建 Proton WOW64..."
+
+          make -j"$(nproc)"
+
           make install
+
+
+          # ====================================================
+          # 版本信息
+          # ====================================================
+
           cd ../..
-          VERSION_PROTON=$(cd wine && git describe --tags --abbrev=0 2>/dev/null || echo "$PROTON_BRANCH")
-          COMMIT_HASH=$(cd wine && git rev-parse --short HEAD)
+
+          VERSION_PROTON=$(
+            cd wine
+            git describe --tags --abbrev=0 2>/dev/null \
+              || echo "$PROTON_BRANCH"
+          )
+
+          COMMIT_HASH=$(
+            cd wine
+            git rev-parse --short HEAD
+          )
+
           PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
-          echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
-          echo "BUILD_NAME=proton-${PROTON_VERSION}-wow64" >> $GITHUB_ENV
-      
-      - name: Strip 二进制（额外减体积）
+
+          echo "PROTON_VERSION=$PROTON_VERSION" >> "$GITHUB_ENV"
+
+          echo "BUILD_NAME=proton-${PROTON_VERSION}-wow64" >> "$GITHUB_ENV"
+
+
+      # --------------------------------------------------------
+      # Proton 瘦身
+      # --------------------------------------------------------
+
+      - name: Proton 安装包瘦身
         run: |
-          if [ -d /tmp/wine-install-proton ]; then
-            find /tmp/wine-install-proton -type f \( -name "*.so" -o -name "*.so.*" -o -perm -u+x \) \
-              -exec strip --strip-unneeded {} + 2>/dev/null || true
+
+          set -e
+
+          PREFIX="/tmp/wine-install-proton"
+
+          echo "=========================================="
+          echo "原始安装大小"
+          echo "=========================================="
+
+          du -sh "$PREFIX"
+
+
+          # 删除静态库
+          find "$PREFIX" \
+            -type f \
+            \( \
+              -name "*.a" \
+              -o -name "*.la" \
+            \) \
+            -print \
+            -delete
+
+
+          # 删除 debug 文件
+          find "$PREFIX" \
+            -type f \
+            \( \
+              -name "*.debug" \
+              -o -name "*.dwo" \
+            \) \
+            -print \
+            -delete
+
+
+          # 删除开发目录
+          rm -rf "$PREFIX/include"
+
+
+          # 删除文档
+          rm -rf "$PREFIX/share/man"
+          rm -rf "$PREFIX/share/doc"
+
+
+          # Strip
+          echo "开始 Strip..."
+
+          find "$PREFIX" \
+            -type f \
+            \( \
+              -name "*.so" \
+              -o -name "*.so.*" \
+              -o -perm -u+x \
+            \) \
+            -exec strip --strip-unneeded {} + \
+            2>/dev/null || true
+
+
+          # 删除空目录
+          find "$PREFIX" \
+            -type d \
+            -empty \
+            -delete \
+            2>/dev/null || true
+
+
+          echo "=========================================="
+          echo "最终安装大小"
+          echo "=========================================="
+
+          du -sh "$PREFIX"
+
+          echo
+          echo "各目录大小："
+
+          du -sh "$PREFIX"/* \
+            2>/dev/null \
+            | sort -h || true
+
+
+      # --------------------------------------------------------
+      # Proton 检查
+      # --------------------------------------------------------
+
+      - name: 检查 Proton 运行时
+        run: |
+
+          set -e
+
+          PREFIX="/tmp/wine-install-proton"
+
+          echo "检查 Wine..."
+
+          test -f "$PREFIX/bin/wine"
+
+          echo "✓ wine"
+
+          test -f "$PREFIX/bin/wineserver"
+
+          echo "✓ wineserver"
+
+          if [ -f "$PREFIX/bin/wine64" ]; then
+            echo "✓ wine64"
           fi
-      
-      - name: 准备打包
+
+          if [ -d "$PREFIX/share/wine" ]; then
+            echo "✓ share/wine"
+          else
+            echo "⚠️ share/wine 不存在"
+          fi
+
+          echo
+          echo "DLL 数量:"
+
+          find "$PREFIX" \
+            -type f \
+            \( -name "*.dll" -o -name "*.dll.so" \) \
+            | wc -l
+
+          echo
+          echo "SO 数量:"
+
+          find "$PREFIX" \
+            -type f \
+            \( -name "*.so" -o -name "*.so.*" \) \
+            | wc -l
+
+
+      # --------------------------------------------------------
+      # Package
+      # --------------------------------------------------------
+
+      - name: 准备 Proton 打包
         run: |
-          PACKAGE_NAME="${{ env.BUILD_NAME }}"
-          mkdir -p wine-package/$PACKAGE_NAME
-          cp -r /tmp/wine-install-proton/* wine-package/$PACKAGE_NAME/
-      
-      - name: 创建打包文件
+
+          set -e
+
+          PACKAGE_NAME="${BUILD_NAME}"
+
+          mkdir -p "wine-package/$PACKAGE_NAME"
+
+          cp -a \
+            /tmp/wine-install-proton/. \
+            "wine-package/$PACKAGE_NAME/"
+
+
+      # --------------------------------------------------------
+      # Tar XZ
+      # --------------------------------------------------------
+
+      - name: 创建 Proton 压缩包
         run: |
-          PACKAGE_NAME="${{ env.BUILD_NAME }}"
-          tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
-          ls -lh *.tar.xz
-      
+
+          set -e
+
+          PACKAGE_NAME="${BUILD_NAME}"
+
+          tar \
+            --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -I 'xz -T0 -9e' \
+            -cf "$PACKAGE_NAME.tar.xz" \
+            -C wine-package \
+            "$PACKAGE_NAME"
+
+          ls -lh "$PACKAGE_NAME.tar.xz"
+
+
+      # --------------------------------------------------------
+      # Checksum
+      # --------------------------------------------------------
+
       - name: Generate checksums
         run: |
+
           sha256sum *.tar.xz > checksums.txt
+
           cat checksums.txt
-      
+
+
+      # --------------------------------------------------------
+      # Artifact
+      # --------------------------------------------------------
+
       - name: Upload Proton artifacts
         uses: actions/upload-artifact@v4
+
         with:
           name: Proton-${{ github.event.inputs.proton_branch || 'proton_10.0' }}-WoW64
+
           path: |
             ${{ github.workspace }}/*.tar.xz
             ${{ github.workspace }}/checksums.txt
+
           retention-days: 30
+
+
+      # --------------------------------------------------------
+      # Release
+      # --------------------------------------------------------
 
       - name: 发布 Proton 到 GitHub Release
         uses: softprops/action-gh-release@v1
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'proton'
+
+        if: >
+          github.event_name == 'workflow_dispatch'
+          &&
+          github.event.inputs.build_type == 'proton'
+
         with:
+
           tag_name: proton-${{ github.event.inputs.proton_branch || 'proton_10.0' }}-wow64
+
           name: Proton ${{ github.event.inputs.proton_branch || 'proton_10.0' }} (WOW64 with Vulkan & GStreamer for Termux)
+
           body: |
-            # Proton ${{ github.event.inputs.proton_branch || 'proton_10.0' }} - WOW64 with Vulkan & GStreamer for Termux
+
+            # Proton ${{ github.event.inputs.proton_branch || 'proton_10.0' }} - Termux WOW64
+
             ## 版本信息
-            - **Proton 分支**: ${{ github.event.inputs.proton_branch || 'proton_10.0' }}
-            - **架构**: True WOW64 (同时支持 32 位和 64 位 Windows 应用程序)
-            - **平台**: Termux (Android)
-            - **图形 API**: Vulkan 支持已启用
-            - **多媒体**: 完整 GStreamer 支持
-            ## 特性
-            ✓ 真正的 WOW64 架构
-            ✓ 同时支持 32 位和 64 位 Windows 应用程序
-            ✓ Vulkan 图形 API 支持
-            ✓ 完整的 GStreamer 支持
-            ✓ 中文环境支持
-            ✓ 基于 Valve Proton，专为游戏优化
-            ## 安装说明
-            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置，并设置环境变量。
-            ## 构建信息
-            - 构建时间: ${{ github.event.head_commit.timestamp }}
-            - 提交: ${{ github.sha }}
-            - 工作流: ${{ github.workflow }}
+
+            - Proton 分支: `${{ github.event.inputs.proton_branch || 'proton_10.0' }}`
+            - 架构: True WOW64
+            - 平台: Termux / Android
+            - Vulkan: Enabled
+            - GStreamer: Enabled
+            - OpenGL: Enabled
+            - 中文环境: Enabled
+
+            ## 优化
+
+            - GCC O2
+            - Function sections
+            - Data sections
+            - Linker garbage collection
+            - As-needed linking
+            - Strip unused symbols
+            - 移除静态库
+            - 移除 libtool 文件
+            - 移除 debug 文件
+            - 移除开发头文件
+            - 移除 man/doc
+
+            ## 注意
+
+            `share/wine` 等 Wine runtime 数据保持不变。
+
           files: |
             ${{ github.workspace }}/${{ env.BUILD_NAME }}.tar.xz
             ${{ github.workspace }}/checksums.txt
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+
+# ============================================================
+# Wine WOW64
+# ============================================================
+
   build-wine-wow64:
+
     runs-on: ubuntu-24.04
-    if: github.event.inputs.build_type == 'wine-wow64' || (github.event_name == 'schedule' && github.event.schedule == '0 2 5,20 * *')
+
+    if: >
+      github.event.inputs.build_type == 'wine-wow64'
+      ||
+      (
+        github.event_name == 'schedule'
+        &&
+        github.event.schedule == '0 2 5,20 * *'
+      )
+
     timeout-minutes: 240
 
     steps:
-      - uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      # --------------------------------------------------------
+      # Build dependencies
+      # --------------------------------------------------------
 
       - name: 安装构建依赖
         run: |
+
+          set -e
+
           sudo apt update
+
           sudo apt --fix-broken install -y
+
           BASE_DEPS="\
             debootstrap \
             perl \
@@ -398,11 +853,21 @@ jobs:
             locales \
             language-pack-zh-hans \
             ccache"
+
           sudo apt install -y $BASE_DEPS
-      
+
+
+      # --------------------------------------------------------
+      # GStreamer
+      # --------------------------------------------------------
+
       - name: 安装多媒体和音频依赖
         run: |
+
+          set -e
+
           sudo apt update
+
           sudo apt install -y \
             libunwind-dev \
             libgstreamer1.0-dev \
@@ -428,183 +893,455 @@ jobs:
             libx265-dev \
             libvpx-dev \
             libtheora-dev
-      
+
+
+      # --------------------------------------------------------
+      # Locale
+      # --------------------------------------------------------
+
       - name: 设置中文语言环境
         run: |
+
           sudo locale-gen zh_CN.UTF-8
           sudo update-locale LANG=zh_CN.UTF-8
-          export LANG=zh_CN.UTF-8
-          export LC_ALL=zh_CN.UTF-8
-      
+
+          echo "LANG=zh_CN.UTF-8" >> "$GITHUB_ENV"
+          echo "LC_ALL=zh_CN.UTF-8" >> "$GITHUB_ENV"
+          echo "LANGUAGE=zh_CN:zh:en_US:en" >> "$GITHUB_ENV"
+
+
+      # --------------------------------------------------------
+      # ccache
+      # --------------------------------------------------------
+
       - name: 启用 ccache
         uses: hendrikmuhs/ccache-action@v1.2
+
         with:
           key: ${{ github.job }}-${{ github.ref }}
           max-size: 5G
-      
-      - name: 构建 Wine WOW64 版本
+
+
+      # ========================================================
+      # Wine Build
+      # ========================================================
+
+      - name: 构建 Wine WOW64
         run: |
+
           set -e
+
           export WINE_BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
           export WINE_VERSION="${{ github.event.inputs.wine_version || 'latest' }}"
           export APPLY_DXGI_PATCH="${{ github.event.inputs.apply_dxgi_patch || 'true' }}"
+
           export BUILD_DIR="/tmp/build_wine_${WINE_BRANCH}_${WINE_VERSION}"
-          echo "开始构建 Wine WOW64 版本..."
-          echo "分支: $WINE_BRANCH"
-          echo "版本: $WINE_VERSION"
-          echo "应用 DXGI 补丁: $APPLY_DXGI_PATCH"
+
+          echo "=========================================="
+          echo "Wine WOW64 Build"
+          echo "=========================================="
+
+          echo "Branch: $WINE_BRANCH"
+          echo "Version: $WINE_VERSION"
+          echo "DXGI patch: $APPLY_DXGI_PATCH"
+
           export LANG=zh_CN.UTF-8
           export LC_ALL=zh_CN.UTF-8
           export LANGUAGE=zh_CN:zh:en_US:en
+
           rm -rf "$BUILD_DIR"
+
           mkdir -p "$BUILD_DIR"
+
           cd "$BUILD_DIR"
-          
-          if [ "$WINE_BRANCH" = "staging-tkg" ] || [ "$WINE_BRANCH" = "staging-tkg-fsync" ]; then
-            echo "处理 TKG 系列分支: $WINE_BRANCH"
+
+
+          # ====================================================
+          # Source selection
+          # ====================================================
+
+          if [ "$WINE_BRANCH" = "staging-tkg" ] || \
+             [ "$WINE_BRANCH" = "staging-tkg-fsync" ]; then
+
+            echo "处理 TKG"
+
             if [ "$WINE_BRANCH" = "staging-tkg" ]; then
-              git clone https://github.com/Kron4ek/wine-tkg.git wine-tkg
-              SOURCE_DIR="wine-tkg"
+
+              git clone \
+                https://github.com/Kron4ek/wine-tkg.git \
+                wine-tkg
+
             else
-              git clone https://github.com/Kron4ek/wine-tkg.git wine-tkg -b fsync
-              SOURCE_DIR="wine-tkg"
+
+              git clone \
+                -b fsync \
+                https://github.com/Kron4ek/wine-tkg.git \
+                wine-tkg
+
             fi
+
+            SOURCE_DIR="wine-tkg"
+
             cd "$SOURCE_DIR"
+
             if [ "$WINE_VERSION" != "latest" ]; then
-              git checkout "$WINE_VERSION" 2>/dev/null || git checkout "wine-$WINE_VERSION" 2>/dev/null || true
+
+              git checkout "$WINE_VERSION" \
+                2>/dev/null \
+                || \
+              git checkout "wine-$WINE_VERSION" \
+                2>/dev/null \
+                || true
+
             fi
+
             if [ -f "VERSION" ]; then
-              WINE_VERSION_ACTUAL="$(cat VERSION | tail -c +14)"
+
+              WINE_VERSION_ACTUAL="$(
+                cat VERSION | tail -c +14
+              )"
+
             else
-              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
+
+              WINE_VERSION_ACTUAL="$(
+                git describe --tags --abbrev=0 \
+                2>/dev/null \
+                || echo "$WINE_VERSION"
+              )"
+
             fi
-            COMMIT_HASH=$(git rev-parse --short HEAD)
+
+            COMMIT_HASH="$(
+              git rev-parse --short HEAD
+            )"
+
             BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${WINE_BRANCH}-wow64"
+
+
           elif [ "$WINE_BRANCH" = "staging" ]; then
-            echo "处理 Staging 分支"
-            git clone https://github.com/wine-mirror/wine.git wine
+
+            echo "处理 Wine Staging"
+
+            git clone \
+              https://github.com/wine-mirror/wine.git \
+              wine
+
             SOURCE_DIR="wine"
+
             cd "$SOURCE_DIR"
+
             git config advice.detachedHead false
+
             if [ "$WINE_VERSION" != "latest" ]; then
+
               git checkout "wine-$WINE_VERSION"
+
             fi
-            WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
-            COMMIT_HASH=$(git rev-parse --short HEAD)
+
+            WINE_VERSION_ACTUAL="$(
+              git describe --tags --abbrev=0 \
+              2>/dev/null \
+              || echo "$WINE_VERSION"
+            )"
+
+            COMMIT_HASH="$(
+              git rev-parse --short HEAD
+            )"
+
             BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-staging-wow64"
-            PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
+
+            PURE_VERSION="$(
+              echo "$WINE_VERSION_ACTUAL" \
+              | sed 's/^wine-//'
+            )"
+
             STAGING_VERSION="v${PURE_VERSION}"
-            wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" || \
-            wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/v${PURE_VERSION}.tar.gz"
+
+
+            wget \
+              -O "wine-staging-${PURE_VERSION}.tar.gz" \
+              "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" \
+              || \
+            wget \
+              -O "wine-staging-${PURE_VERSION}.tar.gz" \
+              "https://github.com/wine-staging/wine-staging/archive/refs/tags/v${PURE_VERSION}.tar.gz"
+
+
             if [ -f "wine-staging-${PURE_VERSION}.tar.gz" ]; then
-              tar -xzf "wine-staging-${PURE_VERSION}.tar.gz"
+
+              tar -xzf \
+                "wine-staging-${PURE_VERSION}.tar.gz"
+
               if [ -d "wine-staging-${PURE_VERSION}" ]; then
+
                 cd "wine-staging-${PURE_VERSION}/staging"
+
                 chmod +x patchinstall.py
-                ./patchinstall.py --all --destdir=../../
+
+                ./patchinstall.py \
+                  --all \
+                  --destdir=../../
+
                 cd "../.."
+
               elif [ -d "wine-staging-v${PURE_VERSION}" ]; then
+
                 cd "wine-staging-v${PURE_VERSION}/staging"
+
                 chmod +x patchinstall.py
-                ./patchinstall.py --all --destdir=../../
+
+                ./patchinstall.py \
+                  --all \
+                  --destdir=../../
+
                 cd "../.."
+
               fi
+
             fi
+
+
           elif [ "$WINE_BRANCH" = "vanilla" ]; then
-            echo "处理 Vanilla 分支"
-            git clone https://github.com/brunodev85/wine-10.10-custom.git wine
+
+            echo "处理 Vanilla"
+
+            git clone \
+              https://github.com/brunodev85/wine-10.10-custom.git \
+              wine
+
             SOURCE_DIR="wine"
+
             cd "$SOURCE_DIR"
+
             git config advice.detachedHead false
+
             if [ "$WINE_VERSION" != "latest" ]; then
+
               git checkout "wine-$WINE_VERSION"
+
             fi
-            WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
-            COMMIT_HASH=$(git rev-parse --short HEAD)
+
+            WINE_VERSION_ACTUAL="$(
+              git describe --tags --abbrev=0 \
+              2>/dev/null \
+              || echo "$WINE_VERSION"
+            )"
+
+            COMMIT_HASH="$(
+              git rev-parse --short HEAD
+            )"
+
             BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-vanilla-wow64"
+
+
           else
-            echo "未知的 Wine 分支: $WINE_BRANCH"
+
+            echo "未知 Wine 分支: $WINE_BRANCH"
+
             exit 1
+
           fi
-          
-          echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
-          echo "WINE_VERSION_ACTUAL=$WINE_VERSION_ACTUAL" >> $GITHUB_ENV
+
+
+          echo "BUILD_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
+
+          echo "WINE_VERSION_ACTUAL=$WINE_VERSION_ACTUAL" >> "$GITHUB_ENV"
+
           echo "当前源码目录: $(pwd)"
+
           echo "构建名称: $BUILD_NAME"
-          
-          echo "补丁应用"
-          # 应用自定义补丁
-          for patch in $GITHUB_WORKSPACE/patch/*.patch; do
+
+
+          # ====================================================
+          # Custom patches
+          # ====================================================
+
+          echo "应用自定义补丁"
+
+          for patch in "$GITHUB_WORKSPACE"/patch/*.patch; do
+
             if [ -f "$patch" ]; then
+
               echo "Applying $patch..."
+
               patch -p1 < "$patch" || true
+
             fi
+
           done
-        
-          
-          # ===== DXGI 补丁应用逻辑 =====
+
+
+          # ====================================================
+          # DXGI patch
+          # ====================================================
+
           if [ "$APPLY_DXGI_PATCH" = "true" ]; then
-            echo "✅ 已启用 DXGI 补丁，开始应用..."
-            PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
-            VERSION_MAJOR=$(echo "$PURE_VERSION" | cut -d. -f1)
-            VERSION_MINOR=$(echo "$PURE_VERSION" | cut -d. -f2)
-            echo "Wine 版本: $WINE_VERSION_ACTUAL"
-            echo "纯版本号: $PURE_VERSION"
-            echo "主版本: $VERSION_MAJOR, 次版本: $VERSION_MINOR"
-            
-            if [ "$VERSION_MAJOR" -gt 9 ] || [ "$VERSION_MAJOR" -eq 9 -a "$VERSION_MINOR" -ge 10 ]; then
-              echo "使用 9.10+ 版本的修复方式 (wine_do_not_create_dxgi_manager2.patch)"
-              wget -O wine_do_not_create_dxgi_device_manager2.patch https://raw.githubusercontent.com/as14725836/wine-termux/main/wine_do_not_create_dxgi_device_manager2.patch
+
+            echo "=========================================="
+            echo "启用 DXGI 补丁"
+            echo "=========================================="
+
+
+            PURE_VERSION="$(
+              echo "$WINE_VERSION_ACTUAL" \
+              | sed 's/^wine-//'
+            )"
+
+            VERSION_MAJOR="$(
+              echo "$PURE_VERSION" \
+              | cut -d. -f1
+            )"
+
+            VERSION_MINOR="$(
+              echo "$PURE_VERSION" \
+              | cut -d. -f2
+            )"
+
+
+            echo "Wine version: $WINE_VERSION_ACTUAL"
+            echo "Pure version: $PURE_VERSION"
+            echo "Major: $VERSION_MAJOR"
+            echo "Minor: $VERSION_MINOR"
+
+
+            if [ "$VERSION_MAJOR" -gt 9 ] || \
+               [ "$VERSION_MAJOR" -eq 9 -a "$VERSION_MINOR" -ge 10 ]; then
+
+              echo "使用 9.10+ DXGI 修复"
+
+              wget \
+                -O wine_do_not_create_dxgi_device_manager2.patch \
+                https://raw.githubusercontent.com/as14725836/wine-termux/main/wine_do_not_create_dxgi_device_manager2.patch
+
+
               if [ -f "dlls/mfplat/main.c" ]; then
-                echo "找到目标文件 dlls/mfplat/main.c，准备应用补丁..."
-                if patch -p1 < wine_do_not_create_dxgi_device_manager2.patch; then
-                  echo "✅ 补丁应用成功"
-                else
-                  echo "❌ 补丁应用失败"
-                  exit 1
-                fi
+
+                patch -p1 \
+                  < wine_do_not_create_dxgi_device_manager2.patch
+
+                echo "✓ DXGI patch applied"
+
               else
-                echo "❌ 错误：目标文件 dlls/mfplat/main.c 不存在"
+
+                echo "目标文件不存在：dlls/mfplat/main.c"
+
                 exit 1
+
               fi
+
+
             else
-              echo "使用 9.10 以下版本的修复方式 (fix_wine9.2_mfplat.sh)"
-              wget -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
+
+              echo "使用 Wine 9.10 以下修复"
+
+              wget \
+                -O fix_wine9.2_mfplat.sh \
+                https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
+
               chmod +x fix_wine9.2_mfplat.sh
+
               ./fix_wine9.2_mfplat.sh
-              echo "✅ 9.10 以下版本修复完成"
+
+              echo "✓ Wine 9.10 以下修复完成"
+
             fi
+
           else
-            echo "⏭️ DXGI 补丁已禁用，跳过应用"
+
+            echo "DXGI patch disabled"
+
           fi
-          # ===== DXGI 补丁应用逻辑结束 =====
-          
+
+
+          # ====================================================
+          # Build
+          # ====================================================
+
           mkdir -p build-wow64
+
           cd build-wow64
-          
-          # ===== 编译优化参数（性能 + 体积） =====
+
+
+          # ====================================================
+          # Compiler optimization
+          # ====================================================
+
           export CC="ccache gcc"
           export CXX="ccache g++"
+
           export CROSSCC="ccache x86_64-w64-mingw32-gcc"
           export CROSSCXX="ccache x86_64-w64-mingw32-g++"
 
-          export CFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe \
-            -fno-plt -fno-semantic-interposition -fvisibility=hidden \
-            -fno-math-errno -fno-trapping-math \
-            -ffunction-sections -fdata-sections -fmerge-all-constants -fno-ident \
-            -DWINE_DISABLE_REPARSE_RESOLVE"
-          export CXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe \
-            -fno-plt -fno-semantic-interposition -fvisibility=hidden \
-            -fno-math-errno -fno-trapping-math \
-            -ffunction-sections -fdata-sections -fmerge-all-constants -fno-ident"
-          export CROSSCFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe \
-            -fno-plt -fno-math-errno \
-            -ffunction-sections -fdata-sections -fmerge-all-constants -fno-ident"
+
+          # ----------------------------------------------------
+          # CFLAGS
+          # ----------------------------------------------------
+
+          export CFLAGS="\
+          -march=x86-64 \
+          -msse3 \
+          -mfpmath=sse \
+          -O2 \
+          -pipe \
+          -fno-plt \
+          -fno-semantic-interposition \
+          -fno-math-errno \
+          -fno-trapping-math \
+          -ffunction-sections \
+          -fdata-sections \
+          -fmerge-all-constants \
+          -fno-ident \
+          -DWINE_DISABLE_REPARSE_RESOLVE"
+
+
+          export CXXFLAGS="$CFLAGS"
+
+
+          # ----------------------------------------------------
+          # PE CFLAGS
+          # ----------------------------------------------------
+
+          export CROSSCFLAGS="\
+          -march=x86-64 \
+          -msse3 \
+          -mfpmath=sse \
+          -O2 \
+          -pipe \
+          -fno-plt \
+          -fno-math-errno \
+          -ffunction-sections \
+          -fdata-sections \
+          -fmerge-all-constants \
+          -fno-ident"
+
+
           export CROSSCXXFLAGS="$CROSSCFLAGS"
-          export LDFLAGS="-Wl,-O1,--sort-common,--as-needed \
-            -Wl,--gc-sections -Wl,--build-id=none -Wl,-s"
-          # ===== 优化参数结束 =====
-          
+
+
+          # ----------------------------------------------------
+          # Linker
+          # ----------------------------------------------------
+
+          export LDFLAGS="\
+          -Wl,-O2 \
+          -Wl,--as-needed \
+          -Wl,--gc-sections \
+          -Wl,--build-id=none"
+
+
+          echo "=========================================="
+          echo "CFLAGS"
+          echo "$CFLAGS"
+          echo
+          echo "LDFLAGS"
+          echo "$LDFLAGS"
+          echo "=========================================="
+
+
+          # ====================================================
+          # Configure
+          # ====================================================
+
           ../configure \
             --enable-win64 \
             --enable-archs=i386,x86_64 \
@@ -640,75 +1377,354 @@ jobs:
             --without-unwind \
             --without-usb \
             --without-v4l2
-            
-          echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
-          make -j$(nproc)
+
+
+          # ====================================================
+          # Build
+          # ====================================================
+
+          echo "=========================================="
+          echo "开始构建 Wine WOW64"
+          echo "=========================================="
+
+          make -j"$(nproc)"
+
           make install
-      
-      - name: Strip 二进制（额外减体积）
+
+
+      # ========================================================
+      # Wine 瘦身
+      # ========================================================
+
+      - name: Wine 安装包瘦身
         run: |
-          if [ -d /tmp/wine-install-wow64 ]; then
-            find /tmp/wine-install-wow64 -type f \( -name "*.so" -o -name "*.so.*" -o -perm -u+x \) \
-              -exec strip --strip-unneeded {} + 2>/dev/null || true
+
+          set -e
+
+          PREFIX="/tmp/wine-install-wow64"
+
+
+          echo "=========================================="
+          echo "Wine 原始安装大小"
+          echo "=========================================="
+
+          du -sh "$PREFIX"
+
+
+          # ----------------------------------------------------
+          # 删除静态库
+          # ----------------------------------------------------
+
+          echo
+          echo "删除静态库和 libtool 文件"
+
+          find "$PREFIX" \
+            -type f \
+            \( \
+              -name "*.a" \
+              -o -name "*.la" \
+            \) \
+            -print \
+            -delete
+
+
+          # ----------------------------------------------------
+          # 删除 debug
+          # ----------------------------------------------------
+
+          echo
+          echo "删除 debug 文件"
+
+          find "$PREFIX" \
+            -type f \
+            \( \
+              -name "*.debug" \
+              -o -name "*.dwo" \
+            \) \
+            -print \
+            -delete
+
+
+          # ----------------------------------------------------
+          # 删除开发头文件
+          # ----------------------------------------------------
+
+          echo
+          echo "删除 include"
+
+          rm -rf "$PREFIX/include"
+
+
+          # ----------------------------------------------------
+          # 删除文档
+          # ----------------------------------------------------
+
+          echo
+          echo "删除文档"
+
+          rm -rf "$PREFIX/share/man"
+          rm -rf "$PREFIX/share/doc"
+
+
+          # ----------------------------------------------------
+          # Strip
+          # ----------------------------------------------------
+
+          echo
+          echo "=========================================="
+          echo "Strip ELF"
+          echo "=========================================="
+
+
+          find "$PREFIX" \
+            -type f \
+            \( \
+              -name "*.so" \
+              -o -name "*.so.*" \
+              -o -perm -u+x \
+            \) \
+            -exec strip --strip-unneeded {} + \
+            2>/dev/null || true
+
+
+          # ----------------------------------------------------
+          # 清理空目录
+          # ----------------------------------------------------
+
+          find "$PREFIX" \
+            -type d \
+            -empty \
+            -delete \
+            2>/dev/null || true
+
+
+          # ----------------------------------------------------
+          # Final size
+          # ----------------------------------------------------
+
+          echo
+          echo "=========================================="
+          echo "Wine 最终安装大小"
+          echo "=========================================="
+
+          du -sh "$PREFIX"
+
+
+          echo
+          echo "=========================================="
+          echo "各目录大小"
+          echo "=========================================="
+
+          du -sh "$PREFIX"/* \
+            2>/dev/null \
+            | sort -h || true
+
+
+          echo
+          echo "=========================================="
+          echo "最大文件 TOP 30"
+          echo "=========================================="
+
+          find "$PREFIX" \
+            -type f \
+            -printf '%s %p\n' \
+            | sort -n \
+            | tail -30
+
+
+      # ========================================================
+      # Runtime check
+      # ========================================================
+
+      - name: 检查 Wine 运行时
+        run: |
+
+          set -e
+
+          PREFIX="/tmp/wine-install-wow64"
+
+
+          echo "=========================================="
+          echo "检查 Wine 核心文件"
+          echo "=========================================="
+
+
+          test -f "$PREFIX/bin/wine"
+
+          echo "✓ wine"
+
+
+          test -f "$PREFIX/bin/wineserver"
+
+          echo "✓ wineserver"
+
+
+          if [ -f "$PREFIX/bin/wine64" ]; then
+            echo "✓ wine64"
           fi
-      
-      - name: 准备打包
+
+
+          if [ -d "$PREFIX/share/wine" ]; then
+            echo "✓ share/wine"
+          else
+            echo "⚠️ share/wine 不存在"
+          fi
+
+
+          echo
+          echo "DLL 数量："
+
+          find "$PREFIX" \
+            -type f \
+            \( \
+              -name "*.dll" \
+              -o -name "*.dll.so" \
+            \) \
+            | wc -l
+
+
+          echo
+          echo "SO 数量："
+
+          find "$PREFIX" \
+            -type f \
+            \( \
+              -name "*.so" \
+              -o -name "*.so.*" \
+            \) \
+            | wc -l
+
+
+      # ========================================================
+      # Package
+      # ========================================================
+
+      - name: 准备 Wine 打包
         run: |
-          PACKAGE_NAME="${{ env.BUILD_NAME }}"
-          mkdir -p wine-package/$PACKAGE_NAME
-          cp -r /tmp/wine-install-wow64/* wine-package/$PACKAGE_NAME/
-      
-      - name: 创建打包文件
+
+          set -e
+
+          PACKAGE_NAME="${BUILD_NAME}"
+
+          mkdir -p "wine-package/$PACKAGE_NAME"
+
+          cp -a \
+            /tmp/wine-install-wow64/. \
+            "wine-package/$PACKAGE_NAME/"
+
+
+      # ========================================================
+      # Tar
+      # ========================================================
+
+      - name: 创建 Wine 压缩包
         run: |
-          PACKAGE_NAME="${{ env.BUILD_NAME }}"
-          tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
-          ls -lh *.tar.xz
-      
+
+          set -e
+
+          PACKAGE_NAME="${BUILD_NAME}"
+
+
+          tar \
+            --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -I 'xz -T0 -9e' \
+            -cf "$PACKAGE_NAME.tar.xz" \
+            -C wine-package \
+            "$PACKAGE_NAME"
+
+
+          ls -lh "$PACKAGE_NAME.tar.xz"
+
+
+      # ========================================================
+      # Checksum
+      # ========================================================
+
       - name: Generate checksums
         run: |
+
           sha256sum *.tar.xz > checksums.txt
+
           cat checksums.txt
-      
+
+
+      # ========================================================
+      # Artifact
+      # ========================================================
+
       - name: Upload Wine WoW64 artifacts
         uses: actions/upload-artifact@v4
+
         with:
+
           name: Wine-${{ github.event.inputs.wine_branch || 'staging' }}-${{ github.event.inputs.wine_version || 'latest' }}-WoW64
+
           path: |
             ${{ github.workspace }}/*.tar.xz
             ${{ github.workspace }}/checksums.txt
+
           retention-days: 30
+
+
+      # ========================================================
+      # Release
+      # ========================================================
 
       - name: 发布 Wine 到 GitHub Release
         uses: softprops/action-gh-release@v1
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'wine-wow64'
+
+        if: >
+          github.event_name == 'workflow_dispatch'
+          &&
+          github.event.inputs.build_type == 'wine-wow64'
+
         with:
+
           tag_name: wine-${{ github.event.inputs.wine_branch || 'staging' }}-${{ github.event.inputs.wine_version || 'latest' }}-wow64
+
           name: Wine ${{ github.event.inputs.wine_branch || 'staging' }} ${{ github.event.inputs.wine_version || 'latest' }} (WOW64 with Vulkan & GStreamer for Termux)
+
           body: |
-            # Wine ${{ github.event.inputs.wine_branch || 'staging' }} ${{ github.event.inputs.wine_version || 'latest' }} - WOW64 with Vulkan & GStreamer for Termux
+
+            # Wine WOW64 - Termux
+
             ## 版本信息
-            - **Wine 分支**: ${{ github.event.inputs.wine_branch || 'staging' }}
-            - **Wine 版本**: ${{ github.event.inputs.wine_version || 'latest' }}
-            - **架构**: True WOW64 (同时支持 32 位和 64 位 Windows 应用程序)
-            - **平台**: Termux (Android)
-            - **图形 API**: Vulkan 支持已启用
-            - **多媒体**: 完整 GStreamer 支持
-            - **DXGI 补丁**: ${{ github.event.inputs.apply_dxgi_patch || 'true' }}
-            ## 特性
-            ✓ 真正的 WOW64 架构
-            ✓ 同时支持 32 位和 64 位 Windows 应用程序
-            ✓ Vulkan 图形 API 支持
-            ✓ 完整的 GStreamer 支持
-            ✓ 中文环境支持
-            ✓ 应用了关键补丁提升兼容性
-            ## 安装说明
-            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置，并设置环境变量。
-            ## 构建信息
-            - 构建时间: ${{ github.event.head_commit.timestamp }}
-            - 提交: ${{ github.sha }}
-            - 工作流: ${{ github.workflow }}
+
+            - Wine 分支: `${{ github.event.inputs.wine_branch || 'staging' }}`
+            - Wine 版本: `${{ github.event.inputs.wine_version || 'latest' }}`
+            - 架构: True WOW64
+            - 平台: Termux / Android
+            - Vulkan: Enabled
+            - OpenGL: Enabled
+            - GStreamer: Enabled
+            - DXGI patch: `${{ github.event.inputs.apply_dxgi_patch || 'true' }}`
+            - 中文环境: Enabled
+
+            ## 编译优化
+
+            - GCC O2
+            - Function sections
+            - Data sections
+            - Linker garbage collection
+            - As-needed linking
+            - Strip unused symbols
+            - 移除静态库
+            - 移除 libtool 文件
+            - 移除 debug 文件
+            - 移除开发头文件
+            - 移除 man/doc
+
+            ## 运行时资源
+
+            Wine runtime 所需的 `share/wine` 等目录保持不变。
+
           files: |
             ${{ github.workspace }}/${{ env.BUILD_NAME }}.tar.xz
             ${{ github.workspace }}/checksums.txt
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
