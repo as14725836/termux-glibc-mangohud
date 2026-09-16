@@ -1158,7 +1158,7 @@ jobs:
 
           echo "应用自定义补丁"
 
-          for patch in "$GITHUB_WORKSPACE"/patch/*.patch; do
+          for patch in "$GITHUB_WORKSPACE"/patch11.16/*.patch; do
 
             if [ -f "$patch" ]; then
 
