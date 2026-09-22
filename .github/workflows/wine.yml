@@ -21,6 +21,14 @@ on:
         required: false
         default: 'main'
         type: string
+      preloader:
+        description: '是否使用 wine-preloader（on=默认）。排查 Android seccomp SIGSYS 时可设 off（加 --disable-preloader）'
+        required: false
+        default: 'on'
+        type: choice
+        options:
+        - on
+        - off
       wine_version:
         description: 'Wine 版本 (例如 9.22，或 latest)'
         required: false
@@ -351,10 +359,29 @@ jobs:
             echo "$BRANCH：跳过 ffmpeg 补丁（proton/10.0 树专用，不适用于该源码树）"
           fi
 
-          # 2) 移除 configure.ac 中的 gstreamer-gl-1.0 依赖（用模式匹配替代原来的 "1642s" 行号 sed）
+          # 2) gstreamer-gl-1.0 依赖处理
+          #    ！configure.ac 第 1642 行是一条**跨多行宏调用的开头**：
+          #      WINE_PACKAGE_FLAGS(GSTREAMER,[gstreamer-1.0 ... gstreamer-gl-1.0],,,,
+          #      整行删除会让 m4 括号/引号失衡，autoconf 随后报一堆假错误
+          #      （possibly undefined macro: AC_LANG_PROGRAM / AC_MSG_CHECKING / AC_CHECK_LIB ...），
+          #      autogen.sh 直接失败。所以：能保留就保留；必须删时只删 token 并校验括号平衡。
           if grep -q 'gstreamer-gl-1\.0' configure.ac 2>/dev/null; then
-            sed -i '/gstreamer-gl-1\.0/d' configure.ac
-            echo "已移除 configure.ac 中的 gstreamer-gl-1.0 依赖"
+            if [ -f /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-gl-1.0.pc ]; then
+              echo "arm64 侧存在 gstreamer-gl-1.0.pc，保留 configure.ac 原样（proton 树 build.sh 本来就要 gstgl）"
+            else
+              cp -f configure.ac configure.ac.bak
+              # 不变量：删掉的只是 "gstreamer-gl-1.0" 这个单词，括号总数必须保持不变
+              T1=$(tr -cd '[]()' < configure.ac | wc -c)
+              sed -i 's/gstreamer-gl-1\.0//g' configure.ac
+              T2=$(tr -cd '[]()' < configure.ac | wc -c)
+              if [ "$T1" != "$T2" ]; then
+                echo "::warning::移除 gstreamer-gl 后括号总数变化($T1 -> $T2)，判定为破坏了 configure.ac，已回滚"
+                mv -f configure.ac.bak configure.ac
+              else
+                rm -f configure.ac.bak
+                echo "已从 configure.ac 移除 gstreamer-gl-1.0（只删 token，括号总数 $T1 不变）"
+              fi
+            fi
           else
             echo "configure.ac 中不存在 gstreamer-gl-1.0，跳过"
           fi
@@ -485,7 +512,16 @@ jobs:
       - name: 生成 configure 脚本
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          if [ ! -f "configure" ]; then
+          if [ -f "configure" ]; then
+            echo "configure 已存在，跳过 autogen"
+            exit 0
+          fi
+          # 前序步骤是否改写过 configure.ac（bracket 计数不可靠，直接看 diff）
+          echo "=== configure.ac 改动情况 ==="
+          git diff --stat -- configure.ac 2>/dev/null || true
+          if ! ./autogen.sh; then
+            echo "::warning::autogen.sh 失败，git 还原 configure.ac 后重试一次"
+            git checkout -- configure.ac 2>/dev/null || true
             ./autogen.sh
           fi
       # ------------------------------------------------------------
@@ -575,25 +611,26 @@ jobs:
           export WINE_NLS_DIR=/opt/wine64-native/nls
 
           # 按源分支自带 build.sh 对齐 configure 参数（仅 Proton9 ARM64EC 分支）
+          # 注意：本 workflow 的 step 用的是 sh(dash)，不支持 bash 数组，这里用普通字符串拼参数
           BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
-          EXTRA=()
+          EXTRA=""
           if [ "$BRANCH" = "proton9-arm64ec" ]; then
-            EXTRA+=(
-              --enable-wineandroid_drv=no     # Winlator 的 Android 驱动在 Termux 下不用
-              --with-pulse --with-pthread --with-freetype
-              --without-dbus                  # build.sh 同款，避免依赖 dbus session
-              --with-xshm --without-wayland --without-pcsclite
-              --without-cups --without-v4l2 --without-oss --without-udev --without-usb
-              --without-sane --without-capi --without-opencl --without-pcap --without-gphoto
-            )
+            # 取自该分支自带 build.sh（--enable-wineandroid_drv=no 等），并裁掉 Termux 用不到的依赖
+            EXTRA="--enable-wineandroid_drv=no --with-pulse --with-pthread --with-freetype --without-dbus --with-xshm --without-wayland --without-pcsclite --without-cups --without-v4l2 --without-oss --without-udev --without-usb --without-sane --without-capi --without-opencl --without-pcap --without-gphoto"
             if pkg-config --exists libavcodec; then
-              EXTRA+=( --with-ffmpeg )        # Proton 系 winegstreamer/media-converter 需要
+              EXTRA="$EXTRA --with-ffmpeg"     # Proton 系 winegstreamer/media-converter 需要
             else
               echo "::warning::pkg-config 找不到 libavcodec，跳过 --with-ffmpeg（media-converter 可能构建失败）"
             fi
-            echo "已按 $BRANCH 自带 build.sh 对齐 configure 参数: ${EXTRA[*]}"
+            echo "已按 $BRANCH 自带 build.sh 对齐 configure 参数: $EXTRA"
             echo "注意:未照搬 build.sh 里的 --without-xfixes/--without-xrender/--without-xrandr/--without-xinput2，"
             echo "     那是给 Winlator 自备 X 用的；Termux:X11 需要这些扩展，故保持启用"
+          fi
+
+          # 可选：禁用 wine-preloader（排查 Android seccomp 把进程 SIGSYS 杀掉时使用）
+          if [ "${{ github.event.inputs.preloader || 'on' }}" = "off" ]; then
+            EXTRA="$EXTRA --disable-preloader"
+            echo "::notice::已加 --disable-preloader（排查用；ARM64EC 地址空间布局可能受影响）"
           fi
 
           ../configure \
@@ -608,7 +645,7 @@ jobs:
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
             --with-wine-tools=/opt/wine64-native \
-            "${EXTRA[@]}" \
+            $EXTRA \
             CC=aarch64-linux-gnu-gcc
           
           make -j$(nproc)
@@ -673,7 +710,7 @@ jobs:
                   continue
               fi
               found=""
-              if [[ "$prog" != "wine" && "$prog" != "wineserver" ]]; then
+              if [ "$prog" != "wine" ] && [ "$prog" != "wineserver" ]; then
                   found=$(find "$BUILD_DIR/programs" -type f -name "$prog" -executable 2>/dev/null | head -1)
               fi
               if [ -z "$found" ]; then
