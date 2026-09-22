@@ -12,9 +12,15 @@ on:
         type: choice
         options:
         - vanilla
+        - proton9-arm64ec
         - staging
         - staging-tkg
         - staging-tkg-fsync
+      fex_ref:
+        description: 'FEX-Emu 版本 (tag/branch/commit)。默认 main；若出现 fexcore 相关崩溃，可改填具体 tag，如 FEX-2609.1 / FEX-2609 / FEX-2512'
+        required: false
+        default: 'main'
+        type: string
       wine_version:
         description: 'Wine 版本 (例如 9.22，或 latest)'
         required: false
@@ -35,6 +41,7 @@ env:
   WINE64_DIR: /opt/wine64
   WINE_SOURCE_DIR: /opt/wine-src
   DEBIAN_FRONTEND: noninteractive
+  FEX_REF: ${{ github.event.inputs.fex_ref || 'main' }}
 
 permissions:
   contents: write
@@ -128,6 +135,11 @@ jobs:
             libkrb5-dev:arm64 \
             libvulkan-dev:arm64 \
             libgl-dev:arm64 \
+            libavcodec-dev:arm64 \
+            libavformat-dev:arm64 \
+            libavutil-dev:arm64 \
+            libswresample-dev:arm64 \
+            libswscale-dev:arm64 \
             libgnutls28-dev:arm64 \
             libcups2-dev:arm64 \
             libxkbcommon-dev:arm64 \
@@ -153,10 +165,17 @@ jobs:
           set -e
           # PATH 只在这个步骤内有效
           export PATH="/opt/${{ env.LLVMMINGW_NAME }}/bin:$PATH"
-          
-          # 克隆 FEX 源码
-          git clone --recurse-submodules https://github.com/FEX-Emu/FEX.git /opt/FEX
+          # 克隆 FEX 源码并锁定版本（Wine 侧 fexcore 接口必须与 FEX 匹配）
+          rm -rf /opt/FEX
+          git clone https://github.com/FEX-Emu/FEX.git /opt/FEX
           cd /opt/FEX
+          git checkout "${{ env.FEX_REF }}" || { echo "错误: FEX ref '${{ env.FEX_REF }}' 不存在"; exit 1; }
+          git submodule update --init --recursive
+          echo "FEX 版本: $(git describe --tags --always 2>/dev/null || git rev-parse --short HEAD)"
+          if [ "${{ env.FEX_REF }}" = "main" ]; then
+            echo "::warning::FEX_REF=main，使用的是最新 FEX。若运行期出现 wow64fex/arm64ecfex 相关崩溃，请把 fex_ref 锁定到与 Wine 分支同期的版本"
+          fi
+          
           
           # 编译 ARM64EC 版本
           echo "=== 编译 ARM64EC 版本 ==="
@@ -267,14 +286,27 @@ jobs:
               fi
               ;;
             vanilla)
-              echo "处理 Vanilla 分支"
+              echo "处理 Vanilla 分支（Pipetto-crypto/wine，默认 master = 上游 Wine 镜像，不含 Android/Proton 适配）"
               git clone https://github.com/Pipetto-crypto/wine.git source
               cd source
               git config advice.detachedHead false
               if [ "$WINE_VERSION" != "latest" ]; then
-                git checkout "$WINE_VERSION"
+                # 兼容 "9.22" / "wine-9.22" / 分支名三种写法
+                git checkout "$WINE_VERSION" 2>/dev/null || \
+                git checkout "wine-$WINE_VERSION" 2>/dev/null || {
+                  echo "错误: 找不到版本/分支 '$WINE_VERSION'";
+                  echo "提示: vanilla 路径支持 'wine-9.22' 这类 tag 或分支名（如 proton-9.0-arm64ec）";
+                  exit 1;
+                }
               fi
-              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
+              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "custom")
+              ;;
+            proton9-arm64ec)
+              echo "处理 Proton9.0 ARM64EC 分支（Winlator/Proton9 + Hangover，bionic 向；glibc 可编可跑但部分 Android 功能失效）"
+              git clone --branch proton-9.0-arm64ec https://github.com/Pipetto-crypto/wine.git source
+              cd source
+              git config advice.detachedHead false
+              WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "proton-9.0")
               ;;
             *)
               echo "未知的 Wine 分支: $WINE_BRANCH"
@@ -301,69 +333,123 @@ jobs:
       # ------------------------------------------------------------
       # 9. 修复 gst 问题
       # ------------------------------------------------------------
-      - name: 修复 gst 问题
+      - name: 修复 gst / ffmpeg 构建问题（通用化，不再依赖源码行号）
         run: |
-          set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          wget -q -O fix-build_ffmpeg.patch https://raw.githubusercontent.com/Waim908/wine-termux/main/proton/10.0/fix-build_ffmpeg.patch
-          patch -p1 -N -t < fix-build_ffmpeg.patch || true
-          rm fix-build_ffmpeg.patch
-          sed -i '1642s/gstreamer-gl-1.0//g' configure.ac
-          python3 "$GITHUB_WORKSPACE/disable_gl.py"
+          BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
+
+          # 1) ffmpeg 构建补丁：仅 staging 系列应用（该补丁是 proton/10.0 树专用），失败不致命
+          if [ "$BRANCH" = "staging" ] || [ "$BRANCH" = "staging-tkg" ] || [ "$BRANCH" = "staging-tkg-fsync" ]; then
+            echo "staging 系列：尝试应用 fix-build_ffmpeg.patch"
+            if wget -q -O fix-build_ffmpeg.patch https://raw.githubusercontent.com/Waim908/wine-termux/main/proton/10.0/fix-build_ffmpeg.patch; then
+              patch -p1 -N -t --no-backup-if-mismatch < fix-build_ffmpeg.patch || echo "::warning::ffmpeg 补丁未完全应用，继续"
+            else
+              echo "::warning::无法下载 ffmpeg 补丁，继续"
+            fi
+            rm -f fix-build_ffmpeg.patch
+          else
+            echo "$BRANCH：跳过 ffmpeg 补丁（proton/10.0 树专用，不适用于该源码树）"
+          fi
+
+          # 2) 移除 configure.ac 中的 gstreamer-gl-1.0 依赖（用模式匹配替代原来的 "1642s" 行号 sed）
+          if grep -q 'gstreamer-gl-1\.0' configure.ac 2>/dev/null; then
+            sed -i '/gstreamer-gl-1\.0/d' configure.ac
+            echo "已移除 configure.ac 中的 gstreamer-gl-1.0 依赖"
+          else
+            echo "configure.ac 中不存在 gstreamer-gl-1.0，跳过"
+          fi
+
+          # 3) 仓库自带的 disable_gl.py：存在才执行，失败不致命
+          if [ -f "$GITHUB_WORKSPACE/disable_gl.py" ]; then
+            python3 "$GITHUB_WORKSPACE/disable_gl.py" || echo "::warning::disable_gl.py 执行失败，已忽略"
+          else
+            echo "未找到 $GITHUB_WORKSPACE/disable_gl.py，跳过"
+          fi
       # ------------------------------------------------------------
       # 10. 修复 GstMapInfo 拼写错误
       # ------------------------------------------------------------
       - name: 修复 GstMapInfo 拼写错误（GstBufferMapInfo → GstMapInfo）
         run: |
-          set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          if [ -f dlls/winegstreamer/media-converter/videoconv.c ]; then
-            sed -i 's/GstBufferMapInfo/GstMapInfo/g' dlls/winegstreamer/media-converter/videoconv.c
-            echo "已修复 GstBufferMapInfo → GstMapInfo"
+          FILES=$(grep -rl 'GstBufferMapInfo' dlls 2>/dev/null || true)
+          if [ -n "$FILES" ]; then
+            echo "$FILES" | xargs -r sed -i 's/GstBufferMapInfo/GstMapInfo/g'
+            echo "已修复以下文件中的 GstBufferMapInfo → GstMapInfo:"
+            echo "$FILES"
           else
-            echo "videoconv.c 不存在，跳过 GstMapInfo 修复"
+            echo "未发现 GstBufferMapInfo，跳过（该拼写只存在于 Proton 系 media-converter 代码中）"
           fi
       # ------------------------------------------------------------
       # 11. 修复 SELinux 兼容性
       # ------------------------------------------------------------
       - name: 修复 SELinux 兼容性（PAGE_READWRITE → PAGE_EXECUTE_READWRITE）
         run: |
-          set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          sed -i 's/&size, PAGE_READWRITE, &protect_old\[i\]/\&size, PAGE_EXECUTE_READWRITE, \&protect_old[i]/' dlls/ntdll/loader.c
-          echo "已修复 perform_relocations: PAGE_READWRITE → PAGE_EXECUTE_READWRITE"
+          F=dlls/ntdll/loader.c
+          if [ -f "$F" ] && grep -q '&size, PAGE_READWRITE, &protect_old\[i\]' "$F"; then
+            sed -i 's/&size, PAGE_READWRITE, &protect_old\[i\]/\&size, PAGE_EXECUTE_READWRITE, \&protect_old[i]/' "$F"
+            echo "已修复 perform_relocations: PAGE_READWRITE → PAGE_EXECUTE_READWRITE"
+          else
+            echo "::warning::未在 $F 匹配到目标片段，请人工确认（Android/SELinux 下匿名可执行映射可能失败）"
+          fi
       # ------------------------------------------------------------
       # 12. 缩减虚拟地址空间上限
       # ------------------------------------------------------------
       - name: 缩减虚拟地址空间上限（适配 Android/Termux 受限地址空间）
         run: |
-          set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          sed -i 's/0x7fffffff0000/0x7fffff0000/g' dlls/ntdll/unix/virtual.c
-          sed -i '/reserve_area.*0x7ffffe000000/d' dlls/ntdll/unix/virtual.c
-          echo "已缩减地址空间上限并移除高危 reserve_area"
+          F=dlls/ntdll/unix/virtual.c
+          if [ ! -f "$F" ]; then
+            echo "::warning::$F 不存在，跳过地址空间修复"
+            exit 0
+          fi
+          if grep -q '0x7fffffff0000' "$F"; then
+            sed -i 's/0x7fffffff0000/0x7fffff0000/g' "$F"
+            echo "已缩减地址空间上限 0x7fffffff0000 → 0x7fffff0000"
+          else
+            echo "::warning::未匹配到 0x7fffffff0000，请人工确认该树的内存布局常量"
+          fi
+          if grep -q 'reserve_area.*0x7ffffe000000' "$F"; then
+            sed -i '/reserve_area.*0x7ffffe000000/d' "$F"
+            echo "已移除 reserve_area 0x7ffffe000000"
+          else
+            echo "未匹配到 reserve_area 0x7ffffe000000，跳过"
+          fi
+          echo "注意: hangover/arm64ec 树的内存布局可能不同，务必在真机验证匿名映射与地址空间上限"
       # ------------------------------------------------------------
       # 13. 修复 machine-id 路径
       # ------------------------------------------------------------
       - name: 修复 machine-id 路径（适配 Termux glibc）
         run: |
-          set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          sed -i 's|/etc/machine-id|/data/data/com.termux/files/usr/glibc/etc/machine-id|g' server/token.c
-          echo "已修复 machine-id 路径 → /data/data/com.termux/files/usr/glibc/etc/machine-id"
+          FILES=$(grep -rl '/etc/machine-id' --include='*.c' --include='*.h' . 2>/dev/null || true)
+          if [ -n "$FILES" ]; then
+            echo "$FILES" | xargs -r sed -i 's|/etc/machine-id|/data/data/com.termux/files/usr/glibc/etc/machine-id|g'
+            echo "已修复 machine-id 路径 → /data/data/com.termux/files/usr/glibc/etc/machine-id，涉及文件:"
+            echo "$FILES"
+          else
+            echo "::warning::未找到 machine-id 引用，运行时请确保 /data/data/com.termux/files/usr/glibc/etc/machine-id 存在"
+          fi
       # ------------------------------------------------------------
       # 14. 应用 mfplat 补丁（仅 wow64 构建时应用）
       # ------------------------------------------------------------
       - name: 应用 mfplat 补丁
         run: |
           BUILD_TYPE="${{ github.event.inputs.build_type || 'wow64' }}"
-          
+          BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
+
           # 如果是 proton 构建，跳过补丁
           if [ "$BUILD_TYPE" = "proton" ]; then
             echo "检测到 proton 构建，跳过 mfplat 补丁应用"
             exit 0
           fi
-          
+
+          # mfplat 补丁只针对 afeimod/wine-arm（staging 系列）源码树，且只对 wine9.x/10.x 有效
+          if [ "$BRANCH" != "staging" ] && [ "$BRANCH" != "staging-tkg" ] && [ "$BRANCH" != "staging-tkg-fsync" ]; then
+            echo "$BRANCH 不是 staging 系列，跳过 mfplat 补丁"
+            exit 0
+          fi
+
           # wow64 构建，继续应用补丁
           echo "检测到 wow64 构建，应用 mfplat 补丁"
           cd ${{ env.WINE_SOURCE_DIR }}/source
@@ -372,18 +458,25 @@ jobs:
           VERSION_MINOR=$(echo "$PURE_VERSION" | cut -d. -f2)
           if [ "$VERSION_MAJOR" -gt 9 ] || [ "$VERSION_MAJOR" -eq 9 -a "$VERSION_MINOR" -ge 10 ]; then
             echo "应用 9.10+ 补丁 (wine_do_not_create_dxgi_manager2.patch)"
-            wget -q https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
-            if [ -f "dlls/mfplat/main.c" ]; then
-              patch -p1 < wine_do_not_create_dxgi_manager2.patch || { echo "补丁应用失败"; exit 1; }
+            if wget -q -O wine_do_not_create_dxgi_manager2.patch https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch \
+               && [ -f "dlls/mfplat/main.c" ]; then
+              if patch -p1 -N -t --no-backup-if-mismatch < wine_do_not_create_dxgi_manager2.patch; then
+                echo "mfplat 补丁已应用"
+              else
+                echo "::warning::mfplat 补丁未完全应用（源码版本可能不匹配），继续构建"
+              fi
+              rm -f wine_do_not_create_dxgi_manager2.patch
             else
-              echo "错误: dlls/mfplat/main.c 不存在"
-              exit 1
+              echo "::warning::无法获取 mfplat 补丁或 dlls/mfplat/main.c 不存在，跳过"
             fi
           else
             echo "应用 9.10 以下补丁 (fix_wine9.2_mfplat.sh)"
-            wget -q -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
-            chmod +x fix_wine9.2_mfplat.sh
-            ./fix_wine9.2_mfplat.sh
+            if wget -q -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh; then
+              chmod +x fix_wine9.2_mfplat.sh
+              ./fix_wine9.2_mfplat.sh || echo "::warning::fix_wine9.2_mfplat.sh 执行失败，继续构建"
+            else
+              echo "::warning::无法下载 fix_wine9.2_mfplat.sh，跳过"
+            fi
           fi
           echo "mfplat 补丁应用完成"
       # ------------------------------------------------------------
@@ -466,10 +559,13 @@ jobs:
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
           export PKG_CONFIG_SYSROOT_DIR=/
           
-          # 调试：验证 GStreamer
-          echo "=== 检查 GStreamer pkg-config ==="
-          ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer*.pc || echo "GStreamer .pc 文件不存在"
+          # 调试：验证关键 pkg-config 依赖（configure 会自动探测这些）
+          echo "=== pkg-config 依赖检查 ==="
+          ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer*.pc 2>/dev/null || echo "GStreamer .pc 文件不存在"
           pkg-config --modversion gstreamer-1.0 2>/dev/null || echo "pkg-config 找不到 gstreamer"
+          pkg-config --modversion libavcodec 2>/dev/null || echo "pkg-config 找不到 libavcodec（Proton 系源码的 winegstreamer/media-converter 依赖它）"
+          pkg-config --modversion freetype2 2>/dev/null || echo "pkg-config 找不到 freetype2"
+          pkg-config --modversion libpulse 2>/dev/null || echo "pkg-config 找不到 libpulse"
           
           export CFLAGS="-O3 -pipe"
           export CXXFLAGS="-O3 -pipe"
@@ -477,7 +573,29 @@ jobs:
           export CROSSCXXFLAGS="-O3 -pipe"
           export LDFLAGS="-s -L/usr/lib/aarch64-linux-gnu -Wl,--dynamic-linker=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 -Wl,-rpath=/data/data/com.termux/files/usr/glibc/lib"
           export WINE_NLS_DIR=/opt/wine64-native/nls
-          
+
+          # 按源分支自带 build.sh 对齐 configure 参数（仅 Proton9 ARM64EC 分支）
+          BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
+          EXTRA=()
+          if [ "$BRANCH" = "proton9-arm64ec" ]; then
+            EXTRA+=(
+              --enable-wineandroid_drv=no     # Winlator 的 Android 驱动在 Termux 下不用
+              --with-pulse --with-pthread --with-freetype
+              --without-dbus                  # build.sh 同款，避免依赖 dbus session
+              --with-xshm --without-wayland --without-pcsclite
+              --without-cups --without-v4l2 --without-oss --without-udev --without-usb
+              --without-sane --without-capi --without-opencl --without-pcap --without-gphoto
+            )
+            if pkg-config --exists libavcodec; then
+              EXTRA+=( --with-ffmpeg )        # Proton 系 winegstreamer/media-converter 需要
+            else
+              echo "::warning::pkg-config 找不到 libavcodec，跳过 --with-ffmpeg（media-converter 可能构建失败）"
+            fi
+            echo "已按 $BRANCH 自带 build.sh 对齐 configure 参数: ${EXTRA[*]}"
+            echo "注意:未照搬 build.sh 里的 --without-xfixes/--without-xrender/--without-xrandr/--without-xinput2，"
+            echo "     那是给 Winlator 自备 X 用的；Termux:X11 需要这些扩展，故保持启用"
+          fi
+
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
@@ -490,6 +608,7 @@ jobs:
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
             --with-wine-tools=/opt/wine64-native \
+            "${EXTRA[@]}" \
             CC=aarch64-linux-gnu-gcc
           
           make -j$(nproc)
@@ -622,6 +741,80 @@ jobs:
             echo "aarch64-windows 目录内容（FEX DLL）："
             ls -la /tmp/wine-install-wow64/lib/wine/aarch64-windows/
           fi
+      # ------------------------------------------------------------
+      # 20.5 生成 Termux glibc 部署说明（随包发布）
+      # ------------------------------------------------------------
+      - name: 生成 Termux 部署说明
+        run: |
+          cat > /tmp/wine-install-wow64/README-TERMUX.txt << 'EOF'
+          ===== Wine ARM64 WOW64 for Termux glibc =====
+          构建名称 : ${{ env.BUILD_NAME }}
+          Wine 分支: ${{ github.event.inputs.wine_branch || 'staging' }}
+          Wine 版本: ${{ env.WINE_VERSION_ACTUAL }}
+          构建类型 : ${{ github.event.inputs.build_type || 'wow64' }}
+          FEX 版本 : ${{ env.FEX_REF }}
+
+          ------------------------------------------------------------
+          1) 放置位置（保持目录结构完整，不要拆散）
+             /data/data/com.termux/files/usr/glibc/opt/${{ env.BUILD_NAME }}
+          关键结构:
+             bin/wine  bin/wineserver  bin/wineboot  ...
+             lib/wine/aarch64-windows/*.dll   含 libwow64fex.dll / libarm64ecfex.dll
+             lib/wine/aarch64-unix/*.so
+             lib/wine/i386-windows/*.dll
+             share/wine/{nls,fonts,wine.inf}
+
+          ------------------------------------------------------------
+          2) 运行时依赖（glibc 环境内必须存在，缺一个 wine 就会
+             "error while loading shared libraries" 直接退出）
+             Termux 侧：安装 glibc-runner，提供 /data/data/com.termux/files/usr/glibc
+             需要存在的库（Debian 侧链接的）：
+               libfreetype.so.6  libfontconfig.so.1  libglib-2.0.so.0  libgobject-2.0.so.0
+               libX11.so.6  libXext.so.6  libXrender.so.1  libXfixes.so.3  libXcursor.so.1
+               libXi.so.6  libXrandr.so.2  libXcomposite.so.1  libXinerama.so.1  libxcb.so.1
+               libSDL2-2.0.so.0  libvulkan.so.1  libgstreamer-1.0.so.0  libgstapp-1.0.so.0
+               libpulse.so.0  libdbus-1.so.3  libgnutls.so.30  libunwind.so.8  libudev.so.1
+             自检：
+               for f in libX11.so.6 libfreetype.so.6 libglib-2.0.so.0 libvulkan.so.1; do
+                 ls -l /data/data/com.termux/files/usr/glibc/lib/$f || echo "缺少 $f"
+               done
+
+          ------------------------------------------------------------
+          3) 环境变量与首次初始化
+             export WINE_DIR=/data/data/com.termux/files/usr/glibc/opt/${{ env.BUILD_NAME }}
+             export PATH=$WINE_DIR/bin:$PATH
+             export LD_LIBRARY_PATH=$WINE_DIR/lib:/data/data/com.termux/files/usr/glibc/lib
+             export WINEDLLPATH=$WINE_DIR/lib/wine
+             export WINEPREFIX=$HOME/.wine      # 必须可读写且支持 mmap
+             export WINEESYNC=0                 # Android 无 /dev/shm，esync 会失败或退化
+             export WINEDEBUG=-all              # 排错时改为 err+all
+             wineboot -u
+             wine notepad
+
+          ------------------------------------------------------------
+          4) machine-id（本构建已把路径改为 Termux glibc）
+             确保该文件存在，否则部分程序/服务初始化可能异常：
+               F=/data/data/com.termux/files/usr/glibc/etc/machine-id
+               [ -s "$F" ] || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$F"
+
+          ------------------------------------------------------------
+          5) 图形 / 3D
+             - 需要 X server：Termux:X11（或 VNC），设置 export DISPLAY=:0
+             - DXVK / VKD3D 需自行放入 WINEPREFIX 的 drive_c/windows/system32，
+               并用 WINEDLLOVERRIDES 做覆盖
+
+          ------------------------------------------------------------
+          6) 已知限制（分支源自 Winlator / bionic，跑在 Termux glibc 上）
+             - Android 剪贴板同步、NDK dnsapi、rawinput 注入等 Winlator 外壳功能失效
+             - 域名解析可能异常（glibc 侧无可用 /etc/resolv.conf 时）
+             - esync 建议关闭；fsync 需要内核支持
+             - 32 位程序依赖 lib/wine/aarch64-windows/libwow64fex.dll，
+               ARM64EC 依赖 libarm64ecfex.dll；缺失则对应架构程序无法启动
+             - 若出现 wow64fex/arm64ecfex 相关崩溃，优先怀疑 FEX 与 Wine 的接口
+               不匹配：把 fex_ref 锁定到与该 Wine 分支同期的 FEX 版本后重新构建
+          EOF
+          echo "已写入 /tmp/wine-install-wow64/README-TERMUX.txt"
+
       # ------------------------------------------------------------
       # 21. 打包
       # ------------------------------------------------------------
