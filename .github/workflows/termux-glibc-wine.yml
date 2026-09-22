@@ -1252,6 +1252,25 @@ jobs:
 
           fi
 
+                    # ====================================================
+          # 检查补丁残留
+          # ====================================================
+          if find . -name '*.rej' | grep -q .; then
+            echo "!!! 补丁应用失败 !!!"
+            find . -name '*.rej'
+            exit 1
+          fi
+
+          # ====================================================
+          # 重新生成 ntsyscalls.h（LAA 补丁改了 ntdll.spec）
+          # ====================================================
+          echo "=== 运行 tools/make_specfiles ==="
+          perl tools/make_specfiles || { echo "make_specfiles 失败"; exit 1; }
+
+          echo "=== 确认 LAA syscall 已生成 ==="
+          grep -n "large_address_aware" dlls/ntdll/ntsyscalls.h || {
+            echo "!!! ntsyscalls.h 中没有 large_address_aware !!!"; exit 1; }
+
 
           # ====================================================
           # Build
