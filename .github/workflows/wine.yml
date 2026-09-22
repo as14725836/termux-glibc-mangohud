@@ -28,14 +28,6 @@ on:
         options:
         - wow64
         - proton
-      disable_gl:
-        description: '禁用 GL (移除 gstreamer-gl-1.0 依赖)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-        - 'false'
-        - 'true'
 
 env:
   LLVMMINGW_DATE: 20251202
@@ -126,6 +118,9 @@ jobs:
             libusb-1.0-0-dev:arm64 \
             libv4l-dev:arm64 \
             libpulse-dev:arm64 \
+            libgstreamer1.0-dev:arm64 \
+            libgstreamer-plugins-base1.0-dev:arm64 \
+            libgstreamer-plugins-bad1.0-dev:arm64 \
             libudev-dev:arm64 \
             libunwind-dev:arm64 \
             libsdl2-dev:arm64 \
@@ -137,13 +132,8 @@ jobs:
             libcups2-dev:arm64 \
             libxkbcommon-dev:arm64 \
             libxkbregistry-dev:arm64 \
-            libgstreamer1.0-dev:arm64 \
-            libgstreamer-plugins-base1.0-dev:arm64 \
-            libgstreamer-plugins-bad1.0-dev:arm64 \
             libwayland-dev:arm64
-
             
-          
       # ------------------------------------------------------------
       # 4. 安装 llvm-mingw 交叉编译工具链
       # ------------------------------------------------------------
@@ -278,7 +268,7 @@ jobs:
               ;;
             vanilla)
               echo "处理 Vanilla 分支"
-              git clone https://github.com/The412Banner/proton-wine.git source
+              git clone https://github.com/Pipetto-crypto/wine.git source
               cd source
               git config advice.detachedHead false
               if [ "$WINE_VERSION" != "latest" ]; then
@@ -309,10 +299,9 @@ jobs:
           find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           echo "路径修复完成"
       # ------------------------------------------------------------
-      # 9. 修复 gst 问题（可选 - 通过 disable_gl 开关控制）
+      # 9. 修复 gst 问题
       # ------------------------------------------------------------
       - name: 修复 gst 问题
-        if: github.event.inputs.disable_gl == 'true'
         run: |
           set -e
           cd ${{ env.WINE_SOURCE_DIR }}/source
@@ -488,7 +477,6 @@ jobs:
           export CROSSCXXFLAGS="-O3 -pipe"
           export LDFLAGS="-s -L/usr/lib/aarch64-linux-gnu -Wl,--dynamic-linker=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 -Wl,-rpath=/data/data/com.termux/files/usr/glibc/lib"
           export WINE_NLS_DIR=/opt/wine64-native/nls
-          export X_LIBS="-L/data/data/com.termux/files/usr/glibc/lib -lrt"
           
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
