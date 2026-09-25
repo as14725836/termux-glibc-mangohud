@@ -1,0 +1,167 @@
+name: Build siglus (APK + Linux)
+
+# 手动触发（推荐）；打 v* tag 时也会自动跑
+on:
+  workflow_dispatch:
+    inputs:
+      abis:
+        description: "Android ABI（空格分隔）"
+        required: false
+        default: "arm64-v8a"
+      variant:
+        description: "Android 构建类型：release 或 debug"
+        required: false
+        default: "release"
+      tag:
+        description: "发布用的 tag（留空则自动用 build-<run号>）"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # 发布 Release 需要
+
+jobs:
+  # ------------------------------------------------------------
+  # Android APK
+  # ------------------------------------------------------------
+  apk:
+    name: Build Android APK
+    runs-on: ubuntu-22.04
+
+    env:
+      ANDROID_PLATFORM: "28"
+      NDK_VERSION: "28.2.13676358"   # 必须与 app/build.gradle.kts 的 ndkVersion 一致
+      BUILD_TOOLS: "36.0.0"
+      COMPILE_SDK: "36"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Android Rust targets
+        run: |
+          rustup target add aarch64-linux-android
+          rustup target add x86_64-linux-android
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-${COMPILE_SDK}" \
+            "build-tools;${BUILD_TOOLS}" \
+            "ndk;${NDK_VERSION}" \
+            "cmake;3.22.1"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}"     >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        env:
+          VARIANT: ${{ inputs.variant || 'release' }}
+          ABIS: ${{ inputs.abis || 'arm64-v8a' }}
+        run: |
+          set -euo pipefail
+          chmod +x platform/scripts/package_android_apk.sh
+          ./platform/scripts/package_android_apk.sh
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: siglus-apk-${{ inputs.variant || 'release' }}
+          path: platform/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  # ------------------------------------------------------------
+  # 桌面 Linux（aarch64）版
+  # ------------------------------------------------------------
+  linux:
+    name: Build Linux aarch64
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libwayland-dev libx11-dev \
+            libvulkan-dev libasound2-dev libudev-dev
+
+      - name: Build siglus_engine
+        run: cargo build --release -p siglus_scene_vm --bin siglus_engine
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: siglus-linux-aarch64
+          path: target/release/siglus_engine
+          if-no-files-found: error
+          retention-days: 14
+
+  # ------------------------------------------------------------
+  # 汇总发布到 Release
+  # ------------------------------------------------------------
+  release:
+    name: Publish Release
+    needs: [apk, linux]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Collect assets
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          find dist -name '*.apk' -exec cp -v {} out/ \;
+          if [ -f dist/siglus-linux-aarch64/siglus_engine ]; then
+            cp -v dist/siglus-linux-aarch64/siglus_engine out/siglus_engine-linux-aarch64
+          fi
+          echo "---- assets ----"
+          ls -l out
+
+      - name: Publish to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || format('build-{0}', github.run_number) }}
+          name: siglus build ${{ github.run_number }}
+          files: out/*
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
