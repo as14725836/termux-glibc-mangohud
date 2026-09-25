@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 120
 
     env:
-      ANDROID_PLATFORM: "28"
+      ANDROID_PLATFORM: "24"
       NDK_VERSION: "28.2.13676358"   # 必须与 siglus_rs 的 app/build.gradle.kts ndkVersion 一致
       BUILD_TOOLS: "36.0.0"
       COMPILE_SDK: "36"
