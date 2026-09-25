@@ -1,14 +1,21 @@
-name: Build siglus APK
+name: 构建 siglus APK（含界面汉化）
 
-# 说明：本 workflow 放在你自己的仓库里运行，
-# 但真正构建的是外部仓库 xmoezzz/siglus_rs（会 checkout 到子目录 siglus_rs/）。
-# 产物 APK 发布到你自己的仓库 Release。
+# 放在你自己的仓库运行；真正构建的是外部仓库 xmoezzz/siglus_rs。
+# 构建前会自动给源码打“中文化补丁”，产出的 APK 界面为中文。
 
 on:
   workflow_dispatch:
     inputs:
+      localize:
+        description: "是否汉化界面（true / false）"
+        required: false
+        default: "true"
+      min_sdk:
+        description: "最低 Android API（设备装不上就调小，例如 24）"
+        required: false
+        default: "24"
       abis:
-        description: "Android ABI（空格分隔）"
+        description: "要构建的 ABI（空格分隔）"
         required: false
         default: "arm64-v8a"
       variant:
@@ -16,11 +23,11 @@ on:
         required: false
         default: "release"
       tag:
-        description: "发布用 tag（留空则自动 siglus-apk-<run号>）"
+        description: "发布用 tag（留空则自动 siglus-apk-<运行号>）"
         required: false
         default: ""
       ref:
-        description: "siglus_rs 的分支/tag/commit"
+        description: "siglus_rs 的分支 / tag / commit"
         required: false
         default: "main"
   push:
@@ -35,21 +42,21 @@ env:
 
 jobs:
   apk:
-    name: Build Android APK
+    name: 构建 Android APK
     runs-on: ubuntu-22.04
     timeout-minutes: 120
 
     env:
-      ANDROID_PLATFORM: "24"
-      NDK_VERSION: "28.2.13676358"   # 必须与 siglus_rs 的 app/build.gradle.kts ndkVersion 一致
+      ANDROID_PLATFORM: "28"
+      NDK_VERSION: "28.2.13676358"   # 与 siglus_rs 的 app/build.gradle.kts ndkVersion 保持一致
       BUILD_TOOLS: "36.0.0"
       COMPILE_SDK: "36"
 
     steps:
-      - name: Checkout this repo
+      - name: 检出本仓库
         uses: actions/checkout@v4
 
-      - name: Checkout siglus_rs
+      - name: 检出 siglus_rs 源码
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SIGLUS_REPO }}
@@ -57,31 +64,31 @@ jobs:
           path: siglus_rs
           submodules: recursive
 
-      - name: Setup Java 17
+      - name: 安装 Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Rust (stable)
+      - name: 安装 Rust（stable）
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Add Android Rust targets
+      - name: 添加 Android Rust 目标平台
         run: |
           rustup target add aarch64-linux-android
           rustup target add x86_64-linux-android
 
-      - name: Cargo cache
+      - name: 缓存 Cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: siglus_rs
 
-      - name: Setup Android SDK
+      - name: 配置 Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
 
-      - name: Install SDK components
+      - name: 安装 SDK 组件（平台 / 构建工具 / NDK / CMake）
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
@@ -95,48 +102,214 @@ jobs:
           echo "ANDROID_HOME=${ANDROID_SDK_ROOT}"     >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
-      - name: Build APK
+      - name: 应用中文化补丁
+        if: ${{ inputs.localize != 'false' }}
+        working-directory: siglus_rs
+        run: |
+          python3 - <<'PY'
+          import pathlib
+
+          root = pathlib.Path('.')
+
+          # ---------- 1) 中文化 strings.xml ----------
+          strings_zh = '''<?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">Siglus</string>
+              <string name="import_game">导入</string>
+              <string name="refresh">刷新</string>
+              <string name="library_title">游戏</string>
+              <string name="engines_line">SiglusEngine · RealLive · AVG32 · UK2</string>
+              <string name="empty_title">还没有游戏</string>
+              <string name="empty_message">点击“导入”，选择游戏文件夹（也可以是包含多个游戏的文件夹）。会自动识别 SiglusEngine、RealLive、AVG32 与 UK2 游戏。</string>
+              <string name="scanning">正在扫描文件夹…</string>
+          </resources>
+          '''
+          p = root / 'platform/android/res/values/strings.xml'
+          p.write_text(strings_zh, encoding='utf-8')
+          print('已写入中文 strings.xml')
+
+          # ---------- 2) 中文化 Java 硬编码文本 ----------
+          pairs = [
+              ('"Games are played in place without copying, which requires \'All files access\'. Please grant it, then import again."', '"游戏就地运行、不复制文件，需要“所有文件访问”权限。请授权后重新导入。"'),
+              ('"No SiglusEngine, RealLive, AVG32 or UK2 game was found in the selected folder."', '"在所选文件夹中未找到 SiglusEngine、RealLive、AVG32 或 UK2 游戏。"'),
+              ('"Only folders on local storage can be imported without copying."', '"只有本地存储中的文件夹才能免复制导入。"'),
+              ('"These folders can no longer be found:"', '"这些文件夹已无法找到："'),
+              ('"Unsaved progress will be lost."', '"未保存的进度将会丢失。"'),
+              ('"The game files are not deleted."', '"不会删除游戏文件。"'),
+              ('"Failed to re-attach rendering surface"', '"重新附加渲染表面失败"'),
+              ('"Failed to create engine"', '"创建引擎失败"'),
+              ('"Remove " + e.title + "?"', '"移除 " + e.title + "？"'),
+              ('"Missing launch.json"', '"缺少 launch.json"'),
+              ('"Missing game root"', '"缺少游戏根目录"'),
+              ('"Grant Storage Access"', '"授予存储访问权限"'),
+              ('"Remove from Library"', '"从库中移除"'),
+              ('"Text Encoding ("', '"文本编码 ("'),
+              ('"Text Encoding"', '"文本编码"'),
+              ('"Imported1 game"', '"导入1个游戏"'),
+              ('"Already in library"', '"已在库中"'),
+              ('"Nothing found in: "', '"以下位置未找到内容："'),
+              ('"Failed to start: "', '"启动失败： "'),
+              ('"Unknown error"', '"未知错误"'),
+              ('"Failed to start"', '"启动失败"'),
+              ('"No games found"', '"未找到游戏"'),
+              ('"Not supported"', '"不支持"'),
+              ('"Import More"', '"继续导入"'),
+              ('"Missing games"', '"缺少游戏"'),
+              ('"Open Settings"', '"打开设置"'),
+              ('"Quit game?"', '"退出游戏？"'),
+              ('"Refreshing…"', '"正在刷新…"'),
+              ('"Skip on"', '"跳过：开"'),
+              ('"Skip off"', '"跳过：关"'),
+              ('" games can\'t be played:', '"个游戏无法运行：'),
+              ('"1 game can\'t be played:', '"1个游戏无法运行：'),
+              ('"Unsupported engine"', '"不支持的引擎"'),
+              ('"Imported "', '"导入 "'),
+              ('"Untitled"', '"未命名"'),
+              ('" games"', '"个游戏"'),
+              ('"Play"', '"播放"'),
+              ('"Keep"', '"保留"'),
+              ('"Remove"', '"移除"'),
+              ('"Cancel"', '"取消"'),
+              ('"Quit"', '"退出"'),
+              ('"Yes"', '"是"'),
+              ('"No"', '"否"'),
+              ('"OK"', '"确定"'),
+          ]
+          # 长串优先，避免短串先把长串“吃”掉
+          pairs.sort(key=lambda x: len(x[0]), reverse=True)
+
+          base = root / 'platform/android/app/src/main/java/com/chino/siglus'
+          changed = 0
+          for f in base.rglob('*.java'):
+              t = f.read_text(encoding='utf-8')
+              o = t
+              for a, b in pairs:
+                  t = t.replace(a, b)
+              if t != o:
+                  f.write_text(t, encoding='utf-8')
+                  changed += 1
+          print(f'已汉化 {changed} 个 Java 文件')
+          PY
+
+      - name: 调整 minSdk 并修复 API 兼容
+        working-directory: siglus_rs
+        env:
+          MIN_SDK: ${{ inputs.min_sdk || '24' }}
+        run: |
+          python3 - <<'PY2'
+          import os, re, pathlib
+
+          minsdk = os.environ.get('MIN_SDK', '24')
+          root = pathlib.Path('platform/android')
+
+          # 1) 改 minSdk
+          g = root / 'app/build.gradle.kts'
+          t = g.read_text(encoding='utf-8')
+          t = re.sub(r'minSdk\s*=\s*\d+', f'minSdk = {minsdk}', t)
+          g.write_text(t, encoding='utf-8')
+
+          # 2) String.join 是 API 26+，换成 TextUtils.join（API 1 起可用）
+          java = root / 'app/src/main/java/com/chino/siglus'
+          n = 0
+          for f in java.rglob('*.java'):
+              s = f.read_text(encoding='utf-8')
+              o = s
+              s = s.replace('String.join(', 'android.text.TextUtils.join(')
+              if s != o:
+                  f.write_text(s, encoding='utf-8')
+                  n += 1
+          print(f'minSdk = {minsdk}；修复 String.join 的文件数: {n}')
+          PY2
+          echo '--- 结果 ---'
+          grep -n 'minSdk' platform/android/app/build.gradle.kts
+          grep -rn 'String.join' platform/android/app/src/main/java || echo '已无 String.join'
+
+      - name: 构建 APK
         working-directory: siglus_rs
         env:
           VARIANT: ${{ inputs.variant || 'release' }}
           ABIS: ${{ inputs.abis || 'arm64-v8a' }}
+          ANDROID_PLATFORM: ${{ inputs.min_sdk || '24' }}
         run: |
           set -euo pipefail
           chmod +x platform/scripts/package_android_apk.sh
           ./platform/scripts/package_android_apk.sh
 
-      - name: Upload APK artifact
+      # release 版默认「未签名」，这里补上签名；debug 版 Gradle 会自动用 debug key 签名
+      - name: 签名并收集 APK
+        working-directory: siglus_rs
+        env:
+          VARIANT: ${{ inputs.variant || 'release' }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD || 'siglus123' }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_SDK_ROOT/build-tools/${BUILD_TOOLS}"
+          APK_DIR="platform/android/app/build/outputs/apk/${VARIANT}"
+          OUT_DIR="$GITHUB_WORKSPACE/apk-out"
+          mkdir -p "$OUT_DIR"
+
+          SRC_APK="$(find "$APK_DIR" -name '*.apk' | head -n1)"
+          [ -n "$SRC_APK" ] || { echo "找不到 APK"; exit 1; }
+          echo "构建产物: $SRC_APK"
+
+          if [ "$VARIANT" = "release" ]; then
+            KS="$RUNNER_TEMP/release.keystore"
+            if [ -n "${KEYSTORE_BASE64:-}" ]; then
+              echo "$KEYSTORE_BASE64" | base64 -d > "$KS"
+              echo "使用仓库 Secrets 提供的 keystore"
+            else
+              echo "未提供 keystore，自动生成自签名 keystore"
+              keytool -genkeypair -v -keystore "$KS" -alias siglus \
+                -keyalg RSA -keysize 2048 -validity 10000 \
+                -storepass "$KS_PASS" -keypass "$KS_PASS" \
+                -dname "CN=siglus_rs, O=as14725836, C=CN"
+            fi
+
+            "$BT/zipalign" -f -p 4 "$SRC_APK" "$RUNNER_TEMP/aligned.apk"
+            "$BT/apksigner" sign \
+              --ks "$KS" --ks-pass "pass:$KS_PASS" --key-pass "pass:$KS_PASS" \
+              --out "$OUT_DIR/siglus-release-signed.apk" \
+              "$RUNNER_TEMP/aligned.apk"
+            "$BT/apksigner" verify --print-certs "$OUT_DIR/siglus-release-signed.apk" | head -n 3
+          else
+            cp "$SRC_APK" "$OUT_DIR/siglus-debug.apk"
+          fi
+
+          ls -l "$OUT_DIR"
+
+      - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
         with:
           name: siglus-apk-${{ inputs.variant || 'release' }}
-          path: siglus_rs/platform/android/app/build/outputs/apk/**/*.apk
+          path: apk-out/*.apk
           if-no-files-found: error
           retention-days: 30
 
   release:
-    name: Publish Release
+    name: 发布 Release
     needs: apk
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Download artifacts
+      - name: 下载产物
         uses: actions/download-artifact@v4
         with:
           path: dist
 
-      - name: Collect assets
+      - name: 收集 APK
         run: |
           set -euo pipefail
           mkdir -p out
           find dist -name '*.apk' -exec cp -v {} out/ \;
           ls -l out
 
-      - name: Publish to Release
+      - name: 发布到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || format('siglus-apk-{0}', github.run_number) }}
-          name: siglus APK build ${{ github.run_number }}
+          name: siglus APK（汉化）build ${{ github.run_number }}
           files: out/*
           draft: false
           prerelease: true
