@@ -84,7 +84,6 @@ jobs:
   build:
     name: Wine ARM64 WOW64
     runs-on: ubuntu-24.04
-
     timeout-minutes: 300
 
     container:
@@ -264,7 +263,6 @@ jobs:
           cd /opt
 
           LLVM_MINGW_VERSION="20251202"
-
           LLVM_MINGW_ARCHIVE="llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64.tar.xz"
 
           wget -q \
@@ -300,27 +298,19 @@ jobs:
 
           export PATH="$LLVM_MINGW_DIR/bin:$PATH"
 
-          echo "LLVM-MinGW:"
           "$LLVM_MINGW_DIR/bin/clang" --version
-
-          echo
-          echo "AArch64 MinGW:"
 
           command -v aarch64-w64-mingw32-clang
           command -v aarch64-w64-mingw32-clang++
 
-          aarch64-w64-mingw32-clang --version | head -n 3
-
-          echo
-          echo "ARM64EC MinGW:"
-
           command -v arm64ec-w64-mingw32-clang
           command -v arm64ec-w64-mingw32-clang++
 
+          aarch64-w64-mingw32-clang --version | head -n 3
           arm64ec-w64-mingw32-clang --version | head -n 3
 
       # ==========================================================
-      # 5. Native AArch64 compiler
+      # 5. Verify AArch64 compiler
       # ==========================================================
 
       - name: Verify AArch64 compiler
@@ -346,8 +336,7 @@ jobs:
             --gcc-toolchain=/usr \
             -c \
             /tmp/test-aarch64.c \
-            -o \
-            /tmp/test-aarch64.o
+            -o /tmp/test-aarch64.o
 
           file /tmp/test-aarch64.o
 
@@ -438,9 +427,6 @@ jobs:
 
       # ==========================================================
       # 8. FEX source
-      #
-      # IMPORTANT:
-      # FEX has mandatory git submodules.
       # ==========================================================
 
       - name: Clone FEX
@@ -468,31 +454,19 @@ jobs:
             exit 1
           fi
 
-          # Synchronize submodule URLs after checkout.
           git submodule sync --recursive
-
-          # IMPORTANT:
-          # checkout may change the required submodule commits.
           git submodule update --init --recursive
 
           echo
-          echo "=========================================="
-          echo "FEX commit"
-          echo "=========================================="
-
+          echo "FEX:"
           git rev-parse HEAD
 
           echo
-          echo "=========================================="
-          echo "FEX submodules"
-          echo "=========================================="
-
+          echo "FEX submodules:"
           git submodule status --recursive
 
           echo
-          echo "=========================================="
-          echo "Verify required FEX dependencies"
-          echo "=========================================="
+          echo "Checking required FEX dependencies..."
 
           test -f External/rpmalloc/CMakeLists.txt
           test -f External/unordered_dense/CMakeLists.txt
@@ -501,8 +475,7 @@ jobs:
           test -f External/range-v3/CMakeLists.txt
           test -f Source/Common/cpp-optparse/CMakeLists.txt
 
-          echo
-          echo "All FEX submodules: OK"
+          echo "FEX submodules: OK"
 
       # ==========================================================
       # 9. Inspect FEX
@@ -515,24 +488,11 @@ jobs:
 
           cd "$FEX_DIR"
 
-          echo "=========================================="
-          echo "FEX version"
-          echo "=========================================="
-
           git describe --tags --always || true
           git rev-parse HEAD
 
           echo
-          echo "=========================================="
-          echo "FEX pointer detection"
-          echo "=========================================="
-
-          nl -ba CMakeLists.txt | sed -n '45,80p'
-
-          echo
-          echo "=========================================="
-          echo "Pointer checks"
-          echo "=========================================="
+          echo "FEX pointer checks:"
 
           grep -R \
             -n \
@@ -562,17 +522,11 @@ jobs:
           test -x "$ARM64EC_CC"
           test -x "$ARM64EC_CXX"
 
-          echo "=========================================="
-          echo "ARM64EC compiler"
-          echo "=========================================="
-
           "$ARM64EC_CC" --version
           "$ARM64EC_CXX" --version
 
           echo
-          echo "=========================================="
-          echo "ARM64EC predefined macros"
-          echo "=========================================="
+          echo "ARM64EC predefined macros:"
 
           echo |
             "$ARM64EC_CC" \
@@ -583,11 +537,6 @@ jobs:
             | grep -E \
                 '__SIZEOF_POINTER__|__aarch64__|__arm64ec__|_ARM64_|_WIN64' \
             | sort
-
-          echo
-          echo "=========================================="
-          echo "ARM64EC pointer test"
-          echo "=========================================="
 
           cat > /tmp/fex-arm64ec-test.c <<'EOF'
           #include <stdint.h>
@@ -610,11 +559,6 @@ jobs:
 
       # ==========================================================
       # 11. FEX ARM64EC
-      #
-      # ccache intentionally disabled here.
-      # This avoids FEX calling:
-      #   ccache --print-version
-      # with Debian 12 ccache.
       # ==========================================================
 
       - name: Build FEX ARM64EC
@@ -624,7 +568,6 @@ jobs:
 
           export PATH="$LLVM_MINGW_DIR/bin:$PATH"
 
-          # Do not allow CMake/FEX to discover /usr/bin/ccache.
           unset CC
           unset CXX
           unset CMAKE_C_COMPILER_LAUNCHER
@@ -658,28 +601,12 @@ jobs:
             -DENABLE_JEMALLOC_GLIBC_ALLOC=False \
             ../
 
-          echo
-          echo "=========================================="
-          echo "FEX ARM64EC cache"
-          echo "=========================================="
-
           grep -E \
             'CMAKE_C_COMPILER:FILEPATH|CMAKE_CXX_COMPILER:FILEPATH|CMAKE_ASM_COMPILER:FILEPATH|CMAKE_SYSTEM_NAME|CMAKE_SYSTEM_PROCESSOR|MINGW_TRIPLE|CMAKE_SIZEOF_VOID_P' \
             CMakeCache.txt \
             || true
 
-          echo
-          echo "=========================================="
-          echo "Build FEX ARM64EC"
-          echo "=========================================="
-
           ninja -j"$(nproc)"
-
-          echo
-          echo "=========================================="
-          echo "Install FEX ARM64EC"
-          echo "=========================================="
-
           ninja install
 
       # ==========================================================
@@ -729,11 +656,6 @@ jobs:
             -DENABLE_JEMALLOC_GLIBC_ALLOC=False \
             ../
 
-          echo
-          echo "=========================================="
-          echo "FEX WOW64 cache"
-          echo "=========================================="
-
           grep -E \
             'CMAKE_C_COMPILER:FILEPATH|CMAKE_CXX_COMPILER:FILEPATH|CMAKE_ASM_COMPILER:FILEPATH|CMAKE_SYSTEM_NAME|CMAKE_SYSTEM_PROCESSOR|MINGW_TRIPLE|CMAKE_SIZEOF_VOID_P' \
             CMakeCache.txt \
@@ -776,11 +698,6 @@ jobs:
             -DENABLE_JEMALLOC_GLIBC_ALLOC=False \
             ../Source/Windows/UnixLib
 
-          grep -E \
-            'CMAKE_C_COMPILER:FILEPATH|CMAKE_CXX_COMPILER:FILEPATH|CMAKE_C_COMPILER_TARGET|CMAKE_CXX_COMPILER_TARGET' \
-            CMakeCache.txt \
-            || true
-
           ninja -j"$(nproc)"
           ninja install
 
@@ -797,27 +714,12 @@ jobs:
           WOW64_DLL="/opt/FEX/install-wow64/usr/lib/wine/aarch64-windows/libwow64fex.dll"
           FEX_UNIX="/opt/FEX/install-unixlib/usr/lib/wine/aarch64-unix"
 
-          echo "=========================================="
-          echo "ARM64EC"
-          echo "=========================================="
-
           test -s "$ARM64EC_DLL"
-          file "$ARM64EC_DLL"
-
-          echo
-          echo "=========================================="
-          echo "WOW64"
-          echo "=========================================="
-
           test -s "$WOW64_DLL"
-          file "$WOW64_DLL"
-
-          echo
-          echo "=========================================="
-          echo "UnixLib"
-          echo "=========================================="
-
           test -d "$FEX_UNIX"
+
+          file "$ARM64EC_DLL"
+          file "$WOW64_DLL"
 
           UNIXLIB_COUNT="$(
             find "$FEX_UNIX" \
@@ -832,11 +734,6 @@ jobs:
 
           test "$UNIXLIB_COUNT" -gt 0
 
-          find "$FEX_UNIX" \
-            -maxdepth 1 \
-            -type f \
-            -exec file {} \;
-
       # ==========================================================
       # 15. Android compatibility
       # ==========================================================
@@ -849,12 +746,7 @@ jobs:
 
           cd "$WINE_SOURCE"
 
-          echo "Applying Android / Termux compatibility patches..."
-
-          # ------------------------------------------------------
-          # /tmp
-          # ------------------------------------------------------
-
+          # /tmp -> Termux writable tmp
           find . \
             -type f \
             \( \
@@ -872,10 +764,7 @@ jobs:
               done \
             || true
 
-          # ------------------------------------------------------
           # machine-id
-          # ------------------------------------------------------
-
           grep -RIl \
             '/etc/machine-id' \
             dlls \
@@ -889,10 +778,7 @@ jobs:
               done \
             || true
 
-          # ------------------------------------------------------
           # GStreamer typo
-          # ------------------------------------------------------
-
           grep -RIl \
             'GstMapInfoInfo' \
             dlls \
@@ -904,10 +790,7 @@ jobs:
               done \
             || true
 
-          # ------------------------------------------------------
           # Memory protection
-          # ------------------------------------------------------
-
           grep -RIl \
             'PAGE_READWRITE' \
             dlls/ntdll \
@@ -920,10 +803,7 @@ jobs:
               done \
             || true
 
-          # ------------------------------------------------------
-          # Low address space
-          # ------------------------------------------------------
-
+          # Android low address space
           grep -RIl \
             '0x7fffffff0000' \
             dlls \
@@ -965,7 +845,6 @@ jobs:
           set -eux
 
           rm -rf /opt/wine64-build
-
           mkdir -p /opt/wine64-build
 
           cd /opt/wine64-build
@@ -993,7 +872,6 @@ jobs:
           export PATH="$LLVM_MINGW_DIR/bin:$PATH"
 
           rm -rf "$WINE_BUILD"
-
           mkdir -p "$WINE_BUILD"
 
           cd "$WINE_BUILD"
@@ -1099,12 +977,7 @@ jobs:
             /opt/FEX/install-unixlib/usr/lib/wine/aarch64-unix/. \
             "$FEX_UNIX/"
 
-          echo
-          echo "FEX Windows:"
           ls -lah "$FEX_WIN"
-
-          echo
-          echo "FEX UnixLib:"
           find "$FEX_UNIX" \
             -maxdepth 1 \
             -type f \
@@ -1121,10 +994,6 @@ jobs:
 
           TARGET="$WINE_INSTALL"
 
-          echo "=========================================="
-          echo "Wine binaries"
-          echo "=========================================="
-
           for f in \
             wine \
             wineserver \
@@ -1137,11 +1006,6 @@ jobs:
             file "$TARGET/bin/$f" || true
           done
 
-          echo
-          echo "=========================================="
-          echo "Wine directories"
-          echo "=========================================="
-
           for d in \
             "$TARGET/lib/wine/aarch64-windows" \
             "$TARGET/lib/wine/aarch64-unix" \
@@ -1152,11 +1016,6 @@ jobs:
             echo "OK: $d"
           done
 
-          echo
-          echo "=========================================="
-          echo "FEX DLLs"
-          echo "=========================================="
-
           FEX_WIN="$TARGET/lib/wine/aarch64-windows"
 
           test -s "$FEX_WIN/libwow64fex.dll"
@@ -1165,11 +1024,6 @@ jobs:
           file \
             "$FEX_WIN/libwow64fex.dll" \
             "$FEX_WIN/libarm64ecfex.dll"
-
-          echo
-          echo "=========================================="
-          echo "FEX UnixLib"
-          echo "=========================================="
 
           FEX_UNIX="$TARGET/lib/wine/aarch64-unix"
 
@@ -1187,11 +1041,6 @@ jobs:
           echo "UnixLib count: $UNIXLIB_COUNT"
 
           test "$UNIXLIB_COUNT" -gt 0
-
-          find "$FEX_UNIX" \
-            -maxdepth 1 \
-            -type f \
-            -exec file {} \;
 
       # ==========================================================
       # 23. Build information
@@ -1279,7 +1128,7 @@ jobs:
           echo "FINAL SANITY CHECK: PASS"
 
       # ==========================================================
-      # 25. Package
+      # 25. Prepare package
       # ==========================================================
 
       - name: Prepare package
@@ -1410,6 +1259,8 @@ jobs:
       - name: Build summary
         shell: bash
         run: |
+          set -eux
+
           echo
           echo "================================================"
           echo "       WINE ARM64 WOW64 BUILD COMPLETE"
@@ -1433,29 +1284,3 @@ jobs:
           ls -lh "${PACKAGE_NAME}.tar.xz"
           echo
           echo "================================================"
-
-这次和上一版相比，最关键的是 FEX 部分：
-
-git clone --recurse-submodules
-
-以及：
-
-git submodule sync --recursive
-git submodule update --init --recursive
-
-并且会在 CMake 前直接检查：
-
-test -f External/rpmalloc/CMakeLists.txt
-test -f External/unordered_dense/CMakeLists.txt
-test -f External/xxhash/cmake_unofficial/CMakeLists.txt
-test -f External/fmt/CMakeLists.txt
-test -f External/range-v3/CMakeLists.txt
-test -f Source/Common/cpp-optparse/CMakeLists.txt
-
-所以如果以后 FEX 又出现类似：
-
-does not contain a CMakeLists.txt file
-
-会更早、更明确地停在 FEX submodule 检查，不会等到 CMake 配置跑到一半才报错。
-
-另外，你这次日志已经确认 之前的 "Unsupported pointer size" 已经解决；现在不需要再碰 "CMAKE_SIZEOF_VOID_P"。
