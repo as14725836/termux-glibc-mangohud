@@ -40,7 +40,7 @@ on:
           - off
 
       android_compat:
-        description: '启用 Termux/Android 兼容补丁'
+        description: '启用 Termux / Android 兼容补丁'
         required: true
         default: 'on'
         type: choice
@@ -158,10 +158,6 @@ jobs:
             file \
             patchelf
 
-          # --------------------------------------------------------
-          # ARM64 libraries
-          # --------------------------------------------------------
-
           apt-get install -y \
             libc6-dev:arm64 \
             libgcc-s1:arm64 \
@@ -193,10 +189,6 @@ jobs:
             libsane-dev:arm64 \
             libv4l-dev:arm64
 
-          # --------------------------------------------------------
-          # X11 / graphics
-          # --------------------------------------------------------
-
           apt-get install -y \
             libx11-dev:arm64 \
             libx11-xcb-dev:arm64 \
@@ -226,6 +218,7 @@ jobs:
             libxcomposite-dev:arm64 \
             libxdamage-dev:arm64 \
             libxres-dev:arm64 \
+            libxxf86vm-dev:arm64 \
             libegl-dev:arm64 \
             libgl-dev:arm64 \
             libgles-dev:arm64 \
@@ -233,18 +226,10 @@ jobs:
             libwayland-dev:arm64 \
             libsdl2-dev:arm64
 
-          # --------------------------------------------------------
-          # Audio
-          # --------------------------------------------------------
-
           apt-get install -y \
             libasound2-dev:arm64 \
             libpulse-dev:arm64 \
             libopenal-dev:arm64
-
-          # --------------------------------------------------------
-          # FFmpeg
-          # --------------------------------------------------------
 
           apt-get install -y \
             libavcodec-dev:arm64 \
@@ -252,10 +237,6 @@ jobs:
             libavutil-dev:arm64 \
             libswresample-dev:arm64 \
             libswscale-dev:arm64
-
-          # --------------------------------------------------------
-          # GStreamer
-          # --------------------------------------------------------
 
           apt-get install -y \
             libgstreamer1.0-dev:arm64 \
@@ -323,7 +304,7 @@ jobs:
           "$LLVM_MINGW_DIR/bin/clang" --version
 
           echo
-          echo "AArch64 WOW64 compiler:"
+          echo "AArch64 MinGW:"
 
           command -v aarch64-w64-mingw32-clang
           command -v aarch64-w64-mingw32-clang++
@@ -331,7 +312,7 @@ jobs:
           aarch64-w64-mingw32-clang --version | head -n 3
 
           echo
-          echo "ARM64EC compiler:"
+          echo "ARM64EC MinGW:"
 
           command -v arm64ec-w64-mingw32-clang
           command -v arm64ec-w64-mingw32-clang++
@@ -339,10 +320,10 @@ jobs:
           arm64ec-w64-mingw32-clang --version | head -n 3
 
       # ==========================================================
-      # 5. Verify AArch64 Linux compiler
+      # 5. Verify native AArch64 compiler
       # ==========================================================
 
-      - name: Verify AArch64 Clang
+      - name: Verify AArch64 compiler
         shell: bash
         run: |
           set -eux
@@ -350,16 +331,10 @@ jobs:
           clang --version
           clang++ --version
 
-          echo
-          echo "AArch64 GCC toolchain:"
-
           aarch64-linux-gnu-gcc --version | head -n 2
           aarch64-linux-gnu-g++ --version | head -n 2
 
-          echo
-          echo "Clang AArch64 target:"
-
-          cat > /tmp/test.c <<'EOF'
+          cat > /tmp/test-aarch64.c <<'EOF'
           int main(void)
           {
               return 0;
@@ -369,10 +344,12 @@ jobs:
           clang \
             --target=aarch64-linux-gnu \
             --gcc-toolchain=/usr \
-            -c /tmp/test.c \
-            -o /tmp/test.o
+            -c \
+            /tmp/test-aarch64.c \
+            -o \
+            /tmp/test-aarch64.o
 
-          file /tmp/test.o
+          file /tmp/test-aarch64.o
 
       # ==========================================================
       # 6. ccache
@@ -456,39 +433,11 @@ jobs:
 
           fi
 
-          echo
           echo "Wine commit:"
           git rev-parse HEAD
 
-          echo
-          echo "Wine describe:"
-          git describe --tags --always || true
-
       # ==========================================================
-      # 8. Inspect Wine FEX integration
-      # ==========================================================
-
-      - name: Inspect Wine FEX integration
-        shell: bash
-        run: |
-          set -eux
-
-          cd "$WINE_SOURCE"
-
-          echo "Searching Wine FEX integration..."
-
-          grep -R \
-            -E \
-            'libwow64fex|libarm64ecfex|aarch64-unix|aarch64-windows' \
-            dlls \
-            programs \
-            configure.ac \
-            Makefile.in \
-            2>/dev/null \
-            | head -n 150 || true
-
-      # ==========================================================
-      # 9. FEX source
+      # 8. FEX source
       # ==========================================================
 
       - name: Clone FEX
@@ -513,12 +462,113 @@ jobs:
             exit 1
           fi
 
-          echo
           echo "FEX commit:"
           git rev-parse HEAD
 
       # ==========================================================
-      # 10. FEX ARM64EC
+      # 9. Inspect FEX pointer detection
+      # ==========================================================
+
+      - name: Inspect FEX pointer detection
+        shell: bash
+        run: |
+          set -eux
+
+          cd "$FEX_DIR"
+
+          echo "=========================================="
+          echo "FEX commit"
+          echo "=========================================="
+
+          git rev-parse HEAD
+
+          echo
+          echo "=========================================="
+          echo "FEX CMakeLists.txt"
+          echo "=========================================="
+
+          nl -ba CMakeLists.txt | sed -n '45,80p'
+
+          echo
+          echo "=========================================="
+          echo "Pointer related checks"
+          echo "=========================================="
+
+          grep -R \
+            -n \
+            -E \
+            'CMAKE_SIZEOF_VOID_P|SIZEOF_VOID_P|pointer size' \
+            CMakeLists.txt \
+            cmake \
+            Source \
+            2>/dev/null \
+            | head -n 100 || true
+
+      # ==========================================================
+      # 10. ARM64EC compiler / pointer test
+      # ==========================================================
+
+      - name: Test ARM64EC compiler
+        shell: bash
+        run: |
+          set -eux
+
+          export PATH="$LLVM_MINGW_DIR/bin:$PATH"
+
+          ARM64EC_CC="$LLVM_MINGW_DIR/bin/arm64ec-w64-mingw32-clang"
+          ARM64EC_CXX="$LLVM_MINGW_DIR/bin/arm64ec-w64-mingw32-clang++"
+
+          test -x "$ARM64EC_CC"
+          test -x "$ARM64EC_CXX"
+
+          echo "=========================================="
+          echo "ARM64EC compiler"
+          echo "=========================================="
+
+          "$ARM64EC_CC" --version
+          "$ARM64EC_CXX" --version
+
+          echo
+          echo "=========================================="
+          echo "ARM64EC macros"
+          echo "=========================================="
+
+          echo |
+            "$ARM64EC_CC" \
+              -dM \
+              -E \
+              -x c \
+              - \
+            | grep -E \
+                '__SIZEOF_POINTER__|__aarch64__|__arm64ec__|_ARM64_|_WIN64' \
+            | sort
+
+          echo
+          echo "=========================================="
+          echo "ARM64EC pointer test"
+          echo "=========================================="
+
+          cat > /tmp/fex-arm64ec-test.c <<'EOF'
+          #include <stdint.h>
+
+          #if __SIZEOF_POINTER__ != 8
+          #error "ARM64EC requires 64-bit pointers"
+          #endif
+
+          int main(void)
+          {
+              return sizeof(void *) == 8 ? 0 : 1;
+          }
+          EOF
+
+          "$ARM64EC_CC" \
+            /tmp/fex-arm64ec-test.c \
+            -o /tmp/fex-arm64ec-test.exe
+
+          file /tmp/fex-arm64ec-test.exe
+
+      # ==========================================================
+      # 11. FEX ARM64EC
       # ==========================================================
 
       - name: Build FEX ARM64EC
@@ -527,6 +577,9 @@ jobs:
           set -eux
 
           export PATH="$LLVM_MINGW_DIR/bin:$PATH"
+
+          ARM64EC_CC="$LLVM_MINGW_DIR/bin/arm64ec-w64-mingw32-clang"
+          ARM64EC_CXX="$LLVM_MINGW_DIR/bin/arm64ec-w64-mingw32-clang++"
 
           cd "$FEX_DIR"
 
@@ -539,11 +592,14 @@ jobs:
           cd build-arm64ec
 
           cmake -GNinja \
-            -DCMAKE_C_COMPILER="$LLVM_MINGW_DIR/bin/arm64ec-w64-mingw32-clang" \
-            -DCMAKE_CXX_COMPILER="$LLVM_MINGW_DIR/bin/arm64ec-w64-mingw32-clang++" \
+            -DCMAKE_C_COMPILER="$ARM64EC_CC" \
+            -DCMAKE_CXX_COMPILER="$ARM64EC_CXX" \
+            -DCMAKE_ASM_COMPILER="$ARM64EC_CC" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/opt/FEX/install-arm64ec \
             -DCMAKE_INSTALL_LIBDIR=usr/lib \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_SYSTEM_PROCESSOR=ARM64 \
             -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
             -DBUILD_TESTING=False \
             -DENABLE_LTO=False \
@@ -551,17 +607,31 @@ jobs:
             ../
 
           echo
-          echo "FEX ARM64EC compiler:"
+          echo "=========================================="
+          echo "FEX ARM64EC CMake cache"
+          echo "=========================================="
 
           grep -E \
-            'CMAKE_C_COMPILER:FILEPATH|CMAKE_CXX_COMPILER:FILEPATH' \
-            CMakeCache.txt || true
+            'CMAKE_C_COMPILER:FILEPATH|CMAKE_CXX_COMPILER:FILEPATH|CMAKE_ASM_COMPILER:FILEPATH|CMAKE_SYSTEM_NAME|CMAKE_SYSTEM_PROCESSOR|MINGW_TRIPLE|CMAKE_SIZEOF_VOID_P' \
+            CMakeCache.txt \
+            || true
+
+          echo
+          echo "=========================================="
+          echo "Build"
+          echo "=========================================="
 
           ninja -j"$(nproc)"
+
+          echo
+          echo "=========================================="
+          echo "Install"
+          echo "=========================================="
+
           ninja install
 
       # ==========================================================
-      # 11. FEX WOW64
+      # 12. FEX WOW64
       # ==========================================================
 
       - name: Build FEX WOW64
@@ -570,6 +640,12 @@ jobs:
           set -eux
 
           export PATH="$LLVM_MINGW_DIR/bin:$PATH"
+
+          WOW64_CC="$LLVM_MINGW_DIR/bin/aarch64-w64-mingw32-clang"
+          WOW64_CXX="$LLVM_MINGW_DIR/bin/aarch64-w64-mingw32-clang++"
+
+          test -x "$WOW64_CC"
+          test -x "$WOW64_CXX"
 
           cd "$FEX_DIR"
 
@@ -582,29 +658,30 @@ jobs:
           cd build-wow64
 
           cmake -GNinja \
-            -DCMAKE_C_COMPILER="$LLVM_MINGW_DIR/bin/aarch64-w64-mingw32-clang" \
-            -DCMAKE_CXX_COMPILER="$LLVM_MINGW_DIR/bin/aarch64-w64-mingw32-clang++" \
+            -DCMAKE_C_COMPILER="$WOW64_CC" \
+            -DCMAKE_CXX_COMPILER="$WOW64_CXX" \
+            -DCMAKE_ASM_COMPILER="$WOW64_CC" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/opt/FEX/install-wow64 \
             -DCMAKE_INSTALL_LIBDIR=usr/lib \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_SYSTEM_PROCESSOR=ARM64 \
             -DMINGW_TRIPLE=aarch64-w64-mingw32 \
             -DBUILD_TESTING=False \
             -DENABLE_LTO=False \
             -DENABLE_JEMALLOC_GLIBC_ALLOC=False \
             ../
 
-          echo
-          echo "FEX WOW64 compiler:"
-
           grep -E \
-            'CMAKE_C_COMPILER:FILEPATH|CMAKE_CXX_COMPILER:FILEPATH' \
-            CMakeCache.txt || true
+            'CMAKE_C_COMPILER:FILEPATH|CMAKE_CXX_COMPILER:FILEPATH|CMAKE_ASM_COMPILER:FILEPATH|CMAKE_SYSTEM_NAME|CMAKE_SYSTEM_PROCESSOR|MINGW_TRIPLE|CMAKE_SIZEOF_VOID_P' \
+            CMakeCache.txt \
+            || true
 
           ninja -j"$(nproc)"
           ninja install
 
       # ==========================================================
-      # 12. FEX UnixLib
+      # 13. FEX UnixLib
       # ==========================================================
 
       - name: Build FEX UnixLib
@@ -637,21 +714,19 @@ jobs:
             -DENABLE_JEMALLOC_GLIBC_ALLOC=False \
             ../Source/Windows/UnixLib
 
-          echo
-          echo "FEX UnixLib compiler:"
-
           grep -E \
             'CMAKE_C_COMPILER:FILEPATH|CMAKE_CXX_COMPILER:FILEPATH|CMAKE_C_COMPILER_TARGET|CMAKE_CXX_COMPILER_TARGET' \
-            CMakeCache.txt || true
+            CMakeCache.txt \
+            || true
 
           ninja -j"$(nproc)"
           ninja install
 
       # ==========================================================
-      # 13. Verify FEX
+      # 14. Verify FEX
       # ==========================================================
 
-      - name: Verify FEX build
+      - name: Verify FEX
         shell: bash
         run: |
           set -eux
@@ -659,31 +734,32 @@ jobs:
           ARM64EC_DLL="/opt/FEX/install-arm64ec/usr/lib/wine/aarch64-windows/libarm64ecfex.dll"
           WOW64_DLL="/opt/FEX/install-wow64/usr/lib/wine/aarch64-windows/libwow64fex.dll"
 
-          echo "Checking ARM64EC..."
+          FEX_UNIX="/opt/FEX/install-unixlib/usr/lib/wine/aarch64-unix"
+
+          echo "=========================================="
+          echo "ARM64EC"
+          echo "=========================================="
 
           test -s "$ARM64EC_DLL"
           file "$ARM64EC_DLL"
 
           echo
-          echo "Checking WOW64..."
+          echo "=========================================="
+          echo "WOW64"
+          echo "=========================================="
 
           test -s "$WOW64_DLL"
           file "$WOW64_DLL"
 
           echo
-          echo "Checking UnixLib..."
+          echo "=========================================="
+          echo "UnixLib"
+          echo "=========================================="
 
-          UNIXLIB_DIR="/opt/FEX/install-unixlib/usr/lib/wine/aarch64-unix"
-
-          test -d "$UNIXLIB_DIR"
-
-          find "$UNIXLIB_DIR" \
-            -maxdepth 1 \
-            -type f \
-            -print
+          test -d "$FEX_UNIX"
 
           UNIXLIB_COUNT="$(
-            find "$UNIXLIB_DIR" \
+            find "$FEX_UNIX" \
               -maxdepth 1 \
               -type f \
               \( -name '*.so' -o -name '*.so.*' \) \
@@ -695,13 +771,13 @@ jobs:
 
           test "$UNIXLIB_COUNT" -gt 0
 
-          find "$UNIXLIB_DIR" \
+          find "$FEX_UNIX" \
             -maxdepth 1 \
             -type f \
             -exec file {} \;
 
       # ==========================================================
-      # 14. Android / Termux compatibility
+      # 15. Android compatibility patches
       # ==========================================================
 
       - name: Apply Android compatibility patches
@@ -712,12 +788,9 @@ jobs:
 
           cd "$WINE_SOURCE"
 
-          echo "Applying Android / Termux compatibility..."
+          echo "Applying Android / Termux compatibility patches..."
 
-          # --------------------------------------------------------
-          # /tmp
-          # --------------------------------------------------------
-
+          # /tmp -> Termux runtime tmp
           find . \
             -type f \
             \( \
@@ -729,17 +802,13 @@ jobs:
             -print0 \
             | xargs -0 grep -Il '/tmp/' \
             | while read -r f; do
-
                 sed -i \
                   "s#/tmp/#${TERMUX_TMP%/}/#g" \
                   "$f"
+              done \
+            || true
 
-              done || true
-
-          # --------------------------------------------------------
           # machine-id
-          # --------------------------------------------------------
-
           grep -RIl \
             '/etc/machine-id' \
             dlls \
@@ -747,90 +816,52 @@ jobs:
             programs \
             2>/dev/null \
             | while read -r f; do
-
                 sed -i \
                   "s#/etc/machine-id#${TERMUX_GLIBC_PREFIX}/etc/machine-id#g" \
                   "$f"
+              done \
+            || true
 
-              done || true
-
-          # --------------------------------------------------------
-          # GstMapInfo
-          # --------------------------------------------------------
-
+          # GStreamer typo
           grep -RIl \
             'GstMapInfoInfo' \
             dlls \
             2>/dev/null \
             | while read -r f; do
-
                 sed -i \
                   's/GstMapInfoInfo/GstMapInfo/g' \
                   "$f"
+              done \
+            || true
 
-              done || true
-
-          # --------------------------------------------------------
-          # PAGE_READWRITE workaround
-          # --------------------------------------------------------
-
+          # Memory protection compatibility
           grep -RIl \
             'PAGE_READWRITE' \
             dlls/ntdll \
             dlls/kernelbase \
             2>/dev/null \
             | while read -r f; do
-
                 sed -i \
                   's/PAGE_READWRITE/PAGE_EXECUTE_READWRITE/g' \
                   "$f"
+              done \
+            || true
 
-              done || true
-
-          # --------------------------------------------------------
-          # Android low address-space workaround
-          # --------------------------------------------------------
-
+          # Low address space
           grep -RIl \
             '0x7fffffff0000' \
             dlls \
             server \
             2>/dev/null \
             | while read -r f; do
-
                 sed -i \
                   's/0x7fffffff0000/0x7fffff0000/g' \
                   "$f"
-
-              done || true
-
-      # ==========================================================
-      # 15. Wine branch patches
-      # ==========================================================
-
-      - name: Apply Wine branch patches
-        shell: bash
-        run: |
-          set -eux
-
-          cd "$WINE_SOURCE"
-
-          if [ -f disable_gl.py ]; then
-            python3 disable_gl.py || true
-          fi
-
-          if [ "$WINE_BRANCH" = "proton9-arm64ec" ]; then
-
-            if [ -f configure.ac ]; then
-              sed -i \
-                '/gstreamer-gl-1.0/d' \
-                configure.ac || true
-            fi
-
-          fi
+              done \
+            || true
 
       # ==========================================================
-      # 16. Generate Wine configure
+      # 16. Wine configure
       # ==========================================================
 
       - name: Generate Wine configure
@@ -870,7 +901,6 @@ jobs:
             --without-wayland
 
           make -j"$(nproc)"
-
           make install
 
           test -d "$WINE_NATIVE"
@@ -902,26 +932,6 @@ jobs:
             )
           fi
 
-          if [ "$WINE_BRANCH" = "proton9-arm64ec" ]; then
-            EXTRA_ARGS+=(
-              --without-capi
-              --without-cups
-              --without-dbus
-              --without-gphoto
-              --without-gssapi
-              --without-inotify
-              --without-krb5
-              --without-ldap
-              --without-oss
-              --without-pcap
-              --without-pcsclite
-              --without-sane
-              --without-sdl
-              --without-udev
-              --without-usb
-            )
-          fi
-
           export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
           export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1
 
@@ -947,6 +957,7 @@ jobs:
             --disable-tests \
             --with-vulkan \
             --with-gstreamer \
+            --without-wayland \
             --host=aarch64-linux-gnu \
             --build=x86_64-linux-gnu \
             --host_alias=aarch64-linux-gnu \
@@ -1002,25 +1013,13 @@ jobs:
           mkdir -p "$FEX_WIN"
           mkdir -p "$FEX_UNIX"
 
-          # --------------------------------------------------------
-          # WOW64
-          # --------------------------------------------------------
-
           install -Dm644 \
             /opt/FEX/install-wow64/usr/lib/wine/aarch64-windows/libwow64fex.dll \
             "$FEX_WIN/libwow64fex.dll"
 
-          # --------------------------------------------------------
-          # ARM64EC
-          # --------------------------------------------------------
-
           install -Dm644 \
             /opt/FEX/install-arm64ec/usr/lib/wine/aarch64-windows/libarm64ecfex.dll \
             "$FEX_WIN/libarm64ecfex.dll"
-
-          # --------------------------------------------------------
-          # UnixLib
-          # --------------------------------------------------------
 
           cp -a \
             /opt/FEX/install-unixlib/usr/lib/wine/aarch64-unix/. \
@@ -1038,17 +1037,16 @@ jobs:
             -print
 
       # ==========================================================
-      # 22. Verify Wine / FEX package
+      # 22. Verify Wine package
       # ==========================================================
 
-      - name: Verify Wine and FEX package
+      - name: Verify Wine package
         shell: bash
         run: |
           set -eux
 
           TARGET="$WINE_INSTALL"
 
-          echo
           echo "=========================================="
           echo "Wine binaries"
           echo "=========================================="
@@ -1061,9 +1059,7 @@ jobs:
             regedit
           do
             test -e "$TARGET/bin/$f"
-
             echo "OK: $TARGET/bin/$f"
-
             file "$TARGET/bin/$f" || true
           done
 
@@ -1079,13 +1075,12 @@ jobs:
             "$TARGET/lib/wine/x86_64-windows"
           do
             test -d "$d"
-
             echo "OK: $d"
           done
 
           echo
           echo "=========================================="
-          echo "FEX Windows"
+          echo "FEX DLLs"
           echo "=========================================="
 
           FEX_WIN="$TARGET/lib/wine/aarch64-windows"
@@ -1124,24 +1119,6 @@ jobs:
             -type f \
             -exec file {} \;
 
-          echo
-          echo "=========================================="
-          echo "FEX file list"
-          echo "=========================================="
-
-          find "$TARGET/lib/wine" \
-            -type f \
-            \( \
-              -iname '*fex*.dll' \
-              -o -iname '*fex*.so*' \
-            \) \
-            -print
-
-          echo
-          echo "=========================================="
-          echo "VERIFICATION PASSED"
-          echo "=========================================="
-
       # ==========================================================
       # 23. Build information
       # ==========================================================
@@ -1153,7 +1130,7 @@ jobs:
 
           cat > "$WINE_INSTALL/BUILD-INFO.txt" <<EOF
           Wine ARM64 WOW64
-          ================
+          =================
 
           Wine branch:
           $WINE_BRANCH
@@ -1191,7 +1168,7 @@ jobs:
           Termux glibc:
           $TERMUX_GLIBC_PREFIX
 
-          Expected ELF interpreter:
+          ELF interpreter:
           $TERMUX_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1
           EOF
 
@@ -1225,7 +1202,7 @@ jobs:
           echo "FINAL SANITY CHECK: PASS"
 
       # ==========================================================
-      # 25. Prepare package
+      # 25. Package
       # ==========================================================
 
       - name: Prepare package
@@ -1258,14 +1235,11 @@ jobs:
             "$WINE_INSTALL"/. \
             "wine-package/$PACKAGE_NAME/"
 
-          echo
-          echo "Package size:"
-
           du -sh \
             "wine-package/$PACKAGE_NAME"
 
       # ==========================================================
-      # 26. Create tar.xz
+      # 26. Tarball
       # ==========================================================
 
       - name: Create tarball
@@ -1299,7 +1273,7 @@ jobs:
           retention-days: 30
 
       # ==========================================================
-      # 28. GitHub Release
+      # 28. Release
       # ==========================================================
 
       - name: Create GitHub Release
@@ -1348,7 +1322,7 @@ jobs:
             Target:
             Termux glibc AArch64
 
-            Expected loader:
+            ELF interpreter:
 
             `/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1`
 
