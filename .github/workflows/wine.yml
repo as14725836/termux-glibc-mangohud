@@ -1,15 +1,16 @@
-name: Wine ARM64 WOW64 构建（llvm-mingw + FEX，Debian 12）
+name: Wine ARM64 WOW64 构建（llvm-mingw + FEX + Debian 12）
 
 on:
   schedule:
+    # 每月 5 日、20 日构建
     - cron: '0 2 5,20 * *'
 
   workflow_dispatch:
     inputs:
       wine_branch:
         description: 'Wine 分支'
-        required: false
-        default: 'staging'
+        required: true
+        default: 'vanilla'
         type: choice
         options:
           - vanilla
@@ -19,1721 +20,1303 @@ on:
           - staging-tkg-fsync
 
       fex_ref:
-        description: 'FEX-Emu tag/branch/commit。建议生产构建锁定 tag/commit'
-        required: false
+        description: 'FEX 分支 / Tag / Commit'
+        required: true
         default: 'main'
         type: string
 
+      wine_version:
+        description: 'Wine 版本；latest 使用仓库默认分支'
+        required: true
+        default: 'latest'
+        type: string
+
       preloader:
-        description: '是否使用 wine-preloader'
-        required: false
+        description: '启用 Wine preloader'
+        required: true
         default: 'on'
         type: choice
         options:
           - on
           - off
 
-      android_execmem_patch:
-        description: 'Android SELinux EXECUTE_READWRITE workaround'
-        required: false
-        default: 'off'
+      android_compat:
+        description: '启用 Termux/Android 兼容补丁'
+        required: true
+        default: 'on'
         type: choice
         options:
           - on
           - off
 
-      address_space_patch:
-        description: '缩减 Wine 地址空间上限'
-        required: false
-        default: 'off'
+      build_profile:
+        description: 'Wine 构建类型'
+        required: true
+        default: 'release'
         type: choice
         options:
-          - on
-          - off
-
-      wine_version:
-        description: 'Wine 版本，例如 9.22；latest 表示默认分支'
-        required: false
-        default: 'latest'
-        type: string
-
-      build_type:
-        description: '构建类型'
-        required: false
-        default: 'wow64'
-        type: choice
-        options:
-          - wow64
-          - proton
+          - release
+          - debug
 
 env:
-  LLVMMINGW_DATE: 20251202
-  LLVMMINGW_NAME: llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64
-
-  WINE64_DIR: /opt/wine64
-  WINE_SOURCE_DIR: /opt/wine-src
-  FEX_SOURCE_DIR: /opt/FEX
-
   DEBIAN_FRONTEND: noninteractive
 
-  FEX_REF: ${{ github.event.inputs.fex_ref || 'main' }}
+  LLVM_MINGW_DIR: /opt/llvm-mingw
+  FEX_DIR: /opt/FEX
 
-permissions:
-  contents: write
+  TERMUX_GLIBC_PREFIX: /data/data/com.termux/files/usr/glibc
+  TERMUX_TMP: /data/data/com.termux/files/usr/tmp
+
+  WINE_INSTALL: /tmp/wine-install-wow64
+  WINE_NATIVE: /opt/wine64-native
+
+  CCACHE_DIR: /opt/ccache
+
+  # 手动运行使用 inputs；定时任务使用默认值
+  FEX_REF: ${{ inputs.fex_ref || 'main' }}
+  WINE_BRANCH: ${{ inputs.wine_branch || 'vanilla' }}
+  WINE_VERSION: ${{ inputs.wine_version || 'latest' }}
+  PRELOADER: ${{ inputs.preloader || 'on' }}
+  ANDROID_COMPAT: ${{ inputs.android_compat || 'on' }}
+  BUILD_PROFILE: ${{ inputs.build_profile || 'release' }}
 
 jobs:
-
-  build-wine-wow64:
-
-    runs-on: ubuntu-latest
+  build:
+    name: Wine ARM64 WOW64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
 
     container:
       image: debian:12
-      options: --user root
-
-    timeout-minutes: 240
 
     steps:
 
       # ============================================================
-      # 1. 基础工具
+      # 1. 基础环境
       # ============================================================
 
-      - name: 安装基础工具
+      - name: Checkout workflow
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        shell: bash
         run: |
           set -eux
-
-          apt-get update
-
-          apt-get install -y --no-install-recommends \
-            ca-certificates \
-            wget \
-            curl \
-            git \
-            gnupg \
-            sudo \
-            xz-utils \
-            g++ \
-            file \
-            jq \
-            unzip \
-            rsync
-
-      - uses: actions/checkout@v4
-
-
-      # ============================================================
-      # 2. Debian multiarch
-      # ============================================================
-
-      - name: 配置 APT multiarch
-        run: |
-          set -eux
-
-          rm -f /etc/apt/sources.list.d/debian.sources
-          rm -f /etc/apt/sources.list.bak
-
-          cat > /etc/apt/sources.list << 'EOF'
-          deb [arch=amd64,arm64] http://deb.debian.org/debian bookworm main contrib non-free
-          deb [arch=amd64,arm64] http://deb.debian.org/debian bookworm-updates main contrib non-free
-          deb [arch=amd64,arm64] http://security.debian.org/debian-security bookworm-security main contrib non-free
-          EOF
 
           dpkg --add-architecture arm64
 
           apt-get update
 
-          apt-get install -y --no-install-recommends \
-            hello:arm64
-
-          file /usr/bin/hello || true
-          dpkg --print-architecture
-          dpkg --print-foreign-architectures
-
-
-      # ============================================================
-      # 3. 构建依赖
-      # ============================================================
-
-      - name: 安装构建依赖
-        run: |
-          set -eux
-
-          apt-get install -y --no-install-recommends \
-            binutils-aarch64-linux-gnu \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            libc-dev-arm64-cross \
-            libstdc++6-arm64-cross \
-            libstdc++-12-dev-arm64-cross \
-            build-essential \
-            libc-devtools \
-            less \
-            nano \
+          apt-get install -y \
+            ca-certificates \
+            apt-transport-https \
+            gnupg \
+            wget \
+            curl \
+            git \
+            git-lfs \
+            subversion \
+            mercurial \
+            unzip \
+            xz-utils \
+            bzip2 \
+            tar \
+            gzip \
+            patch \
+            sed \
+            grep \
+            gawk \
+            perl \
             python3 \
-            python3-setuptools \
             python3-pip \
+            python3-setuptools \
+            pkg-config \
+            ninja-build \
+            meson \
+            cmake \
+            ccache \
+            flex \
+            bison \
+            gettext \
+            gettext-base \
+            autoconf \
+            automake \
+            libtool \
+            texinfo \
+            make \
+            gcc \
+            g++ \
             clang \
             llvm \
             lld \
-            screen \
-            flex \
-            bison \
-            nasm \
-            gettext \
-            make \
-            automake \
-            autoconf \
-            pkg-config \
-            libtool \
-            gtk-doc-tools \
-            dpkg-dev \
-            fakeroot \
-            debhelper \
-            dh-make \
-            cmake \
-            ninja-build \
-            libfreetype6-dev \
-            libglib2.0-dev \
-            libltdl-dev \
-            libxcb1-dev \
-            libx11-dev \
-            libxinerama-dev \
-            libfontconfig-dev \
-            libfontconfig1-dev \
-            librsvg2-bin \
-            libx11-dev:arm64 \
-            libxinerama-dev:arm64 \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
+            binutils-aarch64-linux-gnu \
+            file \
+            patchelf \
+            xz-utils
+
+          # --------------------------------------------------------
+          # ARM64 Wine / multimedia / graphics dependencies
+          # --------------------------------------------------------
+
+          apt-get install -y \
+            libc6-dev:arm64 \
+            libgcc-s1:arm64 \
+            libstdc++6:arm64 \
+            libstdc++-12-dev:arm64 \
+            libz-dev:arm64 \
+            libbz2-dev:arm64 \
+            liblzma-dev:arm64 \
             libfreetype6-dev:arm64 \
             libfontconfig1-dev:arm64 \
-            libfontconfig-dev:arm64 \
-            libltdl-dev:arm64 \
-            libxcb1-dev:arm64 \
-            libglib2.0-dev:arm64 \
-            libepoxy-dev:arm64 \
-            libsdl2-dev:arm64 \
-            libxcursor-dev:arm64 \
-            libxi-dev:arm64 \
-            libxshmfence-dev:arm64 \
-            libxxf86vm-dev:arm64 \
-            libxrandr-dev:arm64 \
-            libxrender-dev:arm64 \
-            libxfixes-dev:arm64 \
-            libxcomposite-dev:arm64 \
+            libpng-dev:arm64 \
+            libjpeg-dev:arm64 \
+            libtiff-dev:arm64 \
+            libxml2-dev:arm64 \
+            libxslt1-dev:arm64 \
+            libgnutls28-dev:arm64 \
+            libssl-dev:arm64 \
             libdbus-1-dev:arm64 \
-            libsane-dev:arm64 \
-            libusb-1.0-0-dev:arm64 \
-            libv4l-dev:arm64 \
-            libpulse-dev:arm64 \
-            libgstreamer1.0-dev:arm64 \
-            libgstreamer-plugins-base1.0-dev:arm64 \
-            libgstreamer-plugins-bad1.0-dev:arm64 \
             libudev-dev:arm64 \
             libunwind-dev:arm64 \
-            libkrb5-dev:arm64 \
-            libvulkan-dev:arm64 \
+            libunwind8:arm64 \
+            libexpat1-dev:arm64 \
+            libglib2.0-dev:arm64 \
+            libgphoto2-dev:arm64 \
+            libgsm1-dev:arm64 \
+            libmpg123-dev:arm64 \
+            libopenal-dev:arm64 \
+            libpulse-dev:arm64 \
+            libsane-dev:arm64 \
+            libv4l-dev:arm64 \
+            libx11-dev:arm64 \
+            libx11-xcb-dev:arm64 \
+            libxau-dev:arm64 \
+            libxcb1-dev:arm64 \
+            libxcb-dri2-0-dev:arm64 \
+            libxcb-dri3-dev:arm64 \
+            libxcb-glx0-dev:arm64 \
+            libxcb-present-dev:arm64 \
+            libxcb-randr0-dev:arm64 \
+            libxcb-render0-dev:arm64 \
+            libxcb-shape0-dev:arm64 \
+            libxcb-shm0-dev:arm64 \
+            libxcb-sync-dev:arm64 \
+            libxcb-xfixes0-dev:arm64 \
+            libxcb-xinerama0-dev:arm64 \
+            libxcb-xkb-dev:arm64 \
+            libxcb1-dev:arm64 \
+            libxcursor-dev:arm64 \
+            libxext-dev:arm64 \
+            libxfixes-dev:arm64 \
+            libxi-dev:arm64 \
+            libxinerama-dev:arm64 \
+            libxkbcommon-dev:arm64 \
+            libxrandr-dev:arm64 \
+            libxrender-dev:arm64 \
+            libxxf86vm-dev:arm64 \
+            libegl-dev:arm64 \
             libgl-dev:arm64 \
+            libgles-dev:arm64 \
+            libvulkan-dev:arm64 \
+            libwayland-dev:arm64 \
+            libxcomposite-dev:arm64 \
+            libxcursor-dev:arm64 \
+            libxi-dev:arm64 \
+            libxres-dev:arm64 \
+            libxcomposite-dev:arm64 \
+            libxdamage-dev:arm64 \
+            libxxf86vm-dev:arm64 \
+            libxfixes-dev:arm64 \
+            libsdl2-dev:arm64 \
+            libasound2-dev:arm64 \
             libavcodec-dev:arm64 \
             libavformat-dev:arm64 \
             libavutil-dev:arm64 \
             libswresample-dev:arm64 \
-            libswscale-dev:arm64 \
-            libgnutls28-dev:arm64 \
-            libcups2-dev:arm64 \
-            libxkbcommon-dev:arm64 \
-            libxkbregistry-dev:arm64 \
-            libwayland-dev:arm64 \
-            libidn2-0:arm64
+            libswscale-dev:arm64
 
+          # --------------------------------------------------------
+          # GStreamer
+          # --------------------------------------------------------
+
+          apt-get install -y \
+            libgstreamer1.0-dev:arm64 \
+            libgstreamer-plugins-base1.0-dev:arm64 \
+            libgstreamer-plugins-bad1.0-dev:arm64 \
+            gstreamer1.0-plugins-base:arm64 \
+            gstreamer1.0-plugins-good:arm64 \
+            gstreamer1.0-plugins-bad:arm64 \
+            gstreamer1.0-plugins-ugly:arm64 \
+            gstreamer1.0-libav:arm64 \
+            gstreamer1.0-tools:arm64
+
+          apt-get clean
+          rm -rf /var/lib/apt/lists/*
 
       # ============================================================
-      # 4. llvm-mingw
+      # 2. LLVM-MinGW
       # ============================================================
 
-      - name: 下载 llvm-mingw
+      - name: Install LLVM-MinGW
+        shell: bash
         run: |
           set -eux
 
-          mkdir -p /opt
           cd /opt
 
+          LLVM_MINGW_VERSION="20251202"
+          LLVM_MINGW_ARCHIVE="llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64.tar.xz"
+
           wget -q \
-            "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVMMINGW_DATE}/${LLVMMINGW_NAME}.tar.xz"
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${LLVM_MINGW_ARCHIVE}"
 
-          tar -xJf "${LLVMMINGW_NAME}.tar.xz"
+          tar -xf "$LLVM_MINGW_ARCHIVE"
 
-          rm -f "${LLVMMINGW_NAME}.tar.xz"
+          LLVM_DIR="$(find /opt -maxdepth 1 -type d \
+            -name "llvm-mingw-${LLVM_MINGW_VERSION}-*" \
+            | head -n 1)"
 
-          echo "/opt/${LLVMMINGW_NAME}/bin" >> "$GITHUB_PATH"
+          test -n "$LLVM_DIR"
 
-          export PATH="/opt/${LLVMMINGW_NAME}/bin:$PATH"
+          ln -sfn "$LLVM_DIR" "$LLVM_MINGW_DIR"
 
-          echo "=== llvm-mingw ==="
+          rm -f "$LLVM_MINGW_ARCHIVE"
 
-          command -v aarch64-w64-mingw32-clang
-          command -v arm64ec-w64-mingw32-clang
-          command -v x86_64-w64-mingw32-clang
-          command -v i686-w64-mingw32-clang || true
-
-          aarch64-w64-mingw32-clang --version
-          arm64ec-w64-mingw32-clang --version
-
+          echo "$LLVM_MINGW_DIR/bin" >> "$GITHUB_PATH"
 
       # ============================================================
-      # 5. 获取并锁定 FEX
+      # 3. 检查 LLVM-MinGW
       # ============================================================
 
-      - name: 获取 FEX-Emu
+      - name: Verify LLVM-MinGW
+        shell: bash
         run: |
           set -eux
 
-          rm -rf "$FEX_SOURCE_DIR"
+          export PATH="$LLVM_MINGW_DIR/bin:$PATH"
 
-          git clone \
-            https://github.com/FEX-Emu/FEX.git \
-            "$FEX_SOURCE_DIR"
+          for tool in \
+            aarch64-w64-mingw32-clang \
+            aarch64-w64-mingw32-clang++ \
+            arm64ec-w64-mingw32-clang \
+            arm64ec-w64-mingw32-clang++
+          do
+            echo
+            echo "======================================"
+            echo "Checking: $tool"
+            echo "======================================"
 
-          cd "$FEX_SOURCE_DIR"
-
-          git fetch --tags --force
-
-          git checkout "${FEX_REF}"
-
-          git submodule update --init --recursive
-
-          FEX_COMMIT="$(git rev-parse HEAD)"
-          FEX_COMMIT_SHORT="$(git rev-parse --short=12 HEAD)"
-          FEX_DESCRIBE="$(git describe --tags --always --dirty 2>/dev/null || true)"
-
-          echo "FEX_COMMIT=$FEX_COMMIT" >> "$GITHUB_ENV"
-          echo "FEX_COMMIT_SHORT=$FEX_COMMIT_SHORT" >> "$GITHUB_ENV"
-          echo "FEX_DESCRIBE=$FEX_DESCRIBE" >> "$GITHUB_ENV"
-
-          echo "================================"
-          echo "FEX describe : $FEX_DESCRIBE"
-          echo "FEX commit   : $FEX_COMMIT"
-          echo "================================"
-
-          if [ "${FEX_REF}" = "main" ]; then
-            echo "::warning::FEX 使用 main。生产构建建议固定 tag/commit。"
-          fi
-
+            command -v "$tool"
+            "$tool" --version | head -n 3
+          done
 
       # ============================================================
-      # 6. 构建 FEX ARM64EC + WOW64 + UnixLib
+      # 4. ccache
       # ============================================================
 
-      - name: 构建 FEX 三组件
+      - name: Configure ccache
+        shell: bash
         run: |
           set -eux
 
-          export PATH="/opt/${LLVMMINGW_NAME}/bin:$PATH"
+          mkdir -p "$CCACHE_DIR"
 
-          cd "$FEX_SOURCE_DIR"
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
 
-          rm -rf \
-            build-arm64ec \
-            build-wow64 \
-            build-unixlib \
-            install
-
-          mkdir -p \
-            build-arm64ec \
-            build-wow64 \
-            build-unixlib \
-            install
-
-          # --------------------------------------------------------
-          # FEX 通用参数
-          # --------------------------------------------------------
-
-          FEX_COMMON="
-            -DCMAKE_BUILD_TYPE=Release
-            -DENABLE_LTO=False
-            -DBUILD_TESTING=False
-            -DENABLE_JEMALLOC_GLIBC_ALLOC=False
-            -DENABLE_ASSERTIONS=False
-            -DTUNE_CPU=generic
-            -DTUNE_ARCH=generic
-            -DOVERRIDE_VERSION=${FEX_DESCRIBE}
-            -DOVERRIDE_HASH=${FEX_COMMIT_SHORT}
-            -DCMAKE_INSTALL_PREFIX=/usr
-            -DCMAKE_INSTALL_LIBDIR=/
-          "
-
-          # --------------------------------------------------------
-          # ARM64EC
-          # --------------------------------------------------------
-
-          echo "=========================================="
-          echo "BUILD FEX ARM64EC"
-          echo "=========================================="
-
-          cd "$FEX_SOURCE_DIR/build-arm64ec"
-
-          cmake -GNinja \
-            ${FEX_COMMON} \
-            -DCMAKE_TOOLCHAIN_FILE="$FEX_SOURCE_DIR/Data/CMake/toolchain_mingw.cmake" \
-            -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
-            ..
-
-          ninja -j"$(nproc)"
-          DESTDIR="$FEX_SOURCE_DIR/install" ninja install
-
-
-          # --------------------------------------------------------
-          # WOW64
-          # --------------------------------------------------------
-
-          echo "=========================================="
-          echo "BUILD FEX WOW64"
-          echo "=========================================="
-
-          cd "$FEX_SOURCE_DIR/build-wow64"
-
-          cmake -GNinja \
-            ${FEX_COMMON} \
-            -DCMAKE_TOOLCHAIN_FILE="$FEX_SOURCE_DIR/Data/CMake/toolchain_mingw.cmake" \
-            -DMINGW_TRIPLE=aarch64-w64-mingw32 \
-            ..
-
-          ninja -j"$(nproc)"
-          DESTDIR="$FEX_SOURCE_DIR/install" ninja install
-
-
-          # --------------------------------------------------------
-          # UnixLib
-          # --------------------------------------------------------
-
-          echo "=========================================="
-          echo "BUILD FEX UnixLib"
-          echo "=========================================="
-
-          cd "$FEX_SOURCE_DIR/build-unixlib"
-
-          CC=clang \
-          CXX=clang++ \
-          cmake -GNinja \
-            ${FEX_COMMON} \
-            "$FEX_SOURCE_DIR/Source/Windows/UnixLib"
-
-          ninja -j"$(nproc)"
-          DESTDIR="$FEX_SOURCE_DIR/install" ninja install
-
-
-          # --------------------------------------------------------
-          # 输出结果
-          # --------------------------------------------------------
-
-          echo "=========================================="
-          echo "FEX INSTALL TREE"
-          echo "=========================================="
-
-          find "$FEX_SOURCE_DIR/install" \
-            -type f \
-            -o -type l \
-            | sort
-
+          echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
 
       # ============================================================
-      # 7. 验证 FEX 输出
+      # 5. 获取 Wine
       # ============================================================
 
-      - name: 验证 FEX 输出
+      - name: Clone Wine source
+        shell: bash
         run: |
           set -eux
 
-          FEX_ROOT="$FEX_SOURCE_DIR/install"
-
-          echo "=== FEX ARM64EC ==="
-          find "$FEX_ROOT" \
-            -iname 'libarm64ecfex.dll' \
-            -print
-
-          echo "=== FEX WOW64 ==="
-          find "$FEX_ROOT" \
-            -iname 'libwow64fex.dll' \
-            -print
-
-          echo "=== FEX UnixLib ==="
-          find "$FEX_ROOT" \
-            -path '*aarch64-unix*' \
-            -type f \
-            -print
-
-          ARM64EC_DLL="$(find "$FEX_ROOT" -name libarm64ecfex.dll -type f | head -1)"
-          WOW64_DLL="$(find "$FEX_ROOT" -name libwow64fex.dll -type f | head -1)"
-
-          test -n "$ARM64EC_DLL"
-          test -n "$WOW64_DLL"
-
-          echo "ARM64EC DLL: $ARM64EC_DLL"
-          echo "WOW64 DLL  : $WOW64_DLL"
-
-          file "$ARM64EC_DLL"
-          file "$WOW64_DLL"
-
-          echo "=== FEX DLL PE header ==="
-
-          objdump -f "$ARM64EC_DLL" || true
-          objdump -f "$WOW64_DLL" || true
-
-
-      # ============================================================
-      # 8. 中文 locale
-      # ============================================================
-
-      - name: 设置中文语言环境
-        run: |
-          set -eux
-
-          apt-get install -y --no-install-recommends locales
-
-          sed -i \
-            '/zh_CN.UTF-8/s/^# //g' \
-            /etc/locale.gen
-
-          locale-gen
-
-          echo "LANG=zh_CN.UTF-8" >> "$GITHUB_ENV"
-          echo "LC_ALL=zh_CN.UTF-8" >> "$GITHUB_ENV"
-
-
-      # ============================================================
-      # 9. 获取 Wine
-      # ============================================================
-
-      - name: 获取 Wine 源码
-        run: |
-          set -eux
-
-          WINE_BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
-          WINE_VERSION="${{ github.event.inputs.wine_version || 'latest' }}"
-
-          mkdir -p "$WINE_SOURCE_DIR"
-
-          cd "$WINE_SOURCE_DIR"
+          cd /opt
 
           case "$WINE_BRANCH" in
 
-            staging-tkg|staging-tkg-fsync)
-
-              git clone \
-                https://github.com/Kron4ek/wine-tkg.git \
-                source
-
-              cd source
-
-              git config advice.detachedHead false
-
-              if [ "$WINE_BRANCH" = "staging-tkg-fsync" ]; then
-                git checkout fsync
-              fi
-
-              if [ "$WINE_VERSION" != "latest" ]; then
-                git checkout "$WINE_VERSION" 2>/dev/null || \
-                git checkout "wine-$WINE_VERSION" 2>/dev/null || \
-                echo "::warning::无法切换到指定版本，使用当前分支"
-              fi
-
-              ;;
-
-
-            staging)
-
-              git clone \
-                https://github.com/afeimod/wine-arm.git \
-                source
-
-              cd source
-
-              git config advice.detachedHead false
-
-              if [ "$WINE_VERSION" != "latest" ]; then
-                git checkout "wine-$WINE_VERSION"
-              fi
-
-              PURE_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")"
-              PURE_VERSION="${PURE_VERSION#wine-}"
-
-              STAGING_VERSION="v${PURE_VERSION}"
-
-              wget -O \
-                "wine-staging-${PURE_VERSION}.tar.gz" \
-                "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" \
-                || \
-              wget -O \
-                "wine-staging-${PURE_VERSION}.tar.gz" \
-                "https://github.com/wine-staging/wine-staging/archive/refs/tags/v${PURE_VERSION}.tar.gz"
-
-              if [ -f "wine-staging-${PURE_VERSION}.tar.gz" ]; then
-
-                tar -xzf \
-                  "wine-staging-${PURE_VERSION}.tar.gz"
-
-                STAGING_DIR="$(find . -maxdepth 1 -type d -name '*staging*' | head -1)"
-
-                if [ -n "$STAGING_DIR" ] &&
-                   [ -d "$STAGING_DIR/staging" ]; then
-
-                  cd "$STAGING_DIR/staging"
-
-                  chmod +x patchinstall.py
-
-                  ./patchinstall.py \
-                    --all \
-                    --destdir=../../
-
-                  cd ../..
-
-                else
-                  echo "::warning::没有找到 staging 补丁目录"
-                fi
-
-              else
-                echo "::warning::无法下载 Wine Staging 补丁"
-              fi
-              ;;
-
-
             vanilla)
-
-              git clone \
+              git clone --depth=1 \
                 https://github.com/Pipetto-crypto/wine.git \
-                source
-
-              cd source
-
-              git config advice.detachedHead false
-
-              if [ "$WINE_VERSION" != "latest" ]; then
-
-                git checkout "$WINE_VERSION" 2>/dev/null || \
-                git checkout "wine-$WINE_VERSION" 2>/dev/null || \
-                {
-                  echo "错误: 找不到 Wine 版本 $WINE_VERSION"
-                  exit 1
-                }
-
-              fi
+                wine-source
               ;;
-
 
             proton9-arm64ec)
-
-              git clone \
+              git clone --depth=1 \
                 --branch proton-9.0-arm64ec \
                 https://github.com/Pipetto-crypto/wine.git \
-                source
-
-              cd source
-
-              git config advice.detachedHead false
+                wine-source
               ;;
 
+            staging)
+              git clone --depth=1 \
+                https://github.com/afeimod/wine-arm.git \
+                wine-source
+              ;;
+
+            staging-tkg|staging-tkg-fsync)
+              git clone --depth=1 \
+                https://github.com/Kron4ek/wine-tkg.git \
+                wine-source
+              ;;
 
             *)
-
-              echo "未知 Wine 分支: $WINE_BRANCH"
+              echo "Unknown WINE_BRANCH=$WINE_BRANCH"
               exit 1
               ;;
-
           esac
 
-          WINE_COMMIT="$(git rev-parse HEAD)"
-          WINE_COMMIT_SHORT="$(git rev-parse --short=12 HEAD)"
-          WINE_DESCRIBE="$(git describe --tags --always --dirty 2>/dev/null || true)"
+          cd /opt/wine-source
 
-          echo "WINE_COMMIT=$WINE_COMMIT" >> "$GITHUB_ENV"
-          echo "WINE_COMMIT_SHORT=$WINE_COMMIT_SHORT" >> "$GITHUB_ENV"
-          echo "WINE_DESCRIBE=$WINE_DESCRIBE" >> "$GITHUB_ENV"
+          if [ "$WINE_VERSION" != "latest" ]; then
+            git fetch --tags --depth=1 || true
 
-          BUILD_NAME="wine-${WINE_DESCRIBE}-${WINE_COMMIT_SHORT}-${WINE_BRANCH}-arm64-wow64"
+            if git checkout "$WINE_VERSION"; then
+              :
+            elif git checkout "wine-$WINE_VERSION"; then
+              :
+            else
+              echo "Unable to checkout Wine version: $WINE_VERSION"
+              exit 1
+            fi
+          fi
 
-          echo "BUILD_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
-          echo "WINE_VERSION_ACTUAL=$WINE_DESCRIBE" >> "$GITHUB_ENV"
+          echo
+          echo "Wine commit:"
+          git rev-parse HEAD
 
-          echo "================================"
-          echo "Wine describe : $WINE_DESCRIBE"
-          echo "Wine commit   : $WINE_COMMIT"
-          echo "Build name    : $BUILD_NAME"
-          echo "================================"
-
+          echo
+          echo "Wine version:"
+          git describe --tags --always || true
 
       # ============================================================
-      # 10. Termux 路径修复
+      # 6. Wine source 信息
       # ============================================================
 
-      - name: 修复 Termux 路径
+      - name: Inspect Wine ARM64 configuration
+        shell: bash
         run: |
           set -eux
 
-          cd "$WINE_SOURCE_DIR/source"
+          cd /opt/wine-source
+
+          echo "=== enable-archs ==="
+
+          grep -R \
+            "enable-archs" \
+            configure.ac \
+            configure \
+            2>/dev/null \
+            | head -n 30 || true
+
+          echo
+          echo "=== FEX references ==="
+
+          grep -R \
+            -E "libwow64fex|libarm64ecfex|aarch64-unix|aarch64-windows" \
+            dlls \
+            programs \
+            Makefile.in \
+            configure.ac \
+            2>/dev/null \
+            | head -n 100 || true
+
+      # ============================================================
+      # 7. FEX
+      # ============================================================
+
+      - name: Clone FEX
+        shell: bash
+        run: |
+          set -eux
+
+          rm -rf "$FEX_DIR"
+
+          git clone \
+            https://github.com/FEX-Emu/FEX.git \
+            "$FEX_DIR"
+
+          cd "$FEX_DIR"
+
+          git fetch --tags --depth=1 || true
+
+          if git rev-parse "$FEX_REF^{commit}" >/dev/null 2>&1; then
+            git checkout "$FEX_REF"
+          else
+            echo "FEX ref not found: $FEX_REF"
+            exit 1
+          fi
+
+          echo
+          echo "FEX commit:"
+          git rev-parse HEAD
+
+      # ============================================================
+      # 8. FEX ARM64EC
+      # ============================================================
+
+      - name: Build FEX ARM64EC
+        shell: bash
+        run: |
+          set -eux
+
+          export PATH="$LLVM_MINGW_DIR/bin:$PATH"
+
+          cd "$FEX_DIR"
+
+          rm -rf build-arm64ec install-arm64ec
+
+          mkdir build-arm64ec
+          cd build-arm64ec
+
+          cmake -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/opt/FEX/install-arm64ec \
+            -DCMAKE_INSTALL_LIBDIR=usr/lib \
+            -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
+            -DBUILD_TESTING=False \
+            -DENABLE_LTO=False \
+            -DENABLE_JEMALLOC_GLIBC_ALLOC=False \
+            ../
+
+          ninja -j"$(nproc)"
+          ninja install
+
+      # ============================================================
+      # 9. FEX WOW64
+      # ============================================================
+
+      - name: Build FEX WOW64
+        shell: bash
+        run: |
+          set -eux
+
+          export PATH="$LLVM_MINGW_DIR/bin:$PATH"
+
+          cd "$FEX_DIR"
+
+          rm -rf build-wow64 install-wow64
+
+          mkdir build-wow64
+          cd build-wow64
+
+          cmake -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/opt/FEX/install-wow64 \
+            -DCMAKE_INSTALL_LIBDIR=usr/lib \
+            -DMINGW_TRIPLE=aarch64-w64-mingw32 \
+            -DBUILD_TESTING=False \
+            -DENABLE_LTO=False \
+            -DENABLE_JEMALLOC_GLIBC_ALLOC=False \
+            ../
+
+          ninja -j"$(nproc)"
+          ninja install
+
+      # ============================================================
+      # 10. FEX UnixLib
+      #
+      # 这是原 workflow 最重要的缺失项之一
+      # ============================================================
+
+      - name: Build FEX UnixLib for AArch64
+        shell: bash
+        run: |
+          set -eux
+
+          cd "$FEX_DIR"
+
+          rm -rf build-unixlib install-unixlib
+
+          mkdir build-unixlib
+          cd build-unixlib
+
+          cmake -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/opt/FEX/install-unixlib \
+            -DCMAKE_INSTALL_LIBDIR=usr/lib/wine/aarch64-unix \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DBUILD_TESTING=False \
+            -DENABLE_LTO=False \
+            -DENABLE_JEMALLOC_GLIBC_ALLOC=False \
+            ../Source/Windows/UnixLib
+
+          ninja -j"$(nproc)"
+          ninja install
+
+      # ============================================================
+      # 11. 检查 FEX 编译结果
+      # ============================================================
+
+      - name: Verify FEX build output
+        shell: bash
+        run: |
+          set -eux
+
+          echo "=== ARM64EC ==="
+
+          find \
+            /opt/FEX/install-arm64ec \
+            -type f \
+            | sort
+
+          echo
+          echo "=== WOW64 ==="
+
+          find \
+            /opt/FEX/install-wow64 \
+            -type f \
+            | sort
+
+          echo
+          echo "=== UnixLib ==="
+
+          find \
+            /opt/FEX/install-unixlib \
+            -type f \
+            | sort
+
+          ARM64EC_DLL="/opt/FEX/install-arm64ec/usr/lib/wine/aarch64-windows/libarm64ecfex.dll"
+          WOW64_DLL="/opt/FEX/install-wow64/usr/lib/wine/aarch64-windows/libwow64fex.dll"
+
+          test -s "$ARM64EC_DLL"
+          test -s "$WOW64_DLL"
+
+          echo
+          echo "ARM64EC FEX:"
+          file "$ARM64EC_DLL"
+
+          echo
+          echo "WOW64 FEX:"
+          file "$WOW64_DLL"
+
+          echo
+          echo "UnixLib ELF:"
+          find \
+            /opt/FEX/install-unixlib/usr/lib/wine/aarch64-unix \
+            -maxdepth 1 \
+            -type f \
+            -print \
+            -exec file {} \;
+
+      # ============================================================
+      # 12. Android / Termux 兼容补丁
+      # ============================================================
+
+      - name: Apply Android / Termux compatibility patches
+        if: env.ANDROID_COMPAT == 'on'
+        shell: bash
+        run: |
+          set -eux
+
+          cd /opt/wine-source
+
+          echo "Applying Termux runtime paths..."
+
+          # --------------------------------------------------------
+          # /tmp
+          # --------------------------------------------------------
 
           find . \
             -type f \
-            \( -name '*.c' -o -name '*.h' -o -name '*.in' -o -name '*.spec' \) \
-            -exec grep -l '/tmp/' {} \; \
-            2>/dev/null \
-            | xargs -r sed -i \
-              's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
+            \( \
+              -name '*.c' \
+              -o -name '*.h' \
+              -o -name '*.in' \
+              -o -name '*.spec' \
+            \) \
+            -print0 \
+          | xargs -0 grep -Il '/tmp/' \
+          | while read -r f; do
+              sed -i \
+                "s#/tmp/#${TERMUX_TMP%/}/#g" \
+                "$f"
+            done || true
 
-          find server \
+          # --------------------------------------------------------
+          # machine-id
+          # --------------------------------------------------------
+
+          if grep -R \
+            -q '/etc/machine-id' \
+            dlls server programs 2>/dev/null; then
+
+            grep -RIl \
+              '/etc/machine-id' \
+              dlls server programs 2>/dev/null \
+            | while read -r f; do
+                sed -i \
+                  "s#/etc/machine-id#${TERMUX_GLIBC_PREFIX}/etc/machine-id#g" \
+                  "$f"
+              done
+          fi
+
+          # --------------------------------------------------------
+          # 特定 Wine memory protection workaround
+          # --------------------------------------------------------
+
+          grep -RIl \
+            'PAGE_READWRITE' \
+            dlls/ntdll \
+            dlls/kernelbase \
+            2>/dev/null \
+          | while read -r f; do
+              sed -i \
+                's/PAGE_READWRITE/PAGE_EXECUTE_READWRITE/g' \
+                "$f"
+            done || true
+
+          # --------------------------------------------------------
+          # Android 地址空间限制
+          # --------------------------------------------------------
+
+          find dlls server \
             -type f \
             \( -name '*.c' -o -name '*.h' \) \
-            -exec sed -i \
-              's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' \
-              {} +
-
-          echo "Termux /tmp 路径修复完成"
-
-
-      # ============================================================
-      # 11. GStreamer / FFmpeg
-      # ============================================================
-
-      - name: 修复 GStreamer / FFmpeg
-        run: |
-          set -eux
-
-          cd "$WINE_SOURCE_DIR/source"
-
-          BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
-
-          if [ "$BRANCH" = "staging" ] ||
-             [ "$BRANCH" = "staging-tkg" ] ||
-             [ "$BRANCH" = "staging-tkg-fsync" ]; then
-
-            if wget -q \
-              -O fix-build_ffmpeg.patch \
-              https://raw.githubusercontent.com/Waim908/wine-termux/main/proton/10.0/fix-build_ffmpeg.patch; then
-
-              patch -p1 -N -t \
-                --no-backup-if-mismatch \
-                < fix-build_ffmpeg.patch \
-                || echo "::warning::FFmpeg 补丁未完全应用"
-
-              rm -f fix-build_ffmpeg.patch
-
-            else
-              echo "::warning::无法下载 FFmpeg 补丁"
-            fi
-          fi
-
-          if grep -q 'gstreamer-gl-1\.0' configure.ac 2>/dev/null; then
-
-            if [ -f /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-gl-1.0.pc ]; then
-              echo "gstreamer-gl-1.0.pc 存在，保留 configure.ac"
-
-            else
-
-              cp configure.ac configure.ac.bak
-
-              sed -i \
-                's/gstreamer-gl-1\.0//g' \
-                configure.ac
-
-              if ! autoconf --force >/dev/null 2>&1; then
-                echo "::warning::configure.ac 修改后 autoconf 检查失败，恢复"
-                mv configure.ac.bak configure.ac
-              else
-                rm -f configure.ac.bak
-              fi
-
-            fi
-          fi
-
-
-      # ============================================================
-      # 12. GstMapInfo
-      # ============================================================
-
-      - name: 修复 GstMapInfo
-        run: |
-          set -eux
-
-          cd "$WINE_SOURCE_DIR/source"
-
-          FILES="$(grep -rl \
-            'GstBufferMapInfo' \
-            dlls \
-            2>/dev/null || true)"
-
-          if [ -n "$FILES" ]; then
-            echo "$FILES" | xargs -r sed -i \
-              's/GstBufferMapInfo/GstMapInfo/g'
-          fi
-
-
-      # ============================================================
-      # 13. machine-id
-      # ============================================================
-
-      - name: 修复 machine-id
-        run: |
-          set -eux
-
-          cd "$WINE_SOURCE_DIR/source"
-
-          FILES="$(grep -rl \
-            '/etc/machine-id' \
-            --include='*.c' \
-            --include='*.h' \
-            . \
-            2>/dev/null || true)"
-
-          if [ -n "$FILES" ]; then
-
-            echo "$FILES" | xargs -r sed -i \
-              's|/etc/machine-id|/data/data/com.termux/files/usr/glibc/etc/machine-id|g'
-
-          fi
-
-
-      # ============================================================
-      # 14. 可选 Android EXECMEM patch
-      # ============================================================
-
-      - name: Android EXECMEM workaround
-        if: ${{ github.event.inputs.android_execmem_patch == 'on' }}
-        run: |
-          set -eux
-
-          cd "$WINE_SOURCE_DIR/source"
-
-          F="dlls/ntdll/loader.c"
-
-          if [ -f "$F" ]; then
-
-            if grep -q \
-              '&size, PAGE_READWRITE, &protect_old\[i\]' \
-              "$F"; then
-
-              sed -i \
-                's/&size, PAGE_READWRITE, &protect_old\[i\]/\&size, PAGE_EXECUTE_READWRITE, \&protect_old[i]/' \
-                "$F"
-
-              echo "EXECUTE_READWRITE workaround applied"
-
-            else
-              echo "::warning::没有匹配到目标代码"
-            fi
-
-          fi
-
-
-      # ============================================================
-      # 15. 可选地址空间 patch
-      # ============================================================
-
-      - name: Android 地址空间 workaround
-        if: ${{ github.event.inputs.address_space_patch == 'on' }}
-        run: |
-          set -eux
-
-          cd "$WINE_SOURCE_DIR/source"
-
-          F="dlls/ntdll/unix/virtual.c"
-
-          if [ ! -f "$F" ]; then
-            echo "::warning::$F 不存在"
-            exit 0
-          fi
-
-          if grep -q '0x7fffffff0000' "$F"; then
-
-            sed -i \
+            -print0 2>/dev/null \
+          | xargs -0 sed -i \
               's/0x7fffffff0000/0x7fffff0000/g' \
-              "$F"
+              2>/dev/null || true
 
-          fi
-
-          if grep -q \
-            'reserve_area.*0x7ffffe000000' \
-            "$F"; then
-
-            sed -i \
-              '/reserve_area.*0x7ffffe000000/d' \
-              "$F"
-
-          fi
-
+          echo "Android compatibility patches applied."
 
       # ============================================================
-      # 16. mfplat
+      # 13. GStreamer / mfplat 修复
       # ============================================================
 
-      - name: 应用 mfplat 补丁
+      - name: Apply multimedia compatibility patches
+        shell: bash
         run: |
           set -eux
 
-          BUILD_TYPE="${{ github.event.inputs.build_type || 'wow64' }}"
-          BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
+          cd /opt/wine-source
 
-          if [ "$BUILD_TYPE" = "proton" ]; then
-            echo "proton 构建跳过 mfplat"
-            exit 0
-          fi
+          # GstMapInfo 兼容性修复
+          find dlls \
+            -type f \
+            \( -name '*.c' -o -name '*.h' \) \
+            -print0 2>/dev/null \
+          | xargs -0 sed -i \
+              's/GstMapInfoInfo/GstMapInfo/g' \
+              2>/dev/null || true
 
-          case "$BRANCH" in
-            staging|staging-tkg|staging-tkg-fsync)
-              ;;
-            *)
-              echo "$BRANCH 跳过 mfplat"
-              exit 0
-              ;;
-          esac
+          # 已知 Wine/GStreamer 兼容问题
+          grep -RIl \
+            'PAGE_READWRITE' \
+            dlls/mfplat \
+            dlls/winegstreamer \
+            2>/dev/null \
+          | while read -r f; do
+              sed -i \
+                's/PAGE_READWRITE/PAGE_EXECUTE_READWRITE/g' \
+                "$f"
+            done || true
 
-          cd "$WINE_SOURCE_DIR/source"
-
-          PURE_VERSION="${WINE_VERSION_ACTUAL#wine-}"
-          VERSION_MAJOR="$(echo "$PURE_VERSION" | cut -d. -f1)"
-          VERSION_MINOR="$(echo "$PURE_VERSION" | cut -d. -f2)"
-
-          if [ "${VERSION_MAJOR:-0}" -gt 9 ] ||
-             {
-               [ "${VERSION_MAJOR:-0}" -eq 9 ] &&
-               [ "${VERSION_MINOR:-0}" -ge 10 ];
-             }; then
-
-            if wget -q \
-              -O wine_do_not_create_dxgi_manager2.patch \
-              https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch; then
-
-              patch -p1 -N -t \
-                --no-backup-if-mismatch \
-                < wine_do_not_create_dxgi_manager2.patch \
-                || echo "::warning::mfplat patch 未完全应用"
-
-              rm -f wine_do_not_create_dxgi_manager2.patch
-            fi
-
-          else
-
-            if wget -q \
-              -O fix_wine9.2_mfplat.sh \
-              https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh; then
-
-              chmod +x fix_wine9.2_mfplat.sh
-
-              ./fix_wine9.2_mfplat.sh \
-                || echo "::warning::旧 mfplat patch 执行失败"
-
-              rm -f fix_wine9.2_mfplat.sh
-            fi
-
-          fi
-
+          echo "Multimedia compatibility patches applied."
 
       # ============================================================
-      # 17. autogen
+      # 14. Proton/Wine 特定补丁
       # ============================================================
 
-      - name: 生成 configure
+      - name: Apply Wine branch patches
+        shell: bash
         run: |
           set -eux
 
-          cd "$WINE_SOURCE_DIR/source"
+          cd /opt/wine-source
 
-          if [ ! -f configure ]; then
+          # 某些自定义 Wine 树带有 disable_gl.py
+          if [ -f disable_gl.py ]; then
+            python3 disable_gl.py || true
+          fi
+
+          # proton-9-arm64ec 兼容配置
+          if [ "$WINE_BRANCH" = "proton9-arm64ec" ]; then
+
+            echo "Applying Proton ARM64EC compatibility options..."
+
+            # 仅在源码存在时进行修改
+            if [ -f configure.ac ]; then
+              sed -i \
+                '/gstreamer-gl-1.0/d' \
+                configure.ac || true
+            fi
+          fi
+
+      # ============================================================
+      # 15. 生成 configure
+      # ============================================================
+
+      - name: Generate Wine configure
+        shell: bash
+        run: |
+          set -eux
+
+          cd /opt/wine-source
+
+          if [ -x ./autogen.sh ]; then
             ./autogen.sh
+          elif [ -x ./configure ]; then
+            echo "configure already exists."
+          else
+            autoreconf -fi
           fi
 
+          test -x ./configure
 
       # ============================================================
-      # 18. 构建 native Wine tools
+      # 16. 构建 Native Wine tools
       # ============================================================
 
-      - name: 构建 native Wine tools
+      - name: Build native Wine tools
+        shell: bash
         run: |
           set -eux
 
-          mkdir -p "$WINE64_DIR"
+          cd /opt/wine-source
 
-          cp -a \
-            "$WINE_SOURCE_DIR/source" \
-            "$WINE64_DIR/source"
+          rm -rf /opt/wine64-build
+          mkdir -p /opt/wine64-build
 
-          cd "$WINE64_DIR"
+          cd /opt/wine64-build
 
-          mkdir -p amd64
-
-          cd amd64
-
-          ../source/configure \
+          /opt/wine-source/configure \
+            --prefix="$WINE_NATIVE" \
             --enable-win64 \
-            --prefix=/usr/local
+            --disable-tests \
+            --without-wayland
 
-          make __tooldeps__ -j"$(nproc)"
+          make -j"$(nproc)"
 
-          make -C nls
-
-          mkdir -p /opt/nls-backup
-
-          cp -aL \
-            nls/. \
-            /opt/nls-backup/
-
-          test -f /opt/nls-backup/locale.nls
-
-          echo "NLS backup OK"
-
+          make install
 
       # ============================================================
-      # 19. native tools copy
+      # 17. 配置 ARM64 WOW64
       # ============================================================
 
-      - name: 准备 Wine native tools
+      - name: Configure ARM64 WOW64 Wine
+        shell: bash
         run: |
           set -eux
 
-          mkdir -p /opt/wine64-native
+          export PATH="$LLVM_MINGW_DIR/bin:$PATH"
 
-          cp -aL \
-            "$WINE64_DIR/amd64/." \
-            /opt/wine64-native/
+          cd /opt/wine-source
 
-          test -f \
-            /opt/wine64-native/nls/locale.nls
+          rm -rf /opt/wine-wow64-build
+          mkdir -p /opt/wine-wow64-build
 
-
-      # ============================================================
-      # 20. ARM64 WOW64 configure
-      # ============================================================
-
-      - name: 配置 ARM64 WOW64
-        run: |
-          set -eux
-
-          cd "$WINE_SOURCE_DIR/source"
-
-          rm -rf build-arm64
-
-          mkdir build-arm64
-          cd build-arm64
-
-          export PATH="/opt/${LLVMMINGW_NAME}/bin:$PATH"
-
-          unset PKG_CONFIG_PATH
-          unset PKG_CONFIG_LIBDIR
-
-          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
-          export PKG_CONFIG_SYSROOT_DIR=/
-          export PKG_CONFIG_ALLOW_CROSS=1
-
-          echo "=== pkg-config ==="
-
-          pkg-config --modversion gstreamer-1.0
-          pkg-config --modversion gstreamer-video-1.0
-          pkg-config --modversion gstreamer-app-1.0
-          pkg-config --modversion freetype2
-          pkg-config --modversion libpulse
-          pkg-config --modversion libavcodec || true
-
-          export CFLAGS="-O3 -pipe"
-          export CXXFLAGS="-O3 -pipe"
-
-          export CROSSCFLAGS="-O3 -pipe"
-          export CROSSCXXFLAGS="-O3 -pipe"
-
-          export LDFLAGS="
-            -s
-            -L/usr/lib/aarch64-linux-gnu
-            -Wl,--dynamic-linker=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1
-            -Wl,-rpath=/data/data/com.termux/files/usr/glibc/lib
-          "
-
-          export WINE_NLS_DIR=/opt/wine64-native/nls
-
-          BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
+          cd /opt/wine-wow64-build
 
           EXTRA=""
 
-          if [ "$BRANCH" = "proton9-arm64ec" ]; then
+          # --------------------------------------------------------
+          # Termux X11
+          # --------------------------------------------------------
 
-            EXTRA="
-              --enable-wineandroid_drv=no
-              --with-pulse
-              --with-pthread
-              --with-freetype
-              --without-dbus
-              --with-xshm
-              --without-wayland
-              --without-pcsclite
-              --without-cups
-              --without-v4l2
-              --without-oss
-              --without-udev
-              --without-usb
-              --without-sane
-              --without-capi
-              --without-opencl
-              --without-pcap
-              --without-gphoto
-            "
+          EXTRA="$EXTRA --without-wayland"
 
-            if pkg-config --exists libavcodec; then
-              EXTRA="$EXTRA --with-ffmpeg"
-            fi
+          # --------------------------------------------------------
+          # Preloader
+          # --------------------------------------------------------
 
-          fi
-
-          if [ "${{ github.event.inputs.preloader || 'on' }}" = "off" ]; then
+          if [ "$PRELOADER" = "off" ]; then
             EXTRA="$EXTRA --disable-preloader"
           fi
 
-          echo "=== configure ==="
+          # --------------------------------------------------------
+          # Proton ARM64EC
+          # --------------------------------------------------------
 
-          ../configure \
-            --prefix=/tmp/wine-install-wow64 \
+          if [ "$WINE_BRANCH" = "proton9-arm64ec" ]; then
+            EXTRA="$EXTRA --without-capi"
+            EXTRA="$EXTRA --without-cups"
+            EXTRA="$EXTRA --without-dbus"
+            EXTRA="$EXTRA --without-gettext"
+            EXTRA="$EXTRA --without-gphoto"
+            EXTRA="$EXTRA --without-gssapi"
+            EXTRA="$EXTRA --without-inotify"
+            EXTRA="$EXTRA --without-krb5"
+            EXTRA="$EXTRA --without-ldap"
+            EXTRA="$EXTRA --without-oss"
+            EXTRA="$EXTRA --without-pcap"
+            EXTRA="$EXTRA --without-pcsclite"
+            EXTRA="$EXTRA --without-sane"
+            EXTRA="$EXTRA --without-sdl"
+            EXTRA="$EXTRA --without-udev"
+            EXTRA="$EXTRA --without-usb"
+          fi
+
+          export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
+          export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1
+
+          export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
+          export PKG_CONFIG_LIBDIR="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          export PKG_CONFIG_SYSROOT_DIR="/"
+
+          export CC="ccache aarch64-linux-gnu-gcc"
+
+          export CFLAGS="-O2"
+          export CXXFLAGS="-O2"
+
+          export LDFLAGS="-Wl,--dynamic-linker=${TERMUX_GLIBC_PREFIX}/lib/ld-linux-aarch64.so.1"
+
+          /opt/wine-source/configure \
+            --prefix="$WINE_INSTALL" \
             --with-mingw=clang \
-            --enable-archs=arm64ec,aarch64,i386,x86_64 \
+            --enable-archs=arm64ec,aarch64,i386 \
             --enable-tools \
             --disable-tests \
             --with-vulkan \
             --with-gstreamer \
             --host=aarch64-linux-gnu \
-            host_alias=aarch64-linux-gnu \
-            build_alias=x86_64-linux-gnu \
-            --with-wine-tools=/opt/wine64-native \
+            --build=x86_64-linux-gnu \
+            --host_alias=aarch64-linux-gnu \
+            --build_alias=x86_64-linux-gnu \
+            --with-wine-tools="$WINE_NATIVE" \
             $EXTRA \
-            CC=aarch64-linux-gnu-gcc \
-            CXX=aarch64-linux-gnu-g++
-
-          echo "=== Cross compiler detection ==="
-
-          grep -E \
-            '^(i386|x86_64|aarch64|arm64ec)_CC=' \
-            config.log \
-            || true
-
-          for var in \
-            i386_CC \
-            x86_64_CC \
-            aarch64_CC \
-            arm64ec_CC; do
-
-            VALUE="$(grep "^${var}=" config.log | tail -1 | cut -d= -f2- || true)"
-
-            echo "$var = $VALUE"
-
-            if [ -z "$VALUE" ] ||
-               [ "$VALUE" = "false" ]; then
-
-              echo "::error::$var 没有找到有效 cross compiler"
-              exit 1
-
-            fi
-
-          done
-
+            CC="$CC"
 
       # ============================================================
-      # 21. 编译 Wine
+      # 18. 构建 ARM64 WOW64
       # ============================================================
 
-      - name: 编译 ARM64 WOW64
+      - name: Build ARM64 WOW64 Wine
+        shell: bash
         run: |
           set -eux
 
-          cd "$WINE_SOURCE_DIR/source/build-arm64"
+          export PATH="$LLVM_MINGW_DIR/bin:$PATH"
+
+          cd /opt/wine-wow64-build
+
+          if [ "$BUILD_PROFILE" = "debug" ]; then
+            export CFLAGS="-O0 -g"
+            export CXXFLAGS="-O0 -g"
+          else
+            export CFLAGS="-O2"
+            export CXXFLAGS="-O2"
+          fi
 
           make -j"$(nproc)"
 
-
       # ============================================================
-      # 22. 安装
+      # 19. 安装 Wine
       # ============================================================
 
-      - name: 安装 ARM64 WOW64
+      - name: Install Wine
+        shell: bash
         run: |
           set -eux
 
-          cd "$WINE_SOURCE_DIR/source/build-arm64"
+          cd /opt/wine-wow64-build
+
+          rm -rf "$WINE_INSTALL"
 
           make install
 
-          test -d /tmp/wine-install-wow64/bin
-
+          test -d "$WINE_INSTALL"
 
       # ============================================================
-      # 23. 补全 NLS / fonts / wine.inf
+      # 20. 安装 FEX 到 Wine
       # ============================================================
 
-      - name: 补全 Wine runtime
+      - name: Install FEX into Wine
+        shell: bash
         run: |
           set -eux
 
-          TARGET="/tmp/wine-install-wow64"
-          BUILD="$WINE_SOURCE_DIR/source/build-arm64"
-          SOURCE="$WINE_SOURCE_DIR/source"
+          FEX_WIN="$WINE_INSTALL/lib/wine/aarch64-windows"
+          FEX_UNIX="$WINE_INSTALL/lib/wine/aarch64-unix"
 
-          mkdir -p \
-            "$TARGET/share/wine/nls" \
-            "$TARGET/share/wine/fonts" \
-            "$TARGET/lib/wine/aarch64-windows" \
-            "$TARGET/lib/wine/aarch64-unix"
+          mkdir -p "$FEX_WIN"
+          mkdir -p "$FEX_UNIX"
 
-          # NLS
-          cp -aL \
-            /opt/nls-backup/. \
-            "$TARGET/share/wine/nls/"
+          # --------------------------------------------------------
+          # FEX WOW64
+          # --------------------------------------------------------
 
-          # fonts
-          if [ -d "$SOURCE/fonts" ]; then
-            cp -a \
-              "$SOURCE/fonts/"*.ttf \
-              "$SOURCE/fonts/"*.fon \
-              "$TARGET/share/wine/fonts/" \
-              2>/dev/null || true
-          fi
+          install -Dm644 \
+            /opt/FEX/install-wow64/usr/lib/wine/aarch64-windows/libwow64fex.dll \
+            "$FEX_WIN/libwow64fex.dll"
 
-          # wine.inf
-          WINE_INF=""
+          # --------------------------------------------------------
+          # FEX ARM64EC
+          # --------------------------------------------------------
 
-          WINE_INF="$(find "$BUILD" \
-            -name wine.inf \
-            -type f \
-            2>/dev/null \
-            | head -1)"
+          install -Dm644 \
+            /opt/FEX/install-arm64ec/usr/lib/wine/aarch64-windows/libarm64ecfex.dll \
+            "$FEX_WIN/libarm64ecfex.dll"
 
-          if [ -z "$WINE_INF" ] &&
-             [ -f "$SOURCE/dlls/wine.inf/wine.inf" ]; then
-            WINE_INF="$SOURCE/dlls/wine.inf/wine.inf"
-          fi
+          # --------------------------------------------------------
+          # FEX UnixLib
+          # --------------------------------------------------------
 
-          if [ -n "$WINE_INF" ]; then
-            cp -v \
-              "$WINE_INF" \
-              "$TARGET/share/wine/wine.inf"
-          else
-            echo "::warning::没有找到 wine.inf"
-          fi
+          cp -a \
+            /opt/FEX/install-unixlib/usr/lib/wine/aarch64-unix/. \
+            "$FEX_UNIX/"
 
+          echo
+          echo "Installed FEX Windows DLLs:"
+          ls -lah "$FEX_WIN"
+
+          echo
+          echo "Installed FEX UnixLib:"
+          find "$FEX_UNIX" -maxdepth 1 -type f -ls
 
       # ============================================================
-      # 24. 安装 FEX
+      # 21. 自动检查 Wine + FEX
       # ============================================================
 
-      - name: 安装 FEX 到 Wine
+      - name: Verify Wine ARM64 WOW64 package
+        shell: bash
         run: |
           set -eux
 
-          TARGET="/tmp/wine-install-wow64"
-          FEX_ROOT="$FEX_SOURCE_DIR/install"
+          TARGET="$WINE_INSTALL"
 
-          mkdir -p \
-            "$TARGET/lib/wine/aarch64-windows" \
-            "$TARGET/lib/wine/aarch64-unix" \
-            "$TARGET/share/fex-emu"
-
-          # --------------------------------------------------------
-          # Windows ARM64EC
-          # --------------------------------------------------------
-
-          ARM64EC_DLL="$(find "$FEX_ROOT" \
-            -name libarm64ecfex.dll \
-            -type f \
-            | head -1)"
-
-          # --------------------------------------------------------
-          # Windows AArch64 WOW64
-          # --------------------------------------------------------
-
-          WOW64_DLL="$(find "$FEX_ROOT" \
-            -name libwow64fex.dll \
-            -type f \
-            | head -1)"
-
-          test -n "$ARM64EC_DLL"
-          test -n "$WOW64_DLL"
-
-          cp -av \
-            "$ARM64EC_DLL" \
-            "$TARGET/lib/wine/aarch64-windows/"
-
-          cp -av \
-            "$WOW64_DLL" \
-            "$TARGET/lib/wine/aarch64-windows/"
-
-
-          # --------------------------------------------------------
-          # UnixLib
-          # --------------------------------------------------------
-
-          UNIXLIB_DIR="$(find "$FEX_ROOT" \
-            -type d \
-            -path '*/aarch64-unix' \
-            | head -1)"
-
-          if [ -z "$UNIXLIB_DIR" ]; then
-            echo "::error::没有找到 FEX aarch64-unix UnixLib"
-            find "$FEX_ROOT" -maxdepth 6 -type f | sort
-            exit 1
-          fi
-
-          cp -av \
-            "$UNIXLIB_DIR/." \
-            "$TARGET/lib/wine/aarch64-unix/"
-
-
-          # --------------------------------------------------------
-          # Config.json
-          # --------------------------------------------------------
-
-          FEX_CONFIG="$(find "$FEX_ROOT" \
-            -name Config.json \
-            -type f \
-            | head -1 || true)"
-
-          if [ -n "$FEX_CONFIG" ]; then
-            cp -av \
-              "$FEX_CONFIG" \
-              "$TARGET/share/fex-emu/Config.json"
-          else
-            echo "::warning::FEX Config.json 不存在"
-          fi
-
-
-      # ============================================================
-      # 25. 验证 FEX runtime
-      # ============================================================
-
-      - name: 验证 FEX runtime
-        run: |
-          set -eux
-
-          TARGET="/tmp/wine-install-wow64"
-
-          test -f \
-            "$TARGET/lib/wine/aarch64-windows/libwow64fex.dll"
-
-          test -f \
-            "$TARGET/lib/wine/aarch64-windows/libarm64ecfex.dll"
-
-          test -d \
-            "$TARGET/lib/wine/aarch64-unix"
-
-          echo "=== Windows FEX ==="
-
-          file \
-            "$TARGET/lib/wine/aarch64-windows/"*.dll
-
-          echo "=== UnixLib ==="
-
-          find \
-            "$TARGET/lib/wine/aarch64-unix" \
-            -maxdepth 1 \
-            -type f \
-            -print
-
-          echo "=== FEX files ==="
-
-          find \
-            "$TARGET/lib/wine" \
-            -maxdepth 2 \
-            -type f \
-            | sort
-
-
-      # ============================================================
-      # 26. Wine runtime 完整性
-      # ============================================================
-
-      - name: 验证 Wine runtime
-        run: |
-          set -eux
-
-          TARGET="/tmp/wine-install-wow64"
+          echo
+          echo "======================================"
+          echo "Checking Wine binaries"
+          echo "======================================"
 
           for f in \
             wine \
             wineserver \
             wineboot \
             winecfg \
-            regedit; do
-
-            if [ ! -f "$TARGET/bin/$f" ] &&
-               [ ! -L "$TARGET/bin/$f" ]; then
-
-              echo "::error::缺少 $f"
+            regedit
+          do
+            if [ ! -e "$TARGET/bin/$f" ]; then
+              echo "ERROR: missing $TARGET/bin/$f"
               exit 1
-
             fi
 
+            echo "OK: $TARGET/bin/$f"
+            file "$TARGET/bin/$f" || true
           done
 
-          test -f "$TARGET/share/wine/nls/locale.nls"
+          echo
+          echo "======================================"
+          echo "Checking Wine directories"
+          echo "======================================"
 
-          test -d "$TARGET/lib/wine/aarch64-windows"
+          for d in \
+            "$TARGET/lib/wine/aarch64-windows" \
+            "$TARGET/lib/wine/aarch64-unix" \
+            "$TARGET/lib/wine/i386-windows" \
+            "$TARGET/lib/wine/x86_64-windows"
+          do
+            if [ ! -d "$d" ]; then
+              echo "ERROR: missing directory:"
+              echo "  $d"
+              exit 1
+            fi
 
-          test -d "$TARGET/lib/wine/aarch64-unix"
+            echo "OK: $d"
+          done
 
-          echo "Wine runtime validation OK"
+          echo
+          echo "======================================"
+          echo "Checking FEX Windows DLLs"
+          echo "======================================"
 
+          FEX_WIN="$TARGET/lib/wine/aarch64-windows"
+
+          test -s "$FEX_WIN/libwow64fex.dll"
+          test -s "$FEX_WIN/libarm64ecfex.dll"
+
+          echo
+          echo "libwow64fex.dll:"
+          file "$FEX_WIN/libwow64fex.dll"
+
+          echo
+          echo "libarm64ecfex.dll:"
+          file "$FEX_WIN/libarm64ecfex.dll"
+
+          echo
+          echo "======================================"
+          echo "Checking FEX UnixLib"
+          echo "======================================"
+
+          FEX_UNIX="$TARGET/lib/wine/aarch64-unix"
+
+          test -d "$FEX_UNIX"
+
+          UNIXLIB_COUNT="$(
+            find "$FEX_UNIX" \
+              -maxdepth 1 \
+              -type f \
+              \( -name '*.so' -o -name '*.so.*' \) \
+              | wc -l
+          )"
+
+          if [ "$UNIXLIB_COUNT" -eq 0 ]; then
+            echo "ERROR: no FEX UnixLib found"
+            exit 1
+          fi
+
+          find "$FEX_UNIX" \
+            -maxdepth 1 \
+            -type f \
+            -exec file {} \;
+
+          echo
+          echo "======================================"
+          echo "Checking PE / ELF architecture"
+          echo "======================================"
+
+          file \
+            "$FEX_WIN/libwow64fex.dll" \
+            "$FEX_WIN/libarm64ecfex.dll"
+
+          find "$FEX_UNIX" \
+            -maxdepth 1 \
+            -type f \
+            -name '*.so*' \
+            -exec readelf -h {} \; \
+            | grep -E \
+                'Class:|Data:|Machine:' \
+            || true
+
+          echo
+          echo "======================================"
+          echo "Checking Wine FEX references"
+          echo "======================================"
+
+          find "$TARGET/lib/wine" \
+            -type f \
+            \( \
+              -iname '*fex*.dll' \
+              -o -iname '*fex*.so*' \
+            \) \
+            -print
+
+          echo
+          echo "======================================"
+          echo "Wine ARM64 WOW64 verification: PASS"
+          echo "======================================"
 
       # ============================================================
-      # 27. Wine ELF 检查
+      # 22. 创建 machine-id / runtime 目录说明
       # ============================================================
 
-      - name: 检查 Wine ELF
+      - name: Create package runtime information
+        shell: bash
         run: |
           set -eux
 
-          TARGET="/tmp/wine-install-wow64"
+          mkdir -p "$WINE_INSTALL/etc"
 
-          file "$TARGET/bin/wine"
-          file "$TARGET/bin/wineserver"
+          cat > "$WINE_INSTALL/BUILD-INFO.txt" <<EOF
+          Wine ARM64 WOW64
 
-          readelf -h "$TARGET/bin/wine" | \
-            grep -E \
-            'Class:|Machine:|Type:'
+          Wine branch:
+          $WINE_BRANCH
 
+          Wine version:
+          $WINE_VERSION
 
-      # ============================================================
-      # 28. 生成 manifest
-      # ============================================================
+          Wine commit:
+          $(cd /opt/wine-source && git rev-parse HEAD)
 
-      - name: 生成构建 manifest
-        run: |
-          set -eux
+          FEX ref:
+          $FEX_REF
 
-          TARGET="/tmp/wine-install-wow64"
+          FEX commit:
+          $(cd /opt/FEX && git rev-parse HEAD)
 
-          cat > "$TARGET/BUILD-MANIFEST.txt" << EOF
-          ==========================================
-          Wine ARM64 WOW64 Build Manifest
-          ==========================================
+          Build profile:
+          $BUILD_PROFILE
 
-          Wine:
-            describe = ${WINE_DESCRIBE}
-            commit   = ${WINE_COMMIT}
-            short    = ${WINE_COMMIT_SHORT}
+          Preloader:
+          $PRELOADER
 
-          FEX:
-            requested = ${FEX_REF}
-            describe  = ${FEX_DESCRIBE}
-            commit    = ${FEX_COMMIT}
-            short     = ${FEX_COMMIT_SHORT}
+          Android compatibility:
+          $ANDROID_COMPAT
 
-          llvm-mingw:
-            date = ${LLVMMINGW_DATE}
-            name = ${LLVMMINGW_NAME}
+          Architecture:
+          arm64ec,aarch64,i386
 
-          Build:
-            branch = ${{ github.event.inputs.wine_branch || 'staging' }}
-            type   = ${{ github.event.inputs.build_type || 'wow64' }}
-            preloader = ${{ github.event.inputs.preloader || 'on' }}
-            android_execmem_patch = ${{ github.event.inputs.android_execmem_patch || 'off' }}
-            address_space_patch = ${{ github.event.inputs.address_space_patch || 'off' }}
-
-          Host:
-            Debian = 12
-            host   = x86_64
-            target = aarch64
-
-          PE architectures:
-            i386
-            x86_64
-            aarch64
-            arm64ec
-
-          FEX runtime:
-            libwow64fex.dll
-            libarm64ecfex.dll
-            aarch64-unix UnixLib
-
-          GitHub:
-            workflow = ${{ github.workflow }}
-            sha      = ${{ github.sha }}
-            run_id   = ${{ github.run_id }}
-
-          ==========================================
+          Termux glibc prefix:
+          $TERMUX_GLIBC_PREFIX
           EOF
 
+          cat "$WINE_INSTALL/BUILD-INFO.txt"
 
       # ============================================================
-      # 29. Termux README
+      # 23. 打包前最终检查
       # ============================================================
 
-      - name: 生成 Termux 部署说明
+      - name: Final package sanity check
+        shell: bash
         run: |
           set -eux
 
-          TARGET="/tmp/wine-install-wow64"
+          TARGET="$WINE_INSTALL"
 
-          cat > "$TARGET/README-TERMUX.txt" << EOF
-          ==========================================
-          Wine ARM64 WOW64 for Termux glibc
-          ==========================================
+          test -x "$TARGET/bin/wine"
+          test -x "$TARGET/bin/wineserver"
 
-          Build:
-            ${BUILD_NAME}
+          test -s \
+            "$TARGET/lib/wine/aarch64-windows/libwow64fex.dll"
 
-          Wine:
-            ${WINE_DESCRIBE}
-            commit: ${WINE_COMMIT}
+          test -s \
+            "$TARGET/lib/wine/aarch64-windows/libarm64ecfex.dll"
 
-          FEX:
-            ${FEX_DESCRIBE}
-            commit: ${FEX_COMMIT}
+          test -d \
+            "$TARGET/lib/wine/aarch64-unix"
 
-          llvm-mingw:
-            ${LLVMMINGW_NAME}
+          test -f \
+            "$TARGET/BUILD-INFO.txt"
 
-          ==========================================
-          安装
-          ==========================================
-
-          建议：
-
-          /data/data/com.termux/files/usr/glibc/opt/${BUILD_NAME}
-
-          保持目录结构完整。
-
-          ==========================================
-          环境变量
-          ==========================================
-
-          export WINE_DIR=/data/data/com.termux/files/usr/glibc/opt/${BUILD_NAME}
-
-          export PATH="\$WINE_DIR/bin:\$PATH"
-
-          export LD_LIBRARY_PATH="\$WINE_DIR/lib:/data/data/com.termux/files/usr/glibc/lib"
-
-          export WINEDLLPATH="\$WINE_DIR/lib/wine"
-
-          export WINEPREFIX="\$HOME/.wine"
-
-          export WINEESYNC=0
-
-          export DISPLAY=:0
-
-          ==========================================
-          FEX
-          ==========================================
-
-          ARM64EC:
-            lib/wine/aarch64-windows/libarm64ecfex.dll
-
-          WOW64:
-            lib/wine/aarch64-windows/libwow64fex.dll
-
-          UnixLib:
-            lib/wine/aarch64-unix/
-
-          ==========================================
-          machine-id
-          ==========================================
-
-          F=/data/data/com.termux/files/usr/glibc/etc/machine-id
-
-          [ -s "\$F" ] || \
-            head -c 16 /dev/urandom | \
-            od -An -tx1 | \
-            tr -d ' \n' > "\$F"
-
-          ==========================================
-          图形
-          ==========================================
-
-          export DISPLAY=:0
-
-          Termux:X11：
-
-          DISPLAY=:0
-
-          Vulkan / DXVK：
-
-          根据你的 Termux Turnip 环境自行设置：
-
-          VK_ICD_FILENAMES=...
-          MESA_LOADER_DRIVER_OVERRIDE=zink
-
-          ==========================================
-          注意
-          ==========================================
-
-          1. WINEESYNC 建议关闭。
-
-          2. Android/Termux 下 /tmp 通常不能直接作为 Wine runtime
-             的可靠临时目录，本构建已针对部分 Wine / server 路径
-             使用 Termux tmp。
-
-          3. 如果出现：
-
-             libwow64fex.dll
-             libarm64ecfex.dll
-             fexcore
-             UnixLib
-
-             相关崩溃，首先检查 Wine/FEX commit 是否匹配。
-
-          4. FEX 32-bit Windows backend 目前仍属于需要实际游戏验证
-             的部分，不要假设所有 Win32 程序都和 Win64 ARM64EC
-             程序具有相同兼容性。
-
-          5. 如果遇到 Android seccomp SIGSYS，可以重新构建：
-
-             preloader = off
-
-          6. 如果遇到 Android EXECMEM / SELinux 相关问题，可以尝试：
-
-             android_execmem_patch = on
-
-          7. 地址空间 workaround 默认关闭。
-             如果特定 Android 环境出现地址空间 mmap 问题，
-             再使用：
-
-             address_space_patch = on
-
-          ==========================================
-          EOF
-
+          echo
+          echo "Package sanity check: PASS"
 
       # ============================================================
-      # 30. 打包
+      # 24. 生成包名
       # ============================================================
 
-      - name: 准备打包
+      - name: Prepare package
+        shell: bash
         run: |
           set -eux
 
-          PACKAGE_NAME="${BUILD_NAME}"
+          DATE="$(date -u +%Y%m%d)"
+
+          SHORT_WINE="$(cd /opt/wine-source && git rev-parse --short HEAD)"
+          SHORT_FEX="$(cd /opt/FEX && git rev-parse --short HEAD)"
+
+          PACKAGE_NAME="wine-arm64-wow64-${DATE}-${SHORT_WINE}-${SHORT_FEX}"
+
+          echo "PACKAGE_NAME=$PACKAGE_NAME" >> "$GITHUB_ENV"
 
           rm -rf wine-package
+          mkdir -p "wine-package/$PACKAGE_NAME"
 
-          mkdir -p \
-            "wine-package/${PACKAGE_NAME}"
+          cp -a "$WINE_INSTALL"/. \
+            "wine-package/$PACKAGE_NAME/"
 
-          cp -a \
-            /tmp/wine-install-wow64/. \
-            "wine-package/${PACKAGE_NAME}/"
+          echo
+          echo "Package:"
+          du -sh "wine-package/$PACKAGE_NAME"
 
+      # ============================================================
+      # 25. 创建 tar.xz
+      # ============================================================
 
-      - name: 创建 tar.xz
+      - name: Create tarball
+        shell: bash
         run: |
           set -eux
 
-          PACKAGE_NAME="${BUILD_NAME}"
-
-          tar -cJf \
+          tar \
+            -cJf \
             "${PACKAGE_NAME}.tar.xz" \
             -C wine-package \
             "$PACKAGE_NAME"
 
-          ls -lh \
-            "${PACKAGE_NAME}.tar.xz"
+          test -s "${PACKAGE_NAME}.tar.xz"
 
-
-      # ============================================================
-      # 31. checksum
-      # ============================================================
-
-      - name: Generate checksums
-        run: |
-          set -eux
-
-          sha256sum \
-            *.tar.xz \
-            > checksums.txt
-
-          cat checksums.txt
-
+          echo
+          echo "Tarball:"
+          ls -lh "${PACKAGE_NAME}.tar.xz"
 
       # ============================================================
-      # 32. Artifact
+      # 26. Upload Artifact
       # ============================================================
 
-      - name: Upload Wine artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Wine-${{ github.event.inputs.wine_branch || 'staging' }}-${{ github.event.inputs.wine_version || 'latest' }}-ARM64-WOW64
+          name: ${{ env.PACKAGE_NAME }}
           path: |
-            *.tar.xz
-            checksums.txt
+            ${{ env.PACKAGE_NAME }}.tar.xz
+          compression-level: 0
           retention-days: 30
 
-
       # ============================================================
-      # 33. GitHub Release
+      # 27. GitHub Release
       # ============================================================
 
-      - name: 发布 Wine Release
+      - name: Create GitHub Release
         if: github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.BUILD_NAME }}
-
-          name: Wine ARM64 WOW64 ${{ env.WINE_DESCRIBE }}
-
-          body: |
-            # Wine ARM64 WOW64 for Termux glibc
-
-            ## Wine
-
-            - Version: ${{ env.WINE_DESCRIBE }}
-            - Commit: ${{ env.WINE_COMMIT }}
-            - Branch: ${{ github.event.inputs.wine_branch || 'staging' }}
-
-            ## FEX
-
-            - Requested: ${{ env.FEX_REF }}
-            - Version: ${{ env.FEX_DESCRIBE }}
-            - Commit: ${{ env.FEX_COMMIT }}
-
-            ## Architecture
-
-            - Host: x86_64 Debian 12
-            - Target: ARM64
-            - Windows PE:
-              - i386
-              - x86_64
-              - aarch64
-              - arm64ec
-
-            ## FEX
-
-            - libwow64fex.dll
-            - libarm64ecfex.dll
-            - FEX aarch64 UnixLib
-
-            ## Features
-
-            - ARM64 native Wine
-            - Wine WOW64
-            - ARM64EC
-            - FEX x86/x64 emulation backend
-            - Vulkan
-            - GStreamer
-            - FFmpeg
-            - PulseAudio
-            - X11
-            - Chinese NLS
-            - Termux glibc runtime adjustments
-
-            ## Android compatibility switches
-
-            - preloader: ${{ github.event.inputs.preloader || 'on' }}
-            - android_execmem_patch: ${{ github.event.inputs.android_execmem_patch || 'off' }}
-            - address_space_patch: ${{ github.event.inputs.address_space_patch || 'off' }}
-
-            ## Important
-
-            FEX is built separately for:
-
-            - ARM64EC
-            - ARM64 WOW64
-            - ARM64 UnixLib
-
-            Wine and FEX commits are recorded in:
-
-            `BUILD-MANIFEST.txt`
-
+          tag_name: ${{ env.PACKAGE_NAME }}
+          name: ${{ env.PACKAGE_NAME }}
           files: |
-            ${{ github.workspace }}/${{ env.BUILD_NAME }}.tar.xz
-            ${{ github.workspace }}/checksums.txt
+            ${{ env.PACKAGE_NAME }}.tar.xz
+          body: |
+            # Wine ARM64 WOW64
 
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            ## Build
+
+            - Wine branch: `${{ env.WINE_BRANCH }}`
+            - Wine version: `${{ env.WINE_VERSION }}`
+            - FEX ref: `${{ env.FEX_REF }}`
+            - Build profile: `${{ env.BUILD_PROFILE }}`
+            - Preloader: `${{ env.PRELOADER }}`
+            - Android compatibility: `${{ env.ANDROID_COMPAT }}`
+
+            ## Architectures
+
+            - ARM64EC
+            - AArch64 WOW64
+            - i386 Windows
+            - x86_64 Windows
+
+            ## FEX
+
+            Included:
+
+            - `libwow64fex.dll`
+            - `libarm64ecfex.dll`
+            - FEX AArch64 UnixLib
+
+            ## Termux
+
+            Built for Termux glibc runtime.
+
+            Expected runtime loader:
+
+            `/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1`
+
+            Build started:
+
+            `${{ github.run_started_at }}`
+
+      # ============================================================
+      # 28. 清理
+      # ============================================================
+
+      - name: Build summary
+        shell: bash
+        run: |
+          echo
+          echo "=============================================="
+          echo "             BUILD COMPLETE"
+          echo "=============================================="
+          echo
+          echo "Package:"
+          echo "  ${PACKAGE_NAME}.tar.xz"
+          echo
+          echo "Wine:"
+          echo "  $WINE_BRANCH"
+          echo
+          echo "FEX:"
+          echo "  $FEX_REF"
+          echo
+          echo "Output:"
+          ls -lh "${PACKAGE_NAME}.tar.xz"
+          echo
+          echo "=============================================="
