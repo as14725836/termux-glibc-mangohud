@@ -46,6 +46,14 @@ on:
   schedule:
     - cron: "0 2 5,20 * *"
 
+concurrency:
+  group: wine-arm64-wow64-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     name: Wine ARM64 WOW64 Termux glibc
@@ -53,7 +61,6 @@ jobs:
     # ==========================================================
     # CGCT is an AArch64 native toolchain.
     # It CANNOT run on x86_64.
-    # The runner must be ARM64.
     # ==========================================================
     runs-on: ubuntu-24.04-arm
 
@@ -64,54 +71,31 @@ jobs:
     timeout-minutes: 240
 
     env:
-      # ==========================================================
-      # LLVM-MinGW
-      #
-      # ARM64 runner must use ARM64-hosted LLVM-MinGW.
-      # ==========================================================
       LLVMMINGW_DATE: "20251202"
       LLVMMINGW_NAME: "llvm-mingw-20251202-ucrt-ubuntu-22.04-aarch64"
       LLVM_MINGW_ROOT: /opt/llvm-mingw
 
-      # ==========================================================
-      # Wine
-      # ==========================================================
       WINE_SOURCE_DIR: /opt/wine-src
       WINE64_DIR: /opt/wine64
 
-      # ==========================================================
-      # Runtime paths
-      #
-      # These paths are used on the actual Termux device.
-      # NEVER replace them with CI paths.
-      # ==========================================================
       RUNTIME_TERMUX_PREFIX: /data/data/com.termux/files/usr
       RUNTIME_GLIBC_PREFIX: /data/data/com.termux/files/usr/glibc
       RUNTIME_WINE_PREFIX: /data/data/com.termux/files/usr/glibc/opt/wine
       RUNTIME_TMPDIR: /data/data/com.termux/files/usr/tmp/runtime
 
-      # ==========================================================
-      # CI staging
-      # ==========================================================
       CI_TERMUX_ROOT: ${{ github.workspace }}/termux-glibc-staging
       CI_TERMUX_PREFIX: ${{ github.workspace }}/termux-glibc-staging/data/data/com.termux/files/usr
       CI_GLIBC_PREFIX: ${{ github.workspace }}/termux-glibc-staging/data/data/com.termux/files/usr/glibc
       CI_TERMUX_TMPDIR: ${{ github.workspace }}/.termux-tmp
       CGCT_DIR: ${{ github.workspace }}/cgct
 
-      # ==========================================================
-      # Official repositories
-      # ==========================================================
       TERMUX_PACKAGES_REPO: https://github.com/termux/termux-packages.git
       GLIBC_PACKAGES_REPO: https://github.com/termux-pacman/glibc-packages.git
 
-      # ==========================================================
-      # Build
-      # ==========================================================
       TERMUX_ARCH: aarch64
       STRIP_MODE: ${{ inputs.strip_mode || 'debug' }}
       WITH_GSTREAMER: ${{ inputs.with_gstreamer || 'off' }}
-      WINE_INSTALL_PREFIX: /tmp/wine-install-wow64
+      WINE_INSTALL_PREFIX: ${{ github.workspace }}/wine-install-wow64
 
     steps:
 
@@ -125,7 +109,6 @@ jobs:
       # 2. Base packages
       # ==========================================================
       - name: Install build dependencies
-        shell: bash
         run: |
           set -euxo pipefail
           export DEBIAN_FRONTEND=noninteractive
@@ -157,6 +140,7 @@ jobs:
             meson \
             ninja-build \
             patch \
+            patchelf \
             pkg-config \
             python3 \
             python3-pip \
@@ -168,7 +152,6 @@ jobs:
             xz-utils \
             zstd \
             libarchive-tools \
-            patchelf \
             libfontconfig-dev \
             libfreetype-dev \
             libgl-dev \
@@ -225,7 +208,6 @@ jobs:
       # 3. Checkout official Termux build system
       # ==========================================================
       - name: Checkout Termux packages
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -242,7 +224,6 @@ jobs:
       # 4. Checkout official glibc packages
       # ==========================================================
       - name: Checkout glibc packages
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -260,7 +241,6 @@ jobs:
       # 5. Prepare glibc build-package.sh
       # ==========================================================
       - name: Prepare glibc build system
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -274,12 +254,8 @@ jobs:
 
       # ==========================================================
       # 6. Setup official CGCT
-      #
-      # This installs the AArch64-native GCC toolchain.
-      # It only works on an AArch64 host.
       # ==========================================================
       - name: Setup official CGCT
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -302,7 +278,6 @@ jobs:
       # 7. Verify CGCT target
       # ==========================================================
       - name: Verify CGCT AArch64
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -322,7 +297,6 @@ jobs:
       # 8. Detect CGCT compiler
       # ==========================================================
       - name: Detect CGCT compiler
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -342,8 +316,10 @@ jobs:
           test -x "$CC"
           test -x "$CXX"
 
-          echo "TERMUX_GLIBC_CC=$CC"   >> "$GITHUB_ENV"
-          echo "TERMUX_GLIBC_CXX=$CXX" >> "$GITHUB_ENV"
+          {
+            echo "TERMUX_GLIBC_CC=$CC"
+            echo "TERMUX_GLIBC_CXX=$CXX"
+          } >> "$GITHUB_ENV"
 
           echo "CC=$CC"
           echo "CXX=$CXX"
@@ -361,7 +337,6 @@ jobs:
       # 9. Obtain official temporary Termux glibc
       # ==========================================================
       - name: Install official temporary Termux glibc
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -403,7 +378,6 @@ jobs:
       # 10. Create isolated CI glibc staging
       # ==========================================================
       - name: Create Termux glibc staging
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -423,7 +397,6 @@ jobs:
       # 11. Link CGCT libgcc into staging
       # ==========================================================
       - name: Prepare CGCT libgcc
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -433,20 +406,14 @@ jobs:
             -maxdepth 1 \
             -type f \
             -name 'libgcc*' \
-            -exec cp -n {} "$CI_GLIBC_PREFIX/lib/" \;
+            -exec cp -n {} "$CI_GLIBC_PREFIX/lib/" +
 
           ls -l "$CI_GLIBC_PREFIX/lib"/libgcc* 2>/dev/null || true
 
       # ==========================================================
       # 12. glibc compiler smoke test
-      #
-      # Build a small ELF, then inspect it with readelf.
-      #
-      # DO NOT try to run it. The runtime loader is a Termux
-      # path that does not exist on CI.
       # ==========================================================
       - name: Test Termux glibc compiler
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -454,16 +421,16 @@ jobs:
           rm -rf "$TESTDIR"
           mkdir -p "$TESTDIR"
 
-          cat > "$TESTDIR/test.c" <<'EOF'
-          #include <stdio.h>
-          #include <gnu/libc-version.h>
-
-          int main(void)
-          {
-              printf("glibc=%s\n", gnu_get_libc_version());
-              return 0;
-          }
-          EOF
+          printf '%s\n' \
+            '#include <stdio.h>' \
+            '#include <gnu/libc-version.h>' \
+            '' \
+            'int main(void)' \
+            '{' \
+            '    printf("glibc=%s\n", gnu_get_libc_version());' \
+            '    return 0;' \
+            '}' \
+            > "$TESTDIR/test.c"
 
           "$TERMUX_GLIBC_CC" \
             -O2 \
@@ -475,14 +442,15 @@ jobs:
             -o "$TESTDIR/test"
 
           file "$TESTDIR/test"
-          readelf -l "$TESTDIR/test" | grep -F "$RUNTIME_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1"
-          readelf -d "$TESTDIR/test" | grep -E 'NEEDED|RPATH|RUNPATH'
+          readelf -l "$TESTDIR/test" \
+            | grep -F "$RUNTIME_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1"
+          readelf -d "$TESTDIR/test" \
+            | grep -E 'NEEDED|RPATH|RUNPATH'
 
       # ==========================================================
       # 13. LLVM-MinGW
       # ==========================================================
       - name: Download LLVM-MinGW
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -510,7 +478,6 @@ jobs:
       # 14. Build FEX ARM64EC
       # ==========================================================
       - name: Build FEX ARM64EC
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -542,7 +509,6 @@ jobs:
       # 15. Build FEX AArch64
       # ==========================================================
       - name: Build FEX AArch64
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -564,7 +530,6 @@ jobs:
       # 16. Select Wine source
       # ==========================================================
       - name: Fetch Wine source
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -600,7 +565,6 @@ jobs:
       # 17. Apply repository-local Wine patches
       # ==========================================================
       - name: Apply Wine patches
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -637,24 +601,9 @@ jobs:
           done
 
       # ==========================================================
-      # 18. Termux runtime /tmp
-      # ==========================================================
-      - name: Apply Termux runtime temporary path
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          cd "$WINE_SOURCE_DIR"
-
-          if [ -d "$GITHUB_WORKSPACE/patches" ]; then
-            echo "Runtime /tmp handling is expected from the local patch set."
-          fi
-
-      # ==========================================================
-      # 19. Regenerate Wine configure
+      # 18. Regenerate Wine configure
       # ==========================================================
       - name: Regenerate Wine configure
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -669,16 +618,9 @@ jobs:
           test -x configure
 
       # ==========================================================
-      # 20. Build native Wine tools
-      #
-      # Native tools run on the CI aarch64 host.
-      # They are NOT Termux runtime binaries.
-      #
-      # Install them to $WINE64_DIR so that --with-wine-tools
-      # can point at it directly.
+      # 19. Build native Wine tools
       # ==========================================================
       - name: Build native Wine tools
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -702,28 +644,20 @@ jobs:
           make -j"$(nproc)" install
 
       # ==========================================================
-      # 21. Verify native Wine tools
+      # 20. Verify native Wine tools
       # ==========================================================
       - name: Verify native Wine tools
-        shell: bash
         run: |
           set -euxo pipefail
 
           test -d "$WINE64_DIR/nls"
-          test -d "$WINE64_DIR/tools" || true
 
           find "$WINE64_DIR" -maxdepth 3 -type f -perm -111 | head -100
 
       # ==========================================================
-      # 22. Configure ARM64 WOW64
-      #
-      # IMPORTANT:
-      #  - Native AArch64 host, no --host / --build.
-      #  - No --dynamic-linker / runtime -rpath here.
-      #    Those are applied at packaging time with patchelf.
+      # 21. Configure ARM64 WOW64
       # ==========================================================
       - name: Configure Wine ARM64 WOW64
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -744,11 +678,6 @@ jobs:
           export CROSSCFLAGS="$CFLAGS"
           export CROSSCXXFLAGS="$CXXFLAGS"
 
-          # ------------------------------------------------------
-          # pkg-config
-          #
-          # Do not use Debian ARM64 pkgconfig directories.
-          # ------------------------------------------------------
           unset PKG_CONFIG_SYSROOT_DIR
           unset PKG_CONFIG_PATH
           unset PKG_CONFIG_LIBDIR
@@ -756,12 +685,6 @@ jobs:
           export PKG_CONFIG_LIBDIR="${GLIBC}/lib/pkgconfig:${GLIBC}/share/pkgconfig"
           export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
 
-          # ------------------------------------------------------
-          # Linker
-          #
-          # Only -L to the Termux glibc staging.
-          # NO --dynamic-linker, NO runtime -rpath.
-          # ------------------------------------------------------
           export LDFLAGS="-L${GLIBC}/lib"
 
           export WINE_NLS_DIR="$WINE64_DIR/nls"
@@ -791,10 +714,9 @@ jobs:
             LDFLAGS="$LDFLAGS"
 
       # ==========================================================
-      # 23. Build Wine
+      # 22. Build Wine
       # ==========================================================
       - name: Build Wine ARM64 WOW64
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -803,10 +725,9 @@ jobs:
           make -j"$(nproc)"
 
       # ==========================================================
-      # 24. Install Wine
+      # 23. Install Wine
       # ==========================================================
       - name: Install Wine ARM64 WOW64
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -820,10 +741,9 @@ jobs:
           test -x "$WINE_INSTALL_PREFIX/bin/wineserver"
 
       # ==========================================================
-      # 25. Complete Wine runtime
+      # 24. Complete Wine runtime
       # ==========================================================
       - name: Complete Wine runtime
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -835,31 +755,19 @@ jobs:
             "$INSTALL/share/wine" \
             "$INSTALL/lib/wine/aarch64-windows"
 
-          # ------------------------------------------------------
-          # NLS
-          # ------------------------------------------------------
           if [ -d "$WINE64_DIR/nls" ]; then
             cp -a "$WINE64_DIR/nls/." "$INSTALL/nls/"
           fi
 
-          # ------------------------------------------------------
-          # wine.inf
-          # ------------------------------------------------------
           find "$WINE_SOURCE_DIR/build-arm64" \
             -name wine.inf \
             -type f \
-            -exec cp {} "$INSTALL/share/wine/" \; \
+            -exec cp {} "$INSTALL/share/wine/" + \
             || true
 
-          # ------------------------------------------------------
-          # machine-id
-          # ------------------------------------------------------
           printf '%s\n' '00000000000000000000000000000000' \
             > "$INSTALL/etc/machine-id"
 
-          # ------------------------------------------------------
-          # FEX ARM64EC
-          # ------------------------------------------------------
           for dir in \
             /opt/FEX/install-arm64ec/usr/lib/wine/aarch64-windows \
             /opt/FEX/install-arm64ec/lib/wine/aarch64-windows \
@@ -870,14 +778,11 @@ jobs:
                 -maxdepth 1 \
                 -type f \
                 \( -name '*.dll' -o -name '*.exe' \) \
-                -exec cp -f {} "$INSTALL/lib/wine/aarch64-windows/" \; \
+                -exec cp -f {} "$INSTALL/lib/wine/aarch64-windows/" + \
                 || true
             fi
           done
 
-          # ------------------------------------------------------
-          # FEX AArch64
-          # ------------------------------------------------------
           for dir in \
             /opt/FEX/install-wow64/usr/lib/wine/aarch64-windows \
             /opt/FEX/install-wow64/lib/wine/aarch64-windows \
@@ -888,16 +793,15 @@ jobs:
                 -maxdepth 1 \
                 -type f \
                 \( -name '*.dll' -o -name '*.exe' \) \
-                -exec cp -n {} "$INSTALL/lib/wine/aarch64-windows/" \; \
+                -exec cp -n {} "$INSTALL/lib/wine/aarch64-windows/" + \
                 || true
             fi
           done
 
       # ==========================================================
-      # 26. Check Wine installation
+      # 25. Validate Wine installation
       # ==========================================================
       - name: Validate Wine installation
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -913,10 +817,9 @@ jobs:
           du -sh "$INSTALL"
 
       # ==========================================================
-      # 27. ELF validation (before patchelf)
+      # 26. ELF validation (before patchelf)
       # ==========================================================
       - name: Validate Wine ELF interpreter (pre-patchelf)
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -950,16 +853,9 @@ jobs:
           done
 
       # ==========================================================
-      # 28. Patch Termux interpreter (packaging phase)
-      #
-      # All ELF binaries are rewritten so that:
-      #   - interpreter -> Termux glibc loader
-      #   - rpath       -> Termux glibc / Wine lib
-      #
-      # This is the ONLY place where runtime paths are injected.
+      # 27. Patch Termux interpreter (packaging phase)
       # ==========================================================
       - name: Patch Termux interpreter
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -976,30 +872,54 @@ jobs:
           skipped=0
 
           while IFS= read -r -d '' f; do
-            if file "$f" | grep -q 'ELF'; then
-              if patchelf \
-                --set-interpreter "$RUNTIME_LOADER" \
-                --set-rpath "$RUNTIME_LIB:$RUNTIME_WINE_LIB" \
-                "$f" 2>/dev/null
-              then
-                patched=$((patched + 1))
-              else
-                skipped=$((skipped + 1))
-              fi
+            if ! file "$f" | grep -q 'ELF'; then
+              continue
+            fi
+
+            if ! readelf -d "$f" 2>/dev/null | grep -q 'NEEDED'; then
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            if patchelf \
+              --set-interpreter "$RUNTIME_LOADER" \
+              --set-rpath "$RUNTIME_LIB:$RUNTIME_WINE_LIB" \
+              "$f" 2>/dev/null
+            then
+              patched=$((patched + 1))
+            else
+              skipped=$((skipped + 1))
             fi
           done < <(find "$INSTALL" -type f -print0)
 
           echo "patched=$patched skipped=$skipped"
 
       # ==========================================================
-      # 29. Strip
+      # 28. Strip
       # ==========================================================
       - name: Strip Wine binaries
-        shell: bash
         run: |
           set -euxo pipefail
 
           INSTALL="$WINE_INSTALL_PREFIX"
+
+          do_strip() {
+            local mode="$1"
+            local file="$2"
+
+            if ! file "$file" | grep -q 'ELF'; then
+              return 0
+            fi
+
+            case "$mode" in
+              debug)
+                aarch64-linux-gnu-strip --strip-debug "$file" || true
+                ;;
+              all)
+                aarch64-linux-gnu-strip --strip-all "$file" || true
+                ;;
+            esac
+          }
 
           case "$STRIP_MODE" in
             none)
@@ -1009,20 +929,17 @@ jobs:
             debug)
               echo "STRIP_MODE=debug"
               find "$INSTALL" -type f -print0 \
-                | xargs -0 -P "$(nproc)" -I{} sh -c '
-                    if file "$1" | grep -q "ELF"; then
-                      aarch64-linux-gnu-strip --strip-debug "$1" || true
-                    fi                  ' _ {}
+                | while IFS= read -r -d '' f; do
+                    do_strip debug "$f"
+                  done
               ;;
 
             all)
               echo "STRIP_MODE=all"
               find "$INSTALL" -type f -print0 \
-                | xargs -0 -P "$(nproc)" -I{} sh -c '
-                    if file "$1" | grep -q "ELF"; then
-                      aarch64-linux-gnu-strip --strip-all "$1" || true
-                    fi
-                  ' _ {}
+                | while IFS= read -r -d '' f; do
+                    do_strip all "$f"
+                  done
               ;;
 
             *)
@@ -1032,10 +949,9 @@ jobs:
           esac
 
       # ==========================================================
-      # 30. Re-check loader after strip + patchelf
+      # 29. Re-check loader after strip + patchelf
       # ==========================================================
       - name: Verify runtime loader
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -1055,10 +971,9 @@ jobs:
           done
 
       # ==========================================================
-      # 31. Check CI/Debian sysroot contamination
+      # 30. Check CI/Debian sysroot contamination
       # ==========================================================
       - name: Check forbidden sysroot paths
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -1081,10 +996,9 @@ jobs:
           echo "No forbidden CI sysroot paths found."
 
       # ==========================================================
-      # 32. Check runtime path
+      # 31. Check runtime path
       # ==========================================================
       - name: Check Termux runtime paths
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -1100,10 +1014,9 @@ jobs:
           fi
 
       # ==========================================================
-      # 33. Validate FEX PE files
+      # 32. Validate FEX PE files
       # ==========================================================
       - name: Validate FEX PE files
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -1126,10 +1039,9 @@ jobs:
           echo "FEX PE count: $COUNT"
 
       # ==========================================================
-      # 34. Check Wine Windows architectures
+      # 33. Check Wine Windows architectures
       # ==========================================================
       - name: Check Wine Windows architectures
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -1140,10 +1052,9 @@ jobs:
           find "$INSTALL/lib/wine" -maxdepth 2 -type d | sort
 
       # ==========================================================
-      # 35. Optional GStreamer runtime files
+      # 34. Optional GStreamer runtime files
       # ==========================================================
       - name: Check GStreamer support
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -1158,85 +1069,80 @@ jobs:
             | head -200
 
       # ==========================================================
-      # 36. Generate runtime environment
+      # 35. Generate runtime environment
       # ==========================================================
       - name: Generate Termux runtime environment
-        shell: bash
         run: |
           set -euxo pipefail
 
           INSTALL="$WINE_INSTALL_PREFIX"
-
           mkdir -p "$INSTALL"
 
-          cat > "$INSTALL/wine-termux-env.sh" <<'EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-
-export TERMUX_PREFIX=/data/data/com.termux/files/usr
-export GLIBC_PREFIX=/data/data/com.termux/files/usr/glibc
-export WINE_PREFIX=/data/data/com.termux/files/usr/glibc/opt/wine
-
-export TMPDIR=/data/data/com.termux/files/usr/tmp/runtime
-
-export PATH="$GLIBC_PREFIX/bin:$WINE_PREFIX/bin:$TERMUX_PREFIX/bin:$PATH"
-
-export LD_LIBRARY_PATH="$GLIBC_PREFIX/lib:$WINE_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-export XDG_RUNTIME_DIR="$TMPDIR"
-
-export DISPLAY="${DISPLAY:-:0}"
-export GDK_BACKEND="${GDK_BACKEND:-x11}"
-export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"
-
-export VK_ICD_FILENAMES="${VK_ICD_FILENAMES:-$GLIBC_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json}"
-
-export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-zink}"
-export GALLIUM_DRIVER="${GALLIUM_DRIVER:-zink}"
-export MESA_GLTHREAD="${MESA_GLTHREAD:-true}"
-EOF
+          {
+            printf '%s\n' '#!/data/data/com.termux/files/usr/bin/bash'
+            printf '%s\n' ''
+            printf '%s\n' 'export TERMUX_PREFIX=/data/data/com.termux/files/usr'
+            printf '%s\n' 'export GLIBC_PREFIX=/data/data/com.termux/files/usr/glibc'
+            printf '%s\n' 'export WINE_PREFIX=/data/data/com.termux/files/usr/glibc/opt/wine'
+            printf '%s\n' ''
+            printf '%s\n' 'export TMPDIR=/data/data/com.termux/files/usr/tmp/runtime'
+            printf '%s\n' ''
+            printf '%s\n' 'export PATH="$GLIBC_PREFIX/bin:$WINE_PREFIX/bin:$TERMUX_PREFIX/bin:$PATH"'
+            printf '%s\n' 'export LD_LIBRARY_PATH="$GLIBC_PREFIX/lib:$WINE_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
+            printf '%s\n' ''
+            printf '%s\n' 'export XDG_RUNTIME_DIR="$TMPDIR"'
+            printf '%s\n' ''
+            printf '%s\n' 'export DISPLAY="${DISPLAY:-:0}"'
+            printf '%s\n' 'export GDK_BACKEND="${GDK_BACKEND:-x11}"'
+            printf '%s\n' 'export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"'
+            printf '%s\n' ''
+            printf '%s\n' 'export VK_ICD_FILENAMES="${VK_ICD_FILENAMES:-$GLIBC_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json}"'
+            printf '%s\n' ''
+            printf '%s\n' 'export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-zink}"'
+            printf '%s\n' 'export GALLIUM_DRIVER="${GALLIUM_DRIVER:-zink}"'
+            printf '%s\n' 'export MESA_GLTHREAD="${MESA_GLTHREAD:-true}"'
+          } > "$INSTALL/wine-termux-env.sh"
 
           chmod +x "$INSTALL/wine-termux-env.sh"
 
       # ==========================================================
-      # 37. Runtime launcher
+      # 36. Runtime launcher
       # ==========================================================
       - name: Generate Wine launcher
-        shell: bash
         run: |
           set -euxo pipefail
 
           INSTALL="$WINE_INSTALL_PREFIX"
 
-          cat > "$INSTALL/wine-termux" <<'EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-
-set -e
-
-PREFIX=/data/data/com.termux/files/usr
-GLIBC_PREFIX="$PREFIX/glibc"
-WINE_PREFIX="$GLIBC_PREFIX/opt/wine"
-TMPDIR="$PREFIX/tmp/runtime"
-
-export PATH="$GLIBC_PREFIX/bin:$WINE_PREFIX/bin:$PREFIX/bin:$PATH"
-export LD_LIBRARY_PATH="$GLIBC_PREFIX/lib:$WINE_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-export TMPDIR
-export XDG_RUNTIME_DIR="$TMPDIR"
-
-export DISPLAY="${DISPLAY:-:0}"
-export GDK_BACKEND="${GDK_BACKEND:-x11}"
-export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"
-
-exec "$WINE_PREFIX/bin/wine" "$@"
-EOF
+          {
+            printf '%s\n' '#!/data/data/com.termux/files/usr/bin/bash'
+            printf '%s\n' ''
+            printf '%s\n' 'set -e'
+            printf '%s\n' ''
+            printf '%s\n' 'PREFIX=/data/data/com.termux/files/usr'
+            printf '%s\n' 'GLIBC_PREFIX="$PREFIX/glibc"'
+            printf '%s\n' 'WINE_PREFIX="$GLIBC_PREFIX/opt/wine"'
+            printf '%s\n' 'TMPDIR="$PREFIX/tmp/runtime"'
+            printf '%s\n' ''
+            printf '%s\n' 'export PATH="$GLIBC_PREFIX/bin:$WINE_PREFIX/bin:$PREFIX/bin:$PATH"'
+            printf '%s\n' 'export LD_LIBRARY_PATH="$GLIBC_PREFIX/lib:$WINE_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
+            printf '%s\n' ''
+            printf '%s\n' 'export TMPDIR'
+            printf '%s\n' 'export XDG_RUNTIME_DIR="$TMPDIR"'
+            printf '%s\n' ''
+            printf '%s\n' 'export DISPLAY="${DISPLAY:-:0}"'
+            printf '%s\n' 'export GDK_BACKEND="${GDK_BACKEND:-x11}"'
+            printf '%s\n' 'export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"'
+            printf '%s\n' ''
+            printf '%s\n' 'exec "$WINE_PREFIX/bin/wine" "$@"'
+          } > "$INSTALL/wine-termux"
 
           chmod +x "$INSTALL/wine-termux"
 
       # ==========================================================
-      # 38. Final file inventory
+      # 37. Final file inventory
       # ==========================================================
       - name: Generate build manifest
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -1245,55 +1151,45 @@ EOF
           mkdir -p "$GITHUB_WORKSPACE/release"
 
           {
-            echo "Wine ARM64 WOW64"
-            echo
-
-            echo "Wine source:"
+            printf '%s\n' 'Wine ARM64 WOW64'
+            printf '%s\n' ''
+            printf '%s\n' 'Wine source:'
             git -C "$WINE_SOURCE_DIR" describe --always --dirty
-            echo
-
-            echo "Wine commit:"
+            printf '%s\n' ''
+            printf '%s\n' 'Wine commit:'
             git -C "$WINE_SOURCE_DIR" rev-parse HEAD
-            echo
-
-            echo "CGCT:"
+            printf '%s\n' ''
+            printf '%s\n' 'CGCT:'
             "$TERMUX_GLIBC_CC" --version | head -1
-            echo
-
-            echo "glibc loader:"
-            echo "$RUNTIME_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1"
-            echo
-
-            echo "Wine prefix:"
-            echo "$RUNTIME_WINE_PREFIX"
-            echo
-
-            echo "Runtime tmp:"
-            echo "$RUNTIME_TMPDIR"
-            echo
-
-            echo "Strip mode:"
-            echo "$STRIP_MODE"
-            echo
-
-            echo "GStreamer:"
-            echo "$WITH_GSTREAMER"
-            echo
-
-            echo "Architectures:"
-            echo "arm64ec"
-            echo "aarch64"
-            echo "i386"
+            printf '%s\n' ''
+            printf '%s\n' 'glibc loader:'
+            printf '%s\n' "$RUNTIME_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1"
+            printf '%s\n' ''
+            printf '%s\n' 'Wine prefix:'
+            printf '%s\n' "$RUNTIME_WINE_PREFIX"
+            printf '%s\n' ''
+            printf '%s\n' 'Runtime tmp:'
+            printf '%s\n' "$RUNTIME_TMPDIR"
+            printf '%s\n' ''
+            printf '%s\n' 'Strip mode:'
+            printf '%s\n' "$STRIP_MODE"
+            printf '%s\n' ''
+            printf '%s\n' 'GStreamer:'
+            printf '%s\n' "$WITH_GSTREAMER"
+            printf '%s\n' ''
+            printf '%s\n' 'Architectures:'
+            printf '%s\n' 'arm64ec'
+            printf '%s\n' 'aarch64'
+            printf '%s\n' 'i386'
           } > "$GITHUB_WORKSPACE/release/build-info.txt"
 
           find "$INSTALL" -type f | sort \
             > "$GITHUB_WORKSPACE/release/file-list.txt"
 
       # ==========================================================
-      # 39. Package
+      # 38. Package
       # ==========================================================
       - name: Package Wine
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -1311,10 +1207,9 @@ EOF
             > "$GITHUB_WORKSPACE/release/${BUILD_NAME}.sha256"
 
       # ==========================================================
-      # 40. Show package
+      # 39. Show package
       # ==========================================================
       - name: Show package information
-        shell: bash
         run: |
           set -euxo pipefail
 
@@ -1323,19 +1218,19 @@ EOF
           sha256sum "$GITHUB_WORKSPACE/release/"* || true
 
       # ==========================================================
-      # 41. Upload artifact
+      # 40. Upload artifact
       # ==========================================================
       - name: Upload Wine artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wine-arm64-wow64-termux-glibc
+          name: wine-arm64-wow64-termux-glibc-${{ github.run_number }}
           path: |
             release/*.tar.xz
             release/*.sha256
             release/*.txt
 
       # ==========================================================
-      # 42. GitHub Release
+      # 41. GitHub Release
       # ==========================================================
       - name: Create GitHub Release
         if: github.event_name == 'workflow_dispatch'
