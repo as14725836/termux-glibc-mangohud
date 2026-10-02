@@ -674,11 +674,22 @@ jobs:
           # --------------------------------------------------------
           TERMUX_TMP="${TERMUX_TMP}"
 
+          # 【修复】socket 目录 /tmp/.wine-<uid> 也必须改到 Termux tmp：
+          #   server/request.c:675          asprintf(&base_dir, "/tmp/.wine-%u", getuid())
+          #   dlls/ntdll/unix/server.c:1323 asprintf(&dir, "/tmp/.wine-%u/server-%llx-%llx", ...)
+          # 这两个文件原来不在清单里，导致运行时直接失败：
+          #   wineserver: mkdir /tmp/.wine-10521: Permission denied
+          # 注意：旧的 s|"/tmp"|...|g 模式对 "/tmp/.wine-%u" 匹配不上（/tmp 后面不是引号），
+          #       靠的是下面 s|/tmp/|...|g 这一条，两条都要保留。
+          # 另外 全树扫过：dlls/wineps.drv/ps.c 里的 "/tmpmtrx" 是 PostScript 变量名，
+          # libs/gsm/** 是无关文档注释，都不能碰，所以这里只做定点替换。
           for FILE in \
             server/file.c \
             server/server.c \
+            server/request.c \
             loader/loader.c \
             dlls/ntdll/loader.c \
+            dlls/ntdll/unix/server.c \
             dlls/ntdll/unix/virtual.c
           do
             if [ -f "$FILE" ]; then
@@ -693,6 +704,17 @@ jobs:
                 "$FILE"
             fi
           done
+
+          # 硬校验：socket 目录必须已指向 Termux tmp，否则立刻失败（别浪费 30 分钟编译）
+          if grep -rn '/tmp/\.wine-' server/request.c dlls/ntdll/unix/server.c 2>/dev/null; then
+            echo "FATAL: /tmp/.wine- 仍然存在，socket 目录没有改到 Termux tmp"
+            exit 1
+          fi
+
+          echo "=== socket 目录现在的写法 ==="
+
+          grep -n 'wine-' server/request.c | head -3 || true
+          grep -n 'wine-' dlls/ntdll/unix/server.c | head -3 || true
 
           # --------------------------------------------------------
           # FEX DLL names
@@ -1535,6 +1557,25 @@ jobs:
             echo "FATAL: 关键二进制 runtime path 修复不完整"
             exit 1
           fi
+
+          # ---------- 残留 /tmp 路径检查（编译期不会报错、只有运行时才炸）----------
+          # 例: wineserver: mkdir /tmp/.wine-10521: Permission denied
+          echo "=========== /tmp 残留检查 ==========="
+          TMP_LEFT=0
+          for BIN in "${TARGET}/bin/wine" "${TARGET}/bin/wineserver" "${TARGET}"/lib/wine/*-unix/*.so; do
+            [ -f "${BIN}" ] || continue
+            if grep -qa '/tmp/\.wine-' "${BIN}"; then
+              echo "  !! $(basename "${BIN}") 里仍有 /tmp/.wine-（socket 目录没改到 Termux tmp）"
+              TMP_LEFT=1
+            fi
+          done
+
+          if [ "${TMP_LEFT}" != "0" ]; then
+            echo "FATAL: 二进制里仍有 /tmp/.wine-，设备上运行会 mkdir Permission denied"
+            exit 1
+          fi
+
+          echo "  未发现 /tmp/.wine- 残留"
 
           echo "runtime path 修复完成"
 
