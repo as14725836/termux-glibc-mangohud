@@ -1,1245 +1,1745 @@
-name: Wine ARM64 WOW64 - Termux glibc + CGCT + LLVM-MinGW
-
-permissions:
-  contents: write
-  packages: write
+name: Build Wine ARM64 WOW64 - Termux glibc
 
 on:
-  workflow_dispatch:
-    inputs:
-      wine_source:
-        description: "Wine source"
-        required: true
-        type: choice
-        default: staging
-        options:
-          - vanilla
-          - staging
-          - staging-tkg
-          - staging-tkg-fsync
+workflow_dispatch:
+inputs:
+wine_branch:
+description: 'Wine 构建类型'
+required: false
+default: 'proton'
+type: choice
+options:
+- proton
+- staging
+- winearm64ec
 
-      wine_ref:
-        description: "Wine branch/tag/commit"
-        required: true
-        default: "master"
-        type: string
+  wine_version:
+    description: 'Wine 版本，例如 10.20；latest 表示使用源码默认版本'
+    required: false
+    default: 'latest'
+    type: string
 
-      strip_mode:
-        description: "Strip mode"
-        required: true
-        type: choice
-        default: debug
-        options:
-          - debug
-          - all
-          - none
+  proton_branch:
+    description: 'Proton Wine branch'
+    required: false
+    default: 'proton_11.0'
+    type: string
 
-      with_gstreamer:
-        description: "Enable GStreamer"
-        required: true
-        type: choice
-        default: "off"
-        options:
-          - "on"
-          - "off"
+  proton_commit:
+    description: 'Proton commit，可留空'
+    required: false
+    default: ''
+    type: string
 
-  schedule:
-    - cron: "0 2 5,20 * *"
+  staging_version:
+    description: 'Wine-Staging 版本，可留空自动匹配 Wine upstream'
+    required: false
+    default: ''
+    type: string
 
-concurrency:
-  group: wine-arm64-wow64-${{ github.ref }}
-  cancel-in-progress: false
+  enable_wayland:
+    description: '启用 Wayland'
+    required: false
+    default: false
+    type: boolean
 
-defaults:
-  run:
-    shell: bash
+  enable_dbus:
+    description: '启用 DBus'
+    required: false
+    default: false
+    type: boolean
+
+  enable_udev:
+    description: '启用 udev'
+    required: false
+    default: false
+    type: boolean
+
+  jobs:
+    description: '并行编译线程'
+    required: false
+    default: '8'
+    type: string
+
+env:
+LLVMMINGW_DATE: 20251202
+LLVMMINGW_NAME: llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64
+
+WINE_SOURCE_DIR: /opt/wine-src
+WINE64_DIR: /opt/wine64
+WINE_NATIVE_DIR: /opt/wine64-native
+
+TERMUX_GLIBC_PREFIX: /data/data/com.termux/files/usr/glibc
+TERMUX_PREFIX: /data/data/com.termux/files/usr
+TERMUX_TMP: /data/data/com.termux/files/usr/tmp
+
+DEBIAN_FRONTEND: noninteractive
+
+防止 configure 使用 GitHub Actions / runner 上残留的宿主路径
+
+PKG_CONFIG_ALLOW_CROSS: 1
+
+permissions:
+contents: write
 
 jobs:
-  build:
-    name: Wine ARM64 WOW64 Termux glibc
 
-    # ==========================================================
-    # CGCT is an AArch64 native toolchain.
-    # It CANNOT run on x86_64.
-    # ==========================================================
-    runs-on: ubuntu-24.04-arm
+build-wine-wow64:
 
-    container:
-      image: arm64v8/ubuntu:24.04
-      options: --user root
+runs-on: ubuntu-latest
 
-    timeout-minutes: 240
+container:
+  image: debian:12
+  options: --user root
 
+timeout-minutes: 240
+
+steps:
+
+  # ============================================================
+  # 0. 基础环境
+  # ============================================================
+
+  - name: Checkout workflow repository
+    uses: actions/checkout@v4
+
+  - name: 安装基础工具
+    shell: bash
+    run: |
+      set -eux
+
+      apt-get update
+
+      apt-get install -y --no-install-recommends \
+        ca-certificates \
+        wget \
+        curl \
+        git \
+        gnupg \
+        xz-utils \
+        bzip2 \
+        unzip \
+        file \
+        sudo \
+        python3 \
+        python3-distutils \
+        python3-setuptools \
+        build-essential
+
+  # ============================================================
+  # 1. Debian Multiarch
+  # ============================================================
+
+  - name: 配置 Debian Multiarch
+    shell: bash
+    run: |
+      set -eux
+
+      echo "=== 清理 GitHub runner 不需要的大型目录 ==="
+
+      rm -rf /usr/share/dotnet || true
+      rm -rf /opt/ghc || true
+      rm -rf /usr/local/share/boost || true
+
+      echo "=== 配置 Debian 12 amd64 + arm64 ==="
+
+      cat > /etc/apt/sources.list <<'EOF'
+      deb [arch=amd64] http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+      deb [arch=amd64] http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+      deb [arch=amd64] http://security.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+
+      deb [arch=arm64] http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+      deb [arch=arm64] http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+      deb [arch=arm64] http://security.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+      EOF
+
+      rm -f /etc/apt/sources.list.d/debian.sources || true
+
+      dpkg --add-architecture arm64
+
+      apt-get update
+
+      echo "=== 测试 ARM64 package ==="
+
+      apt-get install -y --no-install-recommends hello:arm64
+
+      file /usr/bin/hello || true
+
+  # ============================================================
+  # 2. Build dependencies
+  # ============================================================
+
+  - name: 安装 Wine 编译依赖
+    shell: bash
+    run: |
+      set -eux
+
+      apt-get update
+
+      apt-get install -y --no-install-recommends \
+        \
+        # Build system \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
+        gettext \
+        flex \
+        bison \
+        make \
+        cmake \
+        ninja-build \
+        meson \
+        \
+        # Compilers \
+        gcc \
+        g++ \
+        clang \
+        llvm \
+        lld \
+        binutils \
+        binutils-aarch64-linux-gnu \
+        gcc-aarch64-linux-gnu \
+        g++-aarch64-linux-gnu \
+        libc6-dev-arm64-cross \
+        \
+        # Assembly / PE tools \
+        nasm \
+        mingw-w64 \
+        \
+        # Python \
+        python3 \
+        python3-setuptools \
+        \
+        # Wine native build dependencies \
+        libglib2.0-dev \
+        libfreetype6-dev \
+        libltdl-dev \
+        libxcb1-dev \
+        libx11-dev \
+        libvulkan-dev \
+        librsvg2-bin \
+        \
+        # ARM64 runtime development libraries \
+        libglib2.0-dev:arm64 \
+        libunwind-dev:arm64 \
+        libdbus-1-dev:arm64 \
+        libudev-dev:arm64 \
+        libvulkan-dev:arm64 \
+        libgl-dev:arm64 \
+        libepoxy-dev:arm64 \
+        libxcb1-dev:arm64 \
+        libx11-dev:arm64 \
+        libxext-dev:arm64 \
+        libxcursor-dev:arm64 \
+        libxi-dev:arm64 \
+        libxrandr-dev:arm64 \
+        libxrender-dev:arm64 \
+        libxfixes-dev:arm64 \
+        libxcomposite-dev:arm64 \
+        libxinerama-dev:arm64 \
+        libxxf86vm-dev:arm64 \
+        libwayland-dev:arm64 \
+        libxkbcommon-dev:arm64 \
+        libmpg123-dev:arm64 \
+        libopenal-dev:arm64 \
+        libfontconfig1-dev:arm64 \
+        libfreetype6-dev:arm64 \
+        libsdl2-dev:arm64 \
+        libasound2-dev:arm64 \
+        libpulse-dev:arm64 \
+        libgstreamer1.0-dev:arm64 \
+        libgstreamer-plugins-base1.0-dev:arm64 \
+        \
+        # Misc \
+        dpkg-dev \
+        fakeroot \
+        debhelper \
+        dh-make \
+        screen \
+        nano \
+        less
+
+  # ============================================================
+  # 3. locales
+  # ============================================================
+
+  - name: 配置 Locale
+    shell: bash
+    run: |
+      set -eux
+
+      apt-get install -y locales
+
+      sed -i \
+        's/^# *ko_KR.UTF-8 UTF-8/ko_KR.UTF-8 UTF-8/' \
+        /etc/locale.gen
+
+      sed -i \
+        's/^# *zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' \
+        /etc/locale.gen
+
+      locale-gen
+
+      echo "LANG=ko_KR.UTF-8" >> "$GITHUB_ENV"
+      echo "LC_ALL=ko_KR.UTF-8" >> "$GITHUB_ENV"
+      echo "LANGUAGE=ko_KR:ko" >> "$GITHUB_ENV"
+
+  # ============================================================
+  # 4. llvm-mingw
+  # ============================================================
+
+  - name: 安装 llvm-mingw
+    shell: bash
+    run: |
+      set -eux
+
+      mkdir -p /opt
+
+      cd /opt
+
+      wget \
+        -q \
+        --show-progress \
+        "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVMMINGW_DATE}/${LLVMMINGW_NAME}.tar.xz"
+
+      tar -xJf "${LLVMMINGW_NAME}.tar.xz"
+
+      rm -f "${LLVMMINGW_NAME}.tar.xz"
+
+      echo "/opt/${LLVMMINGW_NAME}/bin" >> "$GITHUB_PATH"
+
+      echo "=== llvm-mingw ==="
+
+      /opt/${LLVMMINGW_NAME}/bin/clang --version
+      /opt/${LLVMMINGW_NAME}/bin/arm64ec-w64-mingw32-clang --version
+
+  # ============================================================
+  # 5. Toolchain verification
+  # ============================================================
+
+  - name: 验证交叉工具链
+    shell: bash
+    run: |
+      set -eux
+
+      export PATH="/opt/${LLVMMINGW_NAME}/bin:$PATH"
+
+      command -v clang
+      command -v clang++
+      command -v arm64ec-w64-mingw32-clang
+      command -v arm64ec-w64-mingw32-clang++
+      command -v aarch64-linux-gnu-gcc
+      command -v aarch64-linux-gnu-ld
+
+      echo "=== ARM64 compiler ==="
+
+      clang \
+        --target=aarch64-linux-gnu \
+        --version
+
+      echo "=== ARM64EC compiler ==="
+
+      arm64ec-w64-mingw32-clang --version
+
+  # ============================================================
+  # 6. 获取 Wine / Proton / Staging 源码
+  # ============================================================
+
+  - name: 获取 Wine 源码
+    shell: bash
     env:
-      LLVMMINGW_DATE: "20251202"
-      LLVMMINGW_NAME: "llvm-mingw-20251202-ucrt-ubuntu-22.04-aarch64"
-      LLVM_MINGW_ROOT: /opt/llvm-mingw
+      INPUT_WINE_BRANCH: ${{ inputs.wine_branch }}
+      INPUT_WINE_VERSION: ${{ inputs.wine_version }}
+      INPUT_PROTON_BRANCH: ${{ inputs.proton_branch }}
+      INPUT_PROTON_COMMIT: ${{ inputs.proton_commit }}
+      INPUT_STAGING_VERSION: ${{ inputs.staging_version }}
+    run: |
+      set -eux
 
-      WINE_SOURCE_DIR: /opt/wine-src
-      WINE64_DIR: /opt/wine64
+      rm -rf "${WINE_SOURCE_DIR}"
 
-      RUNTIME_TERMUX_PREFIX: /data/data/com.termux/files/usr
-      RUNTIME_GLIBC_PREFIX: /data/data/com.termux/files/usr/glibc
-      RUNTIME_WINE_PREFIX: /data/data/com.termux/files/usr/glibc/opt/wine
-      RUNTIME_TMPDIR: /data/data/com.termux/files/usr/tmp/runtime
+      mkdir -p "${WINE_SOURCE_DIR}"
 
-      CI_TERMUX_ROOT: ${{ github.workspace }}/termux-glibc-staging
-      CI_TERMUX_PREFIX: ${{ github.workspace }}/termux-glibc-staging/data/data/com.termux/files/usr
-      CI_GLIBC_PREFIX: ${{ github.workspace }}/termux-glibc-staging/data/data/com.termux/files/usr/glibc
-      CI_TERMUX_TMPDIR: ${{ github.workspace }}/.termux-tmp
-      CGCT_DIR: ${{ github.workspace }}/cgct
+      cd "${WINE_SOURCE_DIR}"
 
-      TERMUX_PACKAGES_REPO: https://github.com/termux/termux-packages.git
-      GLIBC_PACKAGES_REPO: https://github.com/termux-pacman/glibc-packages.git
+      BUILD_TYPE="${INPUT_WINE_BRANCH:-proton}"
+      WINE_VERSION="${INPUT_WINE_VERSION:-latest}"
 
-      TERMUX_ARCH: aarch64
-      STRIP_MODE: ${{ inputs.strip_mode || 'debug' }}
-      WITH_GSTREAMER: ${{ inputs.with_gstreamer || 'off' }}
-      WINE_INSTALL_PREFIX: ${{ github.workspace }}/wine-install-wow64
+      echo "============================================"
+      echo "Build type       : ${BUILD_TYPE}"
+      echo "Wine version     : ${WINE_VERSION}"
+      echo "Proton branch    : ${INPUT_PROTON_BRANCH}"
+      echo "Proton commit    : ${INPUT_PROTON_COMMIT}"
+      echo "Staging version  : ${INPUT_STAGING_VERSION}"
+      echo "============================================"
 
-    steps:
+      case "${BUILD_TYPE}" in
 
-      # ==========================================================
-      # 1. Checkout
-      # ==========================================================
-      - name: Checkout workflow repository
-        uses: actions/checkout@v4
+        proton)
 
-      # ==========================================================
-      # 2. Base packages
-      # ==========================================================
-      - name: Install build dependencies
-        run: |
-          set -euxo pipefail
-          export DEBIAN_FRONTEND=noninteractive
+          echo "=== Proton Wine ==="
 
-          apt-get update
+          PROTON_BRANCH="${INPUT_PROTON_BRANCH:-proton_11.0}"
 
-          apt-get install -y --no-install-recommends \
-            autoconf \
-            automake \
-            bc \
-            bison \
-            build-essential \
-            bzip2 \
-            ca-certificates \
-            ccache \
-            clang \
-            cmake \
-            curl \
-            file \
-            flex \
-            g++ \
-            gcc \
-            gettext \
-            git \
-            gnupg \
-            jq \
-            lzip \
-            make \
-            meson \
-            ninja-build \
-            patch \
-            patchelf \
-            pkg-config \
+          git clone \
+            --branch "${PROTON_BRANCH}" \
+            --single-branch \
+            https://github.com/WinNative-Emu/proton-wine.git \
+            source
+
+          cd source
+
+          git config advice.detachedHead false
+
+          if [ -n "${INPUT_PROTON_COMMIT}" ]; then
+            echo "Checking out Proton commit ${INPUT_PROTON_COMMIT}"
+
+            git fetch \
+              --depth=1 \
+              origin \
+              "${INPUT_PROTON_COMMIT}"
+
+            git checkout "${INPUT_PROTON_COMMIT}"
+          fi
+
+          ;;
+
+        staging)
+
+          echo "=== Wine Staging ==="
+
+          mkdir -p staging-source
+
+          cd staging-source
+
+          git clone \
+            --depth=1 \
+            https://github.com/wine-staging/wine-staging.git \
+            staging
+
+          cd staging
+
+          STAGING_HEAD="$(git rev-parse HEAD)"
+
+          echo "Wine-Staging HEAD: ${STAGING_HEAD}"
+
+          if [ -n "${INPUT_STAGING_VERSION}" ]; then
+
+            git fetch \
+              --tags \
+              --depth=1 \
+              origin \
+              "v${INPUT_STAGING_VERSION}"
+
+            git checkout \
+              "v${INPUT_STAGING_VERSION}"
+
+          fi
+
+          if [ -f staging/upstream-commit ]; then
+
+            UPSTREAM_COMMIT="$(cat staging/upstream-commit | tr -d '[:space:]')"
+
+            echo "Required Wine upstream commit:"
+            echo "${UPSTREAM_COMMIT}"
+
+            cd ..
+
+            git clone \
+              https://github.com/wine-mirror/wine.git \
+              source
+
+            cd source
+
+            git fetch \
+              --depth=1 \
+              origin \
+              "${UPSTREAM_COMMIT}"
+
+            git checkout "${UPSTREAM_COMMIT}"
+
+            git config advice.detachedHead false
+
+            echo "=== Apply Wine-Staging patchset ==="
+
             python3 \
-            python3-pip \
-            python3-setuptools \
-            rsync \
-            tar \
-            unzip \
-            wget \
-            xz-utils \
-            zstd \
-            libarchive-tools \
-            libfontconfig-dev \
-            libfreetype-dev \
-            libgl-dev \
-            libgmp-dev \
-            libgnutls28-dev \
-            libjpeg-dev \
-            liblcms2-dev \
-            liblz4-dev \
-            libmpg123-dev \
-            libncurses-dev \
-            libopenal-dev \
-            libosmesa6-dev \
-            libpcap-dev \
-            libpulse-dev \
-            libsane-dev \
-            libsdl2-dev \
-            libssl-dev \
-            libudev-dev \
-            libunwind-dev \
-            libusb-1.0-0-dev \
-            libva-dev \
-            libvulkan-dev \
-            libwayland-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxau-dev \
-            libxcb1-dev \
-            libxcb-shm0-dev \
-            libxcursor-dev \
-            libxdamage-dev \
-            libxext-dev \
-            libxfixes-dev \
-            libxi-dev \
-            libxinerama-dev \
-            libxkbcommon-dev \
-            libxml2-dev \
-            libxrandr-dev \
-            libxrender-dev \
-            libxxf86vm-dev \
-            libxcomposite-dev \
-            libzstd-dev
+              ../staging-source/staging/staging/patchinstall.py \
+              DESTDIR="$PWD" \
+              --all \
+              --no-autoconf
 
-          if [ "$WITH_GSTREAMER" = "on" ]; then
-            apt-get install -y --no-install-recommends \
-              libgstreamer1.0-dev \
-              libgstreamer-plugins-base1.0-dev \
-              libgstreamer-plugins-bad1.0-dev
-          fi
-
-          mkdir -p "$CI_TERMUX_TMPDIR"
-          chmod 1777 "$CI_TERMUX_TMPDIR"
-
-      # ==========================================================
-      # 3. Checkout official Termux build system
-      # ==========================================================
-      - name: Checkout Termux packages
-        run: |
-          set -euxo pipefail
-
-          rm -rf "$GITHUB_WORKSPACE/termux-packages"
-
-          git clone \
-            --depth=1 \
-            "$TERMUX_PACKAGES_REPO" \
-            "$GITHUB_WORKSPACE/termux-packages"
-
-          test -f "$GITHUB_WORKSPACE/termux-packages/scripts/setup-cgct.sh"
-
-      # ==========================================================
-      # 4. Checkout official glibc packages
-      # ==========================================================
-      - name: Checkout glibc packages
-        run: |
-          set -euxo pipefail
-
-          rm -rf "$GITHUB_WORKSPACE/glibc-packages"
-
-          git clone \
-            --depth=1 \
-            "$GLIBC_PACKAGES_REPO" \
-            "$GITHUB_WORKSPACE/glibc-packages"
-
-          test -f "$GITHUB_WORKSPACE/glibc-packages/repo.json"
-          test -f "$GITHUB_WORKSPACE/glibc-packages/gpkg/glibc/build.sh"
-
-      # ==========================================================
-      # 5. Prepare glibc build-package.sh
-      # ==========================================================
-      - name: Prepare glibc build system
-        run: |
-          set -euxo pipefail
-
-          cd "$GITHUB_WORKSPACE/glibc-packages"
-
-          bash ./get-build-package.sh
-
-          test -f build-package.sh
-          test -d scripts
-          test -d gpkg
-
-      # ==========================================================
-      # 6. Setup official CGCT
-      # ==========================================================
-      - name: Setup official CGCT
-        run: |
-          set -euxo pipefail
-
-          cd "$GITHUB_WORKSPACE/termux-packages"
-
-          export TERMUX_PKG_TMPDIR="$CI_TERMUX_TMPDIR"
-          export CGCT_DIR="$GITHUB_WORKSPACE/cgct"
-
-          rm -rf "$CGCT_DIR"
-
-          bash scripts/setup-cgct.sh
-
-          test -d "$CGCT_DIR"
-          test -x "$CGCT_DIR/bin/setup-cgct"
-
-          echo "========== CGCT =========="
-          find "$CGCT_DIR" -maxdepth 3 -type f | sort | head -300
-
-      # ==========================================================
-      # 7. Verify CGCT target
-      # ==========================================================
-      - name: Verify CGCT AArch64
-        run: |
-          set -euxo pipefail
-
-          CGCT_AARCH64="$CGCT_DIR/aarch64"
-
-          test -d "$CGCT_AARCH64"
-          test -d "$CGCT_AARCH64/bin"
-
-          echo "========== CGCT AArch64 =========="
-          find "$CGCT_AARCH64/bin" \
-            -maxdepth 1 \
-            -type f \
-            -perm -111 \
-            | sort
-
-      # ==========================================================
-      # 8. Detect CGCT compiler
-      # ==========================================================
-      - name: Detect CGCT compiler
-        run: |
-          set -euxo pipefail
-
-          BIN="$CGCT_DIR/aarch64/bin"
-
-          CC="$BIN/aarch64-linux-gnu-gcc"
-          CXX="$BIN/aarch64-linux-gnu-g++"
-
-          if [ ! -x "$CC" ]; then
-            CC="$(find "$BIN" -maxdepth 1 -type f -name '*-gcc' -perm -111 | head -1)"
-          fi
-
-          if [ ! -x "$CXX" ]; then
-            CXX="$(find "$BIN" -maxdepth 1 -type f -name '*-g++' -perm -111 | head -1)"
-          fi
-
-          test -x "$CC"
-          test -x "$CXX"
-
-          {
-            echo "TERMUX_GLIBC_CC=$CC"
-            echo "TERMUX_GLIBC_CXX=$CXX"
-          } >> "$GITHUB_ENV"
-
-          echo "CC=$CC"
-          echo "CXX=$CXX"
-
-          "$CC" --version
-          "$CXX" --version
-
-          echo "Target:"
-          "$CC" -dumpmachine
-
-          echo "Sysroot:"
-          "$CC" -print-sysroot
-
-      # ==========================================================
-      # 9. Obtain official temporary Termux glibc
-      # ==========================================================
-      - name: Install official temporary Termux glibc
-        run: |
-          set -euxo pipefail
-
-          ARCH="$TERMUX_ARCH"
-          GPKG_URL="https://sync.termux-pacman.dev/gpkg/${ARCH}"
-          TMP_GLIBC="$GITHUB_WORKSPACE/.temporary-glibc"
-
-          rm -rf "$TMP_GLIBC"
-          mkdir -p "$TMP_GLIBC"
-
-          curl --fail --retry 5 --retry-delay 3 -L \
-            "$GPKG_URL/gpkg.json" \
-            -o "$TMP_GLIBC/gpkg.json"
-
-          test -s "$TMP_GLIBC/gpkg.json"
-
-          GLIBC_FILE="$(jq -r '."glibc"."FILENAME"' "$TMP_GLIBC/gpkg.json")"
-          GLIBC_SHA256="$(jq -r '."glibc"."SHA256SUM"' "$TMP_GLIBC/gpkg.json")"
-
-          test -n "$GLIBC_FILE"
-          test "$GLIBC_FILE" != "null"
-          test -n "$GLIBC_SHA256"
-          test "$GLIBC_SHA256" != "null"
-
-          echo "GLIBC_FILE=$GLIBC_FILE"
-          echo "GLIBC_SHA256=$GLIBC_SHA256"
-
-          curl --fail --retry 5 --retry-delay 3 -L \
-            "$GPKG_URL/$GLIBC_FILE" \
-            -o "$TMP_GLIBC/$GLIBC_FILE"
-
-          echo "$GLIBC_SHA256 $TMP_GLIBC/$GLIBC_FILE" | sha256sum -c -
-
-          tar -xJf "$TMP_GLIBC/$GLIBC_FILE" -C "$TMP_GLIBC" data
-
-          test -d "$TMP_GLIBC/data/data/com.termux/files/usr/glibc"
-
-      # ==========================================================
-      # 10. Create isolated CI glibc staging
-      # ==========================================================
-      - name: Create Termux glibc staging
-        run: |
-          set -euxo pipefail
-
-          rm -rf "$CI_TERMUX_ROOT"
-
-          mkdir -p "$CI_TERMUX_PREFIX" "$CI_GLIBC_PREFIX"
-
-          cp -a \
-            "$GITHUB_WORKSPACE/.temporary-glibc/data/data/com.termux/files/usr/glibc/." \
-            "$CI_GLIBC_PREFIX/"
-
-          test -f "$CI_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1"
-          test -f "$CI_GLIBC_PREFIX/lib/libc.so.6"
-          test -f "$CI_GLIBC_PREFIX/include/features.h"
-
-      # ==========================================================
-      # 11. Link CGCT libgcc into staging
-      # ==========================================================
-      - name: Prepare CGCT libgcc
-        run: |
-          set -euxo pipefail
-
-          mkdir -p "$CI_GLIBC_PREFIX/lib"
-
-          find "$CGCT_DIR/aarch64/lib" \
-            -maxdepth 1 \
-            -type f \
-            -name 'libgcc*' \
-            -exec cp -n {} "$CI_GLIBC_PREFIX/lib/" +
-
-          ls -l "$CI_GLIBC_PREFIX/lib"/libgcc* 2>/dev/null || true
-
-      # ==========================================================
-      # 12. glibc compiler smoke test
-      # ==========================================================
-      - name: Test Termux glibc compiler
-        run: |
-          set -euxo pipefail
-
-          TESTDIR="$GITHUB_WORKSPACE/glibc-test"
-          rm -rf "$TESTDIR"
-          mkdir -p "$TESTDIR"
-
-          printf '%s\n' \
-            '#include <stdio.h>' \
-            '#include <gnu/libc-version.h>' \
-            '' \
-            'int main(void)' \
-            '{' \
-            '    printf("glibc=%s\n", gnu_get_libc_version());' \
-            '    return 0;' \
-            '}' \
-            > "$TESTDIR/test.c"
-
-          "$TERMUX_GLIBC_CC" \
-            -O2 \
-            -I"$CI_GLIBC_PREFIX/include" \
-            -L"$CI_GLIBC_PREFIX/lib" \
-            -Wl,--dynamic-linker="$RUNTIME_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1" \
-            -Wl,-rpath="$RUNTIME_GLIBC_PREFIX/lib" \
-            "$TESTDIR/test.c" \
-            -o "$TESTDIR/test"
-
-          file "$TESTDIR/test"
-          readelf -l "$TESTDIR/test" \
-            | grep -F "$RUNTIME_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1"
-          readelf -d "$TESTDIR/test" \
-            | grep -E 'NEEDED|RPATH|RUNPATH'
-
-      # ==========================================================
-      # 13. LLVM-MinGW
-      # ==========================================================
-      - name: Download LLVM-MinGW
-        run: |
-          set -euxo pipefail
-
-          rm -rf "$LLVM_MINGW_ROOT"
-          mkdir -p "$LLVM_MINGW_ROOT"
-
-          URL="https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVMMINGW_DATE}/${LLVMMINGW_NAME}.tar.xz"
-
-          curl --fail --retry 5 --retry-delay 3 -L \
-            "$URL" \
-            -o /tmp/llvm-mingw.tar.xz
-
-          tar -xJf /tmp/llvm-mingw.tar.xz \
-            --strip-components=1 \
-            -C "$LLVM_MINGW_ROOT"
-
-          test -x "$LLVM_MINGW_ROOT/bin/clang"
-          test -x "$LLVM_MINGW_ROOT/bin/clang++"
-
-          echo "$LLVM_MINGW_ROOT/bin" >> "$GITHUB_PATH"
-
-          "$LLVM_MINGW_ROOT/bin/clang" --version
-
-      # ==========================================================
-      # 14. Build FEX ARM64EC
-      # ==========================================================
-      - name: Build FEX ARM64EC
-        run: |
-          set -euxo pipefail
-
-          rm -rf /opt/FEX
-
-          git clone \
-            --recursive \
-            --depth=1 \
-            https://github.com/FEX-Emu/FEX.git \
-            /opt/FEX
-
-          cd /opt/FEX
-
-          test -f Source/Windows/WOW64/CMakeLists.txt
-
-          cmake \
-            -S . \
-            -B build-arm64ec \
-            -GNinja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/opt/FEX/install-arm64ec \
-            -DCMAKE_TOOLCHAIN_FILE=Data/CMake/toolchain_mingw.cmake \
-            -DMINGW_TRIPLE=arm64ec-w64-mingw32
-
-          cmake --build build-arm64ec --parallel "$(nproc)"
-          cmake --install build-arm64ec
-
-      # ==========================================================
-      # 15. Build FEX AArch64
-      # ==========================================================
-      - name: Build FEX AArch64
-        run: |
-          set -euxo pipefail
-
-          cd /opt/FEX
-
-          cmake \
-            -S . \
-            -B build-aarch64 \
-            -GNinja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/opt/FEX/install-wow64 \
-            -DCMAKE_TOOLCHAIN_FILE=Data/CMake/toolchain_mingw.cmake \
-            -DMINGW_TRIPLE=aarch64-w64-mingw32
-
-          cmake --build build-aarch64 --parallel "$(nproc)"
-          cmake --install build-aarch64
-
-      # ==========================================================
-      # 16. Select Wine source
-      # ==========================================================
-      - name: Fetch Wine source
-        run: |
-          set -euxo pipefail
-
-          rm -rf "$WINE_SOURCE_DIR"
-
-          case "${{ inputs.wine_source || 'staging' }}" in
-            vanilla)
-              git clone https://github.com/wine-mirror/wine.git "$WINE_SOURCE_DIR"
-              ;;
-            staging)
-              git clone https://github.com/afeimod/wine-arm.git "$WINE_SOURCE_DIR"
-              ;;
-            staging-tkg|staging-tkg-fsync)
-              git clone https://github.com/Kron4ek/wine-tkg.git "$WINE_SOURCE_DIR"
-              ;;
-            *)
-              echo "Unknown Wine source"
-              exit 1
-              ;;
-          esac
-
-          cd "$WINE_SOURCE_DIR"
-
-          if [ "${{ inputs.wine_ref || 'master' }}" != "latest" ]; then
-            git checkout "${{ inputs.wine_ref || 'master' }}"
-          fi
-
-          git submodule update --init --recursive || true
-
-          test -f configure.ac
-
-      # ==========================================================
-      # 17. Apply repository-local Wine patches
-      # ==========================================================
-      - name: Apply Wine patches
-        run: |
-          set -euxo pipefail
-
-          cd "$WINE_SOURCE_DIR"
-
-          PATCH_ROOT="$GITHUB_WORKSPACE/patches"
-
-          if [ ! -d "$PATCH_ROOT" ]; then
-            echo "No patches/ directory."
-            exit 0
-          fi
-
-          shopt -s nullglob
-          PATCHES=( "$PATCH_ROOT"/*.patch )
-
-          if [ "${#PATCHES[@]}" -eq 0 ]; then
-            echo "No repository-local Wine patches."
-            exit 0
-          fi
-
-          for patch in "${PATCHES[@]}"; do
-            name="$(basename "$patch")"
-
-            if [ "$name" = "dlls_ntdll_unix_env.c.patch" ]; then
-              echo "Skipping intentionally excluded patch: $name"
-              continue
-            fi
-
-            echo "Applying: $patch"
-
-            if ! patch -p1 --forward < "$patch"; then
-              echo "WARNING: patch failed: $patch"
-            fi
-          done
-
-      # ==========================================================
-      # 18. Regenerate Wine configure
-      # ==========================================================
-      - name: Regenerate Wine configure
-        run: |
-          set -euxo pipefail
-
-          cd "$WINE_SOURCE_DIR"
-
-          if [ -x ./autogen.sh ]; then
-            ./autogen.sh
-          elif [ ! -x ./configure ]; then
-            autoreconf -fi
-          fi
-
-          test -x configure
-
-      # ==========================================================
-      # 19. Build native Wine tools
-      # ==========================================================
-      - name: Build native Wine tools
-        run: |
-          set -euxo pipefail
-
-          rm -rf "$WINE64_DIR"
-          mkdir -p "$WINE64_DIR/source"
-
-          rsync -a "$WINE_SOURCE_DIR/" "$WINE64_DIR/source/"
-
-          cd "$WINE64_DIR/source"
-
-          rm -rf build-native
-          mkdir build-native
-          cd build-native
-
-          ../configure \
-            --enable-win64 \
-            --disable-tests \
-            --prefix="$WINE64_DIR"
-
-          make -j"$(nproc)" __tooldeps__ nls
-          make -j"$(nproc)" install
-
-      # ==========================================================
-      # 20. Verify native Wine tools
-      # ==========================================================
-      - name: Verify native Wine tools
-        run: |
-          set -euxo pipefail
-
-          test -d "$WINE64_DIR/nls"
-
-          find "$WINE64_DIR" -maxdepth 3 -type f -perm -111 | head -100
-
-      # ==========================================================
-      # 21. Configure ARM64 WOW64
-      # ==========================================================
-      - name: Configure Wine ARM64 WOW64
-        run: |
-          set -euxo pipefail
-
-          cd "$WINE_SOURCE_DIR"
-
-          rm -rf build-arm64
-          mkdir build-arm64
-          cd build-arm64
-
-          export CC="$TERMUX_GLIBC_CC"
-          export CXX="$TERMUX_GLIBC_CXX"
-
-          GLIBC="$CI_GLIBC_PREFIX"
-
-          export CPPFLAGS="-I${GLIBC}/include"
-          export CFLAGS="-O2 -pipe -I${GLIBC}/include"
-          export CXXFLAGS="-O2 -pipe -I${GLIBC}/include"
-          export CROSSCFLAGS="$CFLAGS"
-          export CROSSCXXFLAGS="$CXXFLAGS"
-
-          unset PKG_CONFIG_SYSROOT_DIR
-          unset PKG_CONFIG_PATH
-          unset PKG_CONFIG_LIBDIR
-
-          export PKG_CONFIG_LIBDIR="${GLIBC}/lib/pkgconfig:${GLIBC}/share/pkgconfig"
-          export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
-
-          export LDFLAGS="-L${GLIBC}/lib"
-
-          export WINE_NLS_DIR="$WINE64_DIR/nls"
-
-          EXTRA_ARGS=()
-
-          if [ "$WITH_GSTREAMER" = "on" ]; then
-            EXTRA_ARGS+=( --with-gstreamer )
           else
-            EXTRA_ARGS+=( --without-gstreamer )
+
+            echo "ERROR: staging/upstream-commit not found"
+            exit 1
+
           fi
 
-          ../configure \
-            --prefix="$WINE_INSTALL_PREFIX" \
-            --with-mingw=clang \
-            --enable-archs=arm64ec,aarch64,i386 \
-            --enable-tools \
-            --disable-tests \
-            --with-vulkan \
-            --with-wine-tools="$WINE64_DIR" \
-            "${EXTRA_ARGS[@]}" \
-            CC="$CC" \
-            CXX="$CXX" \
-            CPPFLAGS="$CPPFLAGS" \
-            CFLAGS="$CFLAGS" \
-            CXXFLAGS="$CXXFLAGS" \
-            LDFLAGS="$LDFLAGS"
+          ;;
 
-      # ==========================================================
-      # 22. Build Wine
-      # ==========================================================
-      - name: Build Wine ARM64 WOW64
-        run: |
-          set -euxo pipefail
+        winearm64ec)
 
-          cd "$WINE_SOURCE_DIR/build-arm64"
+          echo "=== Wine ARM64EC / wine-tkg ==="
 
-          make -j"$(nproc)"
+          git clone \
+            -b wow641010 \
+            https://github.com/hostei33/wine-tkg.git \
+            source
 
-      # ==========================================================
-      # 23. Install Wine
-      # ==========================================================
-      - name: Install Wine ARM64 WOW64
-        run: |
-          set -euxo pipefail
+          cd source
 
-          cd "$WINE_SOURCE_DIR/build-arm64"
+          git config advice.detachedHead false
 
-          rm -rf "$WINE_INSTALL_PREFIX"
+          if [ "${WINE_VERSION}" != "latest" ]; then
 
-          make install
+            git fetch --tags
 
-          test -x "$WINE_INSTALL_PREFIX/bin/wine"
-          test -x "$WINE_INSTALL_PREFIX/bin/wineserver"
+            git checkout \
+              "wine-${WINE_VERSION}"
 
-      # ==========================================================
-      # 24. Complete Wine runtime
-      # ==========================================================
-      - name: Complete Wine runtime
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          mkdir -p \
-            "$INSTALL/nls" \
-            "$INSTALL/etc" \
-            "$INSTALL/share/wine" \
-            "$INSTALL/lib/wine/aarch64-windows"
-
-          if [ -d "$WINE64_DIR/nls" ]; then
-            cp -a "$WINE64_DIR/nls/." "$INSTALL/nls/"
           fi
 
-          find "$WINE_SOURCE_DIR/build-arm64" \
-            -name wine.inf \
-            -type f \
-            -exec cp {} "$INSTALL/share/wine/" + \
+          ;;
+
+        *)
+
+          echo "ERROR: Unknown wine_branch=${BUILD_TYPE}"
+          exit 1
+
+          ;;
+
+      esac
+
+      cd "${WINE_SOURCE_DIR}/source"
+
+      echo "=== Wine source information ==="
+
+      git remote -v || true
+      git status --short || true
+
+      COMMIT_HASH="$(git rev-parse --short HEAD)"
+
+      if [ -f VERSION ]; then
+        WINE_VERSION_ACTUAL="$(cat VERSION)"
+      else
+        WINE_VERSION_ACTUAL="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"
+      fi
+
+      BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-${BUILD_TYPE}-arm64-wow64"
+
+      echo "BUILD_NAME=${BUILD_NAME}" >> "$GITHUB_ENV"
+      echo "WINE_VERSION_ACTUAL=${WINE_VERSION_ACTUAL}" >> "$GITHUB_ENV"
+      echo "WINE_COMMIT=${COMMIT_HASH}" >> "$GITHUB_ENV"
+
+      echo "BUILD_NAME=${BUILD_NAME}"
+      echo "WINE_VERSION_ACTUAL=${WINE_VERSION_ACTUAL}"
+      echo "WINE_COMMIT=${COMMIT_HASH}"
+
+  # ============================================================
+  # 7. Wine source preparation
+  # ============================================================
+
+  - name: Wine source preparation
+    shell: bash
+    run: |
+      set -eux
+
+      cd "${WINE_SOURCE_DIR}/source"
+
+      chmod +x autogen.sh || true
+
+      # Wine Staging / Proton 修改后重新生成 configure
+      if [ ! -f configure ]; then
+        ./autogen.sh
+      fi
+
+      # 某些 Wine fork 需要这些生成步骤
+      if [ -x dlls/winevulkan/make_vulkan ]; then
+        dlls/winevulkan/make_vulkan || true
+      fi
+
+      if [ -x tools/make_requests ]; then
+        tools/make_requests || true
+      fi
+
+      if [ -x tools/make_specfiles ]; then
+        tools/make_specfiles || true
+      fi
+
+  # ============================================================
+  # 8. Termux compatibility patches
+  # ============================================================
+
+  - name: Termux compatibility patches
+    shell: bash
+    env:
+      PATCH_BASE: https://raw.githubusercontent.com/mebabo1/menano/refs/heads/main/path
+    run: |
+      set -eux
+
+      cd "${WINE_SOURCE_DIR}/source"
+
+      echo "============================================"
+      echo "Applying Termux patches"
+      echo "============================================"
+
+      # --------------------------------------------------------
+      # Termux tmp
+      #
+      # 注意：
+      # 不再把所有 /tmp 全局替换。
+      # 这里只处理 Wine runtime 中明确依赖 runtime tmp 的位置。
+      # --------------------------------------------------------
+
+      TERMUX_TMP="${TERMUX_TMP}"
+
+      for FILE in \
+        server/file.c \
+        server/server.c \
+        loader/loader.c \
+        dlls/ntdll/loader.c \
+        dlls/ntdll/unix/virtual.c
+      do
+
+        if [ -f "$FILE" ]; then
+
+          echo "Patching tmp path: $FILE"
+
+          sed -i \
+            "s|\"/tmp\"|\"${TERMUX_TMP}\"|g" \
+            "$FILE"
+
+          sed -i \
+            "s|/tmp/|${TERMUX_TMP}/|g" \
+            "$FILE"
+
+        fi
+
+      done
+
+      # --------------------------------------------------------
+      # FEX DLL names
+      # --------------------------------------------------------
+
+      if [ -f loader/wine.inf.in ]; then
+
+        sed -i \
+          's/"xtajit64\.dll"/"libarm64ecfex.dll"/g' \
+          loader/wine.inf.in
+
+        sed -i \
+          's/"xtajit\.dll"/"libwow64fex.dll"/g' \
+          loader/wine.inf.in
+
+      fi
+
+      if [ -f dlls/ntdll/loader.c ]; then
+
+        sed -i \
+          's/xtajit64\.dll/libarm64ecfex.dll/g' \
+          dlls/ntdll/loader.c
+
+        sed -i \
+          's/xtajit\.dll/libwow64fex.dll/g' \
+          dlls/ntdll/loader.c
+
+      fi
+
+      # --------------------------------------------------------
+      # 统一 FEX DLL 名称
+      # --------------------------------------------------------
+
+      find . \
+        -type f \
+        -name "*.c" -o -name "*.h" \
+        -print0 |
+      xargs -0 sed -i \
+        's/xtajit64\.dll/libarm64ecfex.dll/g'
+
+      find . \
+        -type f \
+        -name "*.c" -o -name "*.h" \
+        -print0 |
+      xargs -0 sed -i \
+        's/xtajit\.dll/libwow64fex.dll/g'
+
+      # --------------------------------------------------------
+      # ARM64EC ntdll arch name
+      # --------------------------------------------------------
+
+      find dlls/ntdll \
+        -type f \
+        -name "*.c" -o -name "*.h" \
+        -print0 |
+      xargs -0 sed -i \
+        's|x86_64-windows|aarch64-windows|g'
+
+      # --------------------------------------------------------
+      # wdscore workaround
+      # --------------------------------------------------------
+
+      FILE_WDSCORE="dlls/wdscore/wdscore.spec"
+
+      if [ -f "${FILE_WDSCORE}" ]; then
+
+        echo "Checking wdscore.spec"
+
+        grep -n -C 2 'CDynamicArray' \
+          "${FILE_WDSCORE}" || true
+
+        if grep -q '@ stub' "${FILE_WDSCORE}"; then
+
+          sed -i '/CDynamicArray/d' \
+            "${FILE_WDSCORE}"
+
+          echo "wdscore workaround applied"
+
+        fi
+
+      fi
+
+      # --------------------------------------------------------
+      # virtual.c workaround
+      # --------------------------------------------------------
+
+      FILE_VIRTUAL="dlls/ntdll/unix/virtual.c"
+
+      if [ -f "${FILE_VIRTUAL}" ]; then
+
+        echo "Patching virtual.c"
+
+        sed -i \
+          's/HandleToULong( pbi.UniqueProcessId )/HandleToULong( (void *)(ULONG_PTR)pbi.UniqueProcessId )/g' \
+          "${FILE_VIRTUAL}"
+
+        # userfaultfd:
+        # Termux Android runtime 不依赖 Wine 的 userfaultfd write-watch。
+        #
+        # 仅在源码确实存在该调用时修改。
+        if grep -q 'uffd_fd = syscall( __NR_userfaultfd' "${FILE_VIRTUAL}"; then
+
+          sed -i \
+            's/uffd_fd = syscall( __NR_userfaultfd/uffd_fd = -1; \/\* Termux bypass \*\//g' \
+            "${FILE_VIRTUAL}"
+
+        fi
+
+      fi
+
+      # --------------------------------------------------------
+      # External GStreamer patch
+      # --------------------------------------------------------
+
+      PATCH_FILES="gstreamer01.patch"
+
+      for PATCH_FILE in ${PATCH_FILES}; do
+
+        URL="${PATCH_BASE}/${PATCH_FILE}"
+
+        echo "============================================"
+        echo "Downloading ${PATCH_FILE}"
+        echo "${URL}"
+        echo "============================================"
+
+        rm -f "${PATCH_FILE}"
+
+        wget \
+          -q \
+          -O "${PATCH_FILE}" \
+          "${URL}"
+
+        if [ ! -s "${PATCH_FILE}" ]; then
+          echo "ERROR: Empty patch: ${PATCH_FILE}"
+          exit 1
+        fi
+
+        echo "=== Checking patch ==="
+
+        if git apply --check "${PATCH_FILE}"; then
+
+          echo "Applying normally"
+
+          git apply \
+            --whitespace=fix \
+            "${PATCH_FILE}"
+
+        elif git apply --3way --check "${PATCH_FILE}"; then
+
+          echo "Applying with 3-way merge"
+
+          git apply \
+            --3way \
+            --whitespace=fix \
+            "${PATCH_FILE}"
+
+        else
+
+          echo "ERROR: Patch cannot be applied"
+          git apply --check "${PATCH_FILE}" || true
+
+          exit 1
+
+        fi
+
+      done
+
+      echo "============================================"
+      echo "Termux patches completed"
+      echo "============================================"
+
+  # ============================================================
+  # 9. Generate configure
+  # ============================================================
+
+  - name: Regenerate Wine configure
+    shell: bash
+    run: |
+      set -eux
+
+      cd "${WINE_SOURCE_DIR}/source"
+
+      ./autogen.sh
+
+      test -f configure
+
+      ls -lh configure
+
+  # ============================================================
+  # 10. Native Wine64 tools
+  # ============================================================
+
+  - name: Build native Wine64 tools and NLS
+    shell: bash
+    run: |
+      set -eux
+
+      rm -rf "${WINE64_DIR}"
+
+      mkdir -p "${WINE64_DIR}"
+
+      cd "${WINE64_DIR}"
+
+      mkdir -p native
+
+      cd native
+
+      export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
+
+      export CC="gcc"
+      export CXX="g++"
+
+      "${WINE_SOURCE_DIR}/source/configure" \
+        --enable-win64 \
+        --disable-tests \
+        --without-x \
+        --without-vulkan \
+        --without-wayland \
+        --without-pulse \
+        --without-alsa \
+        --without-dbus \
+        --without-udev \
+        --without-cups \
+        --without-gphoto \
+        --without-gssapi \
+        --without-krb5 \
+        --without-pcap \
+        --without-pcsclite \
+        --without-sane \
+        --without-usb \
+        --without-v4l2 \
+        --without-ffmpeg
+
+      make \
+        __tooldeps__ \
+        -j"${{ inputs.jobs || 8 }}"
+
+      echo "=== Build NLS ==="
+
+      make -C nls \
+        -j"${{ inputs.jobs || 8 }}"
+
+      echo "=== Backup NLS ==="
+
+      rm -rf /opt/nls-backup
+
+      mkdir -p /opt/nls-backup
+
+      cp -aL \
+        nls/. \
+        /opt/nls-backup/
+
+      test -f \
+        /opt/nls-backup/locale.nls
+
+      echo "NLS backup OK"
+
+      find /opt/nls-backup \
+        -maxdepth 1 \
+        -type f \
+        -printf '%f\n' |
+      sort
+
+  # ============================================================
+  # 11. Native Wine tool validation
+  # ============================================================
+
+  - name: 验证 native Wine tools
+    shell: bash
+    run: |
+      set -eux
+
+      NATIVE="${WINE_NATIVE_DIR}"
+
+      # native tree 实际使用上一步的 native build
+      NATIVE="${WINE64_DIR}/native"
+
+      echo "=== Native Wine ==="
+
+      find "${NATIVE}" \
+        -maxdepth 3 \
+        -type f \
+        \
+          -name wine \
+          -o \
+          -name wine64 \
+          -o \
+          -name wineserver \
+          -o \
+          -name wineboot \
+          -o \
+          -name winecfg \
+        \
+        -print || true
+
+      echo "=== NLS ==="
+
+      test -f "${NATIVE}/nls/locale.nls"
+
+      file "${NATIVE}/nls/locale.nls"
+
+      mkdir -p "${WINE_NATIVE_DIR}"
+
+      cp -aL \
+        "${NATIVE}/." \
+        "${WINE_NATIVE_DIR}/"
+
+      test -f \
+        "${WINE_NATIVE_DIR}/nls/locale.nls"
+
+  # ============================================================
+  # 12. ARM64 WOW64 configure
+  # ============================================================
+
+  - name: Configure ARM64 WOW64
+    shell: bash
+    env:
+      ENABLE_WAYLAND: ${{ inputs.enable_wayland }}
+      ENABLE_DBUS: ${{ inputs.enable_dbus }}
+      ENABLE_UDEV: ${{ inputs.enable_udev }}
+    run: |
+      set -eux
+
+      cd "${WINE_SOURCE_DIR}/source"
+
+      rm -rf build-arm64
+
+      mkdir -p build-arm64
+
+      cd build-arm64
+
+      export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
+
+      # --------------------------------------------------------
+      # Host compiler
+      # --------------------------------------------------------
+
+      export CC="clang --target=aarch64-linux-gnu"
+      export CXX="clang++ --target=aarch64-linux-gnu"
+
+      # --------------------------------------------------------
+      # Windows cross compiler
+      # --------------------------------------------------------
+
+      export CROSSCC="arm64ec-w64-mingw32-clang"
+      export CROSSCXX="arm64ec-w64-mingw32-clang++"
+
+      # --------------------------------------------------------
+      # ARM64 Debian sysroot
+      # --------------------------------------------------------
+
+      export SYSROOT="/usr"
+
+      export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+
+      export PKG_CONFIG_LIBDIR="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+
+      # --------------------------------------------------------
+      # Compiler flags
+      # --------------------------------------------------------
+
+      export CFLAGS="-O2 -pipe"
+      export CXXFLAGS="-O2 -pipe"
+
+      export CROSSCFLAGS="-O2 -pipe"
+      export CROSSCXXFLAGS="-O2 -pipe"
+
+      # --------------------------------------------------------
+      # Termux runtime linker
+      #
+      # 这里只写入最终 ELF runtime path。
+      # 不把 Termux include/lib 当 CI 编译 sysroot。
+      # --------------------------------------------------------
+
+      export TERMUX_LOADER="${TERMUX_GLIBC_PREFIX}/lib/ld-linux-aarch64.so.1"
+
+      export LDFLAGS="
+        -L/usr/lib/aarch64-linux-gnu
+        -Wl,--dynamic-linker=${TERMUX_LOADER}
+        -Wl,-rpath=${TERMUX_GLIBC_PREFIX}/lib
+        -Wl,-O1
+        -Wl,--as-needed
+        -Wl,--sort-common
+      "
+
+      # --------------------------------------------------------
+      # Optional features
+      # --------------------------------------------------------
+
+      CONFIGURE_FLAGS=()
+
+      CONFIGURE_FLAGS+=(
+        --enable-win64
+        --host=aarch64-linux-gnu
+        --with-mingw=clang
+        --enable-archs=arm64ec,aarch64,i386
+        --with-wine-tools="${WINE_NATIVE_DIR}"
+        --prefix=/tmp/wine-install-wow64
+        --disable-win16
+        --with-vulkan
+        --enable-nls
+        --with-pulse
+        --with-gstreamer
+        --with-pthread
+        --without-ffmpeg
+        --disable-opencl
+        --disable-tests
+        --disable-winemenubuilder
+        --without-cups
+        --without-gphoto
+        --without-gssapi
+        --without-krb5
+        --without-alsa
+        --without-oss
+        --without-pcap
+        --without-pcsclite
+        --without-sane
+        --without-usb
+        --without-v4l2
+        --with-xshm
+        --with-vkd3d
+        --without-xxf86vm
+      )
+
+      if [ "${ENABLE_WAYLAND}" = "true" ]; then
+        CONFIGURE_FLAGS+=(--with-wayland)
+      else
+        CONFIGURE_FLAGS+=(--without-wayland)
+      fi
+
+      if [ "${ENABLE_DBUS}" = "true" ]; then
+        CONFIGURE_FLAGS+=(--with-dbus)
+      else
+        CONFIGURE_FLAGS+=(--without-dbus)
+      fi
+
+      if [ "${ENABLE_UDEV}" = "true" ]; then
+        CONFIGURE_FLAGS+=(--with-udev)
+      else
+        CONFIGURE_FLAGS+=(--without-udev)
+      fi
+
+      echo "============================================"
+      echo "Wine configure"
+      echo "============================================"
+
+      printf '%s\n' "${CONFIGURE_FLAGS[@]}"
+
+      ../configure \
+        "${CONFIGURE_FLAGS[@]}"
+
+      echo "============================================"
+      echo "Configure completed"
+      echo "============================================"
+
+      test -f config.status
+
+  # ============================================================
+  # 13. Configure summary
+  # ============================================================
+
+  - name: 输出 Wine configure summary
+    shell: bash
+    run: |
+      set -eux
+
+      cd "${WINE_SOURCE_DIR}/source/build-arm64"
+
+      echo "============================================"
+      echo "Wine configuration"
+      echo "============================================"
+
+      if [ -f config.log ]; then
+        grep -E \
+          'checking for the host system type|checking for the target system type|checking whether to build 64-bit Wine|checking for Vulkan|checking for GStreamer|checking for PulseAudio|checking for Wayland|checking for DBus' \
+          config.log || true
+      fi
+
+  # ============================================================
+  # 14. Build
+  # ============================================================
+
+  - name: 编译 ARM64 WOW64
+    shell: bash
+    run: |
+      set -eux
+
+      cd "${WINE_SOURCE_DIR}/source/build-arm64"
+
+      JOBS="${{ inputs.jobs || 8 }}"
+
+      echo "Building with ${JOBS} jobs"
+
+      make \
+        -j"${JOBS}"
+
+  # ============================================================
+  # 15. Install
+  # ============================================================
+
+  - name: 安装 Wine
+    shell: bash
+    run: |
+      set -eux
+
+      cd "${WINE_SOURCE_DIR}/source/build-arm64"
+
+      rm -rf /tmp/wine-install-wow64
+
+      mkdir -p /tmp/wine-install-wow64
+
+      make install
+
+      test -d /tmp/wine-install-wow64
+
+      echo "=== Installed files ==="
+
+      find /tmp/wine-install-wow64 \
+        -maxdepth 3 \
+        -type f |
+      sort |
+      head -300
+
+  # ============================================================
+  # 16. Install tree fix
+  # ============================================================
+
+  - name: 修复 Termux Wine 安装树
+    shell: bash
+    run: |
+      set -eux
+
+      TARGET="/tmp/wine-install-wow64"
+      BUILD="${WINE_SOURCE_DIR}/source/build-arm64"
+
+      mkdir -p \
+        "${TARGET}/bin" \
+        "${TARGET}/lib/wine" \
+        "${TARGET}/share/wine/nls" \
+        "${TARGET}/share/wine/fonts"
+
+      # --------------------------------------------------------
+      # NLS
+      # --------------------------------------------------------
+
+      rm -rf \
+        "${TARGET}/share/wine/nls"
+
+      mkdir -p \
+        "${TARGET}/share/wine/nls"
+
+      cp -aL \
+        "${WINE_NATIVE_DIR}/nls/." \
+        "${TARGET}/share/wine/nls/"
+
+      test -f \
+        "${TARGET}/share/wine/nls/locale.nls"
+
+      # --------------------------------------------------------
+      # Fonts
+      # --------------------------------------------------------
+
+      if [ -d "${WINE_SOURCE_DIR}/source/fonts" ]; then
+
+        find "${WINE_SOURCE_DIR}/source/fonts" \
+          -maxdepth 1 \
+          -type f \
+          \
+            -name "*.ttf" \
+            -o \
+            -name "*.ttc" \
+            -o \
+            -name "*.fon" \
+          \
+          -exec cp -L {} "${TARGET}/share/wine/fonts/" \;
+
+      fi
+
+      # --------------------------------------------------------
+      # 查找 Wine Unix libraries
+      # --------------------------------------------------------
+
+      mkdir -p \
+        "${TARGET}/lib/wine/aarch64-unix"
+
+      # 原生 install tree 如果已经提供 ntdll.so，
+      # 优先使用原生安装结果。
+      if [ -f "${TARGET}/lib/wine/aarch64-unix/ntdll.so" ]; then
+        echo "Native installed ntdll.so found"
+      fi
+
+      # --------------------------------------------------------
+      # 收集 build tree 中的 Unix-side Wine libraries
+      # --------------------------------------------------------
+
+      find "${BUILD}/dlls" \
+        -type f \
+        -name "*.so" \
+        -exec cp -L {} \
+          "${TARGET}/lib/wine/aarch64-unix/" \; \
+        || true
+
+      find "${BUILD}/programs" \
+        -type f \
+        -name "*.so" \
+        -exec cp -L {} \
+          "${TARGET}/lib/wine/aarch64-unix/" \; \
+        || true
+
+      # ntdll
+      find "${BUILD}" \
+        -type f \
+        -path "*/ntdll.so" \
+        -exec cp -L {} \
+          "${TARGET}/lib/wine/aarch64-unix/ntdll.so" \; \
+        || true
+
+      # --------------------------------------------------------
+      # Wine executables
+      # --------------------------------------------------------
+
+      for PROG in \
+        wine \
+        wineserver \
+        wineboot \
+        winecfg \
+        regedit \
+        regsvr32 \
+        winepath \
+        wineconsole \
+        winedbg
+      do
+
+        FOUND="$(find "${BUILD}" \
+          -type f \
+          -name "${PROG}" \
+          -perm -111 \
+          | head -n 1 || true)"
+
+        if [ -n "${FOUND}" ]; then
+
+          echo "Installing ${PROG}"
+
+          cp -L \
+            "${FOUND}" \
+            "${TARGET}/bin/${PROG}"
+
+        else
+
+          echo "Not found: ${PROG}"
+
+        fi
+
+      done
+
+      # --------------------------------------------------------
+      # ntdll loader compatibility
+      # --------------------------------------------------------
+
+      if [ -f "${TARGET}/lib/wine/aarch64-unix/ntdll.so" ]; then
+
+        ln -sfn \
+          "../lib/wine/aarch64-unix/ntdll.so" \
+          "${TARGET}/bin/ntdll.so"
+
+      fi
+
+      # --------------------------------------------------------
+      # Ensure executable bits
+      # --------------------------------------------------------
+
+      find "${TARGET}/bin" \
+        -type f \
+        -exec chmod +x {} \;
+
+      echo "=== Installation tree ==="
+
+      find "${TARGET}/bin" \
+        -maxdepth 1 \
+        -type f \
+        -printf '%f\n' |
+      sort
+
+  # ============================================================
+  # 17. Duplicate library detection
+  # ============================================================
+
+  - name: 检查重复 Unix DLL libraries
+    shell: bash
+    run: |
+      set -eux
+
+      BUILD="${WINE_SOURCE_DIR}/source/build-arm64"
+
+      DUPLICATES="$(
+        find "${BUILD}/dlls" \
+          -type f \
+          -name "*.so" \
+          -printf '%f\n' |
+        sort |
+        uniq -d
+      )"
+
+      if [ -n "${DUPLICATES}" ]; then
+
+        echo "WARNING: duplicate library basenames:"
+        echo "${DUPLICATES}"
+
+      else
+
+        echo "No duplicate .so basename found"
+
+      fi
+
+  # ============================================================
+  # 18. ELF verification
+  # ============================================================
+
+  - name: ELF / ARM64 验证
+    shell: bash
+    run: |
+      set -eux
+
+      TARGET="/tmp/wine-install-wow64"
+
+      echo "============================================"
+      echo "Wine ELF verification"
+      echo "============================================"
+
+      for FILE in \
+        "${TARGET}/bin/wine" \
+        "${TARGET}/bin/wineserver" \
+        "${TARGET}/bin/wineboot"
+      do
+
+        if [ -f "${FILE}" ]; then
+
+          echo
+          echo "===== ${FILE} ====="
+
+          file "${FILE}"
+
+          readelf -h "${FILE}" |
+            grep -E \
+              'Class:|Machine:|Type:'
+
+          echo "--- interpreter ---"
+
+          readelf -l "${FILE}" |
+            grep -E 'interpreter|Requesting program interpreter' \
             || true
 
-          printf '%s\n' '00000000000000000000000000000000' \
-            > "$INSTALL/etc/machine-id"
-
-          for dir in \
-            /opt/FEX/install-arm64ec/usr/lib/wine/aarch64-windows \
-            /opt/FEX/install-arm64ec/lib/wine/aarch64-windows \
-            /opt/FEX/install-arm64ec/lib/wine
-          do
-            if [ -d "$dir" ]; then
-              find "$dir" \
-                -maxdepth 1 \
-                -type f \
-                \( -name '*.dll' -o -name '*.exe' \) \
-                -exec cp -f {} "$INSTALL/lib/wine/aarch64-windows/" + \
-                || true
-            fi
-          done
-
-          for dir in \
-            /opt/FEX/install-wow64/usr/lib/wine/aarch64-windows \
-            /opt/FEX/install-wow64/lib/wine/aarch64-windows \
-            /opt/FEX/install-wow64/lib/wine
-          do
-            if [ -d "$dir" ]; then
-              find "$dir" \
-                -maxdepth 1 \
-                -type f \
-                \( -name '*.dll' -o -name '*.exe' \) \
-                -exec cp -n {} "$INSTALL/lib/wine/aarch64-windows/" + \
-                || true
-            fi
-          done
-
-      # ==========================================================
-      # 25. Validate Wine installation
-      # ==========================================================
-      - name: Validate Wine installation
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          test -d "$INSTALL/bin"
-          test -d "$INSTALL/lib/wine"
-          test -d "$INSTALL/lib/wine/aarch64-windows"
-          test -x "$INSTALL/bin/wine"
-          test -x "$INSTALL/bin/wineserver"
-
-          echo "Wine installation:"
-          du -sh "$INSTALL"
-
-      # ==========================================================
-      # 26. ELF validation (before patchelf)
-      # ==========================================================
-      - name: Validate Wine ELF interpreter (pre-patchelf)
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          for f in \
-            "$INSTALL/bin/wine" \
-            "$INSTALL/bin/wineserver" \
-            "$INSTALL/bin/wineboot" \
-            "$INSTALL/bin/winecfg"
-          do
-            if [ ! -f "$f" ]; then
-              continue
-            fi
-
-            echo "================================"
-            echo "$f"
-            echo "================================"
-
-            file "$f"
-
-            echo "INTERP:"
-            readelf -l "$f" 2>/dev/null \
-              | grep -E 'Requesting program interpreter|INTERP' \
-              || true
-
-            echo "DYNAMIC:"
-            readelf -d "$f" 2>/dev/null \
-              | grep -E 'NEEDED|RPATH|RUNPATH' \
-              || true
-          done
-
-      # ==========================================================
-      # 27. Patch Termux interpreter (packaging phase)
-      # ==========================================================
-      - name: Patch Termux interpreter
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-          RUNTIME_LOADER="$RUNTIME_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1"
-          RUNTIME_LIB="$RUNTIME_GLIBC_PREFIX/lib"
-          RUNTIME_WINE_LIB="$RUNTIME_WINE_PREFIX/lib"
-
-          echo "Runtime loader: $RUNTIME_LOADER"
-          echo "Runtime lib:    $RUNTIME_LIB"
-          echo "Wine lib:       $RUNTIME_WINE_LIB"
-
-          patched=0
-          skipped=0
-
-          while IFS= read -r -d '' f; do
-            if ! file "$f" | grep -q 'ELF'; then
-              continue
-            fi
-
-            if ! readelf -d "$f" 2>/dev/null | grep -q 'NEEDED'; then
-              skipped=$((skipped + 1))
-              continue
-            fi
-
-            if patchelf \
-              --set-interpreter "$RUNTIME_LOADER" \
-              --set-rpath "$RUNTIME_LIB:$RUNTIME_WINE_LIB" \
-              "$f" 2>/dev/null
-            then
-              patched=$((patched + 1))
-            else
-              skipped=$((skipped + 1))
-            fi
-          done < <(find "$INSTALL" -type f -print0)
-
-          echo "patched=$patched skipped=$skipped"
-
-      # ==========================================================
-      # 28. Strip
-      # ==========================================================
-      - name: Strip Wine binaries
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          do_strip() {
-            local mode="$1"
-            local file="$2"
-
-            if ! file "$file" | grep -q 'ELF'; then
-              return 0
-            fi
-
-            case "$mode" in
-              debug)
-                aarch64-linux-gnu-strip --strip-debug "$file" || true
-                ;;
-              all)
-                aarch64-linux-gnu-strip --strip-all "$file" || true
-                ;;
-            esac
-          }
-
-          case "$STRIP_MODE" in
-            none)
-              echo "STRIP_MODE=none"
-              ;;
-
-            debug)
-              echo "STRIP_MODE=debug"
-              find "$INSTALL" -type f -print0 \
-                | while IFS= read -r -d '' f; do
-                    do_strip debug "$f"
-                  done
-              ;;
-
-            all)
-              echo "STRIP_MODE=all"
-              find "$INSTALL" -type f -print0 \
-                | while IFS= read -r -d '' f; do
-                    do_strip all "$f"
-                  done
-              ;;
-
-            *)
-              echo "Unknown STRIP_MODE=$STRIP_MODE"
-              exit 1
-              ;;
-          esac
-
-      # ==========================================================
-      # 29. Re-check loader after strip + patchelf
-      # ==========================================================
-      - name: Verify runtime loader
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          for f in \
-            "$INSTALL/bin/wine" \
-            "$INSTALL/bin/wineserver" \
-            "$INSTALL/bin/wineboot"
-          do
-            if [ ! -f "$f" ]; then
-              continue
-            fi
-
-            readelf -l "$f" | grep -F \
-              "$RUNTIME_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1"
-          done
-
-      # ==========================================================
-      # 30. Check CI/Debian sysroot contamination
-      # ==========================================================
-      - name: Check forbidden sysroot paths
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          FORBIDDEN_REGEX='/usr/lib/aarch64-linux-gnu|/lib/aarch64-linux-gnu|/opt/termuxfs|termux-glibc-staging'
-
-          HITS="$(
-            find "$INSTALL" -type f -print0 \
-              | xargs -0 -P "$(nproc)" grep -l -a -E "$FORBIDDEN_REGEX" 2>/dev/null \
-              || true
-          )"
-
-          if [ -n "$HITS" ]; then
-            echo "ERROR: CI/Debian sysroot path leaked into Wine:"
-            echo "$HITS"
-            exit 1
-          fi
-
-          echo "No forbidden CI sysroot paths found."
-
-      # ==========================================================
-      # 31. Check runtime path
-      # ==========================================================
-      - name: Check Termux runtime paths
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          echo "Expected runtime glibc: $RUNTIME_GLIBC_PREFIX"
-          echo "Expected runtime Wine:  $RUNTIME_WINE_PREFIX"
-          echo "Expected runtime tmp:   $RUNTIME_TMPDIR"
-
-          if grep -R -a "$CI_GLIBC_PREFIX" "$INSTALL" 2>/dev/null; then
-            echo "ERROR: CI glibc path leaked into final Wine."
-            exit 1
-          fi
-
-      # ==========================================================
-      # 32. Validate FEX PE files
-      # ==========================================================
-      - name: Validate FEX PE files
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          COUNT=0
-
-          while IFS= read -r -d '' f; do
-            COUNT=$((COUNT + 1))
-            echo "----- FEX PE -----"
-            echo "$f"
-            file "$f"
-          done < <(
-            find "$INSTALL/lib/wine/aarch64-windows" \
-              -type f \
-              \( -name '*.dll' -o -name '*.exe' \) \
-              -print0
-          )
-
-          echo "FEX PE count: $COUNT"
-
-      # ==========================================================
-      # 33. Check Wine Windows architectures
-      # ==========================================================
-      - name: Check Wine Windows architectures
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          echo "Searching Wine architecture directories..."
-
-          find "$INSTALL/lib/wine" -maxdepth 2 -type d | sort
-
-      # ==========================================================
-      # 34. Optional GStreamer runtime files
-      # ==========================================================
-      - name: Check GStreamer support
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          echo "Wine GStreamer files:"
-
-          find "$INSTALL" \
-            -type f \
-            \( -name '*gstreamer*' -o -name 'winegstreamer*' \) \
-            | sort \
-            | head -200
-
-      # ==========================================================
-      # 35. Generate runtime environment
-      # ==========================================================
-      - name: Generate Termux runtime environment
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-          mkdir -p "$INSTALL"
-
-          {
-            printf '%s\n' '#!/data/data/com.termux/files/usr/bin/bash'
-            printf '%s\n' ''
-            printf '%s\n' 'export TERMUX_PREFIX=/data/data/com.termux/files/usr'
-            printf '%s\n' 'export GLIBC_PREFIX=/data/data/com.termux/files/usr/glibc'
-            printf '%s\n' 'export WINE_PREFIX=/data/data/com.termux/files/usr/glibc/opt/wine'
-            printf '%s\n' ''
-            printf '%s\n' 'export TMPDIR=/data/data/com.termux/files/usr/tmp/runtime'
-            printf '%s\n' ''
-            printf '%s\n' 'export PATH="$GLIBC_PREFIX/bin:$WINE_PREFIX/bin:$TERMUX_PREFIX/bin:$PATH"'
-            printf '%s\n' 'export LD_LIBRARY_PATH="$GLIBC_PREFIX/lib:$WINE_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
-            printf '%s\n' ''
-            printf '%s\n' 'export XDG_RUNTIME_DIR="$TMPDIR"'
-            printf '%s\n' ''
-            printf '%s\n' 'export DISPLAY="${DISPLAY:-:0}"'
-            printf '%s\n' 'export GDK_BACKEND="${GDK_BACKEND:-x11}"'
-            printf '%s\n' 'export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"'
-            printf '%s\n' ''
-            printf '%s\n' 'export VK_ICD_FILENAMES="${VK_ICD_FILENAMES:-$GLIBC_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json}"'
-            printf '%s\n' ''
-            printf '%s\n' 'export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-zink}"'
-            printf '%s\n' 'export GALLIUM_DRIVER="${GALLIUM_DRIVER:-zink}"'
-            printf '%s\n' 'export MESA_GLTHREAD="${MESA_GLTHREAD:-true}"'
-          } > "$INSTALL/wine-termux-env.sh"
-
-          chmod +x "$INSTALL/wine-termux-env.sh"
-
-      # ==========================================================
-      # 36. Runtime launcher
-      # ==========================================================
-      - name: Generate Wine launcher
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          {
-            printf '%s\n' '#!/data/data/com.termux/files/usr/bin/bash'
-            printf '%s\n' ''
-            printf '%s\n' 'set -e'
-            printf '%s\n' ''
-            printf '%s\n' 'PREFIX=/data/data/com.termux/files/usr'
-            printf '%s\n' 'GLIBC_PREFIX="$PREFIX/glibc"'
-            printf '%s\n' 'WINE_PREFIX="$GLIBC_PREFIX/opt/wine"'
-            printf '%s\n' 'TMPDIR="$PREFIX/tmp/runtime"'
-            printf '%s\n' ''
-            printf '%s\n' 'export PATH="$GLIBC_PREFIX/bin:$WINE_PREFIX/bin:$PREFIX/bin:$PATH"'
-            printf '%s\n' 'export LD_LIBRARY_PATH="$GLIBC_PREFIX/lib:$WINE_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
-            printf '%s\n' ''
-            printf '%s\n' 'export TMPDIR'
-            printf '%s\n' 'export XDG_RUNTIME_DIR="$TMPDIR"'
-            printf '%s\n' ''
-            printf '%s\n' 'export DISPLAY="${DISPLAY:-:0}"'
-            printf '%s\n' 'export GDK_BACKEND="${GDK_BACKEND:-x11}"'
-            printf '%s\n' 'export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"'
-            printf '%s\n' ''
-            printf '%s\n' 'exec "$WINE_PREFIX/bin/wine" "$@"'
-          } > "$INSTALL/wine-termux"
-
-          chmod +x "$INSTALL/wine-termux"
-
-      # ==========================================================
-      # 37. Final file inventory
-      # ==========================================================
-      - name: Generate build manifest
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-
-          mkdir -p "$GITHUB_WORKSPACE/release"
-
-          {
-            printf '%s\n' 'Wine ARM64 WOW64'
-            printf '%s\n' ''
-            printf '%s\n' 'Wine source:'
-            git -C "$WINE_SOURCE_DIR" describe --always --dirty
-            printf '%s\n' ''
-            printf '%s\n' 'Wine commit:'
-            git -C "$WINE_SOURCE_DIR" rev-parse HEAD
-            printf '%s\n' ''
-            printf '%s\n' 'CGCT:'
-            "$TERMUX_GLIBC_CC" --version | head -1
-            printf '%s\n' ''
-            printf '%s\n' 'glibc loader:'
-            printf '%s\n' "$RUNTIME_GLIBC_PREFIX/lib/ld-linux-aarch64.so.1"
-            printf '%s\n' ''
-            printf '%s\n' 'Wine prefix:'
-            printf '%s\n' "$RUNTIME_WINE_PREFIX"
-            printf '%s\n' ''
-            printf '%s\n' 'Runtime tmp:'
-            printf '%s\n' "$RUNTIME_TMPDIR"
-            printf '%s\n' ''
-            printf '%s\n' 'Strip mode:'
-            printf '%s\n' "$STRIP_MODE"
-            printf '%s\n' ''
-            printf '%s\n' 'GStreamer:'
-            printf '%s\n' "$WITH_GSTREAMER"
-            printf '%s\n' ''
-            printf '%s\n' 'Architectures:'
-            printf '%s\n' 'arm64ec'
-            printf '%s\n' 'aarch64'
-            printf '%s\n' 'i386'
-          } > "$GITHUB_WORKSPACE/release/build-info.txt"
-
-          find "$INSTALL" -type f | sort \
-            > "$GITHUB_WORKSPACE/release/file-list.txt"
-
-      # ==========================================================
-      # 38. Package
-      # ==========================================================
-      - name: Package Wine
-        run: |
-          set -euxo pipefail
-
-          INSTALL="$WINE_INSTALL_PREFIX"
-          BUILD_NAME="wine-arm64-wow64-termux-glibc"
-
-          tar \
-            -C "$INSTALL" \
-            -cJf \
-            "$GITHUB_WORKSPACE/release/${BUILD_NAME}.tar.xz" \
-            .
-
-          sha256sum \
-            "$GITHUB_WORKSPACE/release/${BUILD_NAME}.tar.xz" \
-            > "$GITHUB_WORKSPACE/release/${BUILD_NAME}.sha256"
-
-      # ==========================================================
-      # 39. Show package
-      # ==========================================================
-      - name: Show package information
-        run: |
-          set -euxo pipefail
-
-          ls -lh "$GITHUB_WORKSPACE/release/"
-
-          sha256sum "$GITHUB_WORKSPACE/release/"* || true
-
-      # ==========================================================
-      # 40. Upload artifact
-      # ==========================================================
-      - name: Upload Wine artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wine-arm64-wow64-termux-glibc-${{ github.run_number }}
-          path: |
-            release/*.tar.xz
-            release/*.sha256
-            release/*.txt
-
-      # ==========================================================
-      # 41. GitHub Release
-      # ==========================================================
-      - name: Create GitHub Release
-        if: github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: wine-arm64-wow64-${{ github.run_number }}
-          name: Wine ARM64 WOW64 Termux glibc #${{ github.run_number }}
-          generate_release_notes: true
-          files: |
-            release/*.tar.xz
-            release/*.sha256
-            release/*.txt
+          echo "--- rpath/runpath ---"
+
+          readelf -d "${FILE}" |
+            grep -E 'RPATH|RUNPATH' \
+            || true
+
+        fi
+
+      done
+
+  # ============================================================
+  # 19. ARM64 ntdll verification
+  # ============================================================
+
+  - name: 验证 ntdll
+    shell: bash
+    run: |
+      set -eux
+
+      NTDLL="/tmp/wine-install-wow64/lib/wine/aarch64-unix/ntdll.so"
+
+      if [ ! -f "${NTDLL}" ]; then
+        echo "ERROR: ntdll.so not found"
+        exit 1
+      fi
+
+      file "${NTDLL}"
+
+      readelf -h "${NTDLL}" |
+        grep -E \
+          'Class:|Machine:|Type:'
+
+  # ============================================================
+  # 20. NLS verification
+  # ============================================================
+
+  - name: 验证 NLS
+    shell: bash
+    run: |
+      set -eux
+
+      NLS="/tmp/wine-install-wow64/share/wine/nls"
+
+      test -d "${NLS}"
+
+      test -f "${NLS}/locale.nls"
+
+      echo "locale.nls:"
+      file "${NLS}/locale.nls"
+
+      echo "NLS files:"
+      find "${NLS}" \
+        -maxdepth 1 \
+        -type f \
+        -printf '%f %s bytes\n' |
+      sort
+
+  # ============================================================
+  # 21. GStreamer verification
+  # ============================================================
+
+  - name: 验证 GStreamer
+    shell: bash
+    run: |
+      set -eux
+
+      echo "=== GStreamer libraries in build tree ==="
+
+      find "${WINE_SOURCE_DIR}/source/build-arm64" \
+        -type f \
+        \
+          -name "*gstreamer*.so" \
+          -o \
+          -name "*winegstreamer*.so" \
+        \
+        -print |
+      head -100 || true
+
+      echo "=== Debian ARM64 GStreamer ==="
+
+      dpkg-query \
+        -W \
+        -f='${Package} ${Version}\n' \
+        '*gstreamer*' \
+        2>/dev/null |
+      head -100 || true
+
+  # ============================================================
+  # 22. Vulkan verification
+  # ============================================================
+
+  - name: 验证 Vulkan
+    shell: bash
+    run: |
+      set -eux
+
+      echo "=== Vulkan development package ==="
+
+      dpkg-query \
+        -W \
+        -f='${Package} ${Version}\n' \
+        'libvulkan-dev:arm64' \
+        || true
+
+      echo "=== Wine Vulkan ==="
+
+      find "${WINE_SOURCE_DIR}/source/build-arm64" \
+        -type f \
+        -iname '*vulkan*.so' \
+        -print |
+      head -100 || true
+
+  # ============================================================
+  # 23. Wine executable smoke test
+  # ============================================================
+
+  - name: Wine executable smoke test
+    shell: bash
+    run: |
+      set -eux
+
+      TARGET="/tmp/wine-install-wow64"
+
+      echo "=== wine --version ==="
+
+      if [ -x "${TARGET}/bin/wine" ]; then
+
+        file "${TARGET}/bin/wine"
+
+        # CI 是 Debian amd64 host，
+        # ARM64 Wine 不能直接执行。
+        #
+        # 所以这里只检查 ELF，
+        # 不直接执行 wine。
+
+        echo "ARM64 Wine binary generated successfully"
+
+      else
+
+        echo "ERROR: wine executable missing"
+        exit 1
+
+      fi
+
+  # ============================================================
+  # 24. Final package verification
+  # ============================================================
+
+  - name: 最终目录检查
+    shell: bash
+    run: |
+      set -eux
+
+      TARGET="/tmp/wine-install-wow64"
+
+      echo "============================================"
+      echo "FINAL WINE TREE"
+      echo "============================================"
+
+      find "${TARGET}" \
+        -maxdepth 4 \
+        -type f |
+      sort |
+      head -500
+
+      echo
+      echo "Directory sizes:"
+
+      du -sh \
+        "${TARGET}"/* \
+        2>/dev/null || true
+
+  # ============================================================
+  # 25. Package
+  # ============================================================
+
+  - name: 准备 Wine package
+    shell: bash
+    run: |
+      set -eux
+
+      rm -rf wine-package
+
+      mkdir -p wine-package/wine
+
+      cp -a \
+        /tmp/wine-install-wow64/. \
+        wine-package/wine/
+
+      test -d wine-package/wine/bin
+
+      test -f \
+        wine-package/wine/share/wine/nls/locale.nls
+
+  # ============================================================
+  # 26. Package manifest
+  # ============================================================
+
+  - name: 生成构建信息
+    shell: bash
+    run: |
+      set -eux
+
+      cat > wine-package/BUILD_INFO.txt <<EOF
+      Wine ARM64 WOW64 / ARM64EC
+      ============================
+
+      Build type:
+      ${{ inputs.wine_branch || 'proton' }}
+
+      Wine version:
+      ${WINE_VERSION_ACTUAL}
+
+      Wine commit:
+      ${WINE_COMMIT}
+
+      Proton branch:
+      ${{ inputs.proton_branch }}
+
+      Proton commit:
+      ${{ inputs.proton_commit }}
+
+      Staging version:
+      ${{ inputs.staging_version }}
+
+      LLVM-MinGW:
+      ${LLVMMINGW_NAME}
+
+      Host:
+      Debian 12 amd64 GitHub Actions
+
+      Target:
+      ARM64 Linux / Termux glibc
+
+      Windows architectures:
+      arm64ec
+      aarch64
+      i386
+
+      Termux glibc:
+      ${TERMUX_GLIBC_PREFIX}
+
+      Termux tmp:
+      ${TERMUX_TMP}
+
+      Wayland:
+      ${{ inputs.enable_wayland }}
+
+      DBus:
+      ${{ inputs.enable_dbus }}
+
+      UDEV:
+      ${{ inputs.enable_udev }}
+
+      Build time:
+      $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+      EOF
+
+      cat wine-package/BUILD_INFO.txt
+
+  # ============================================================
+  # 27. tar.xz
+  # ============================================================
+
+  - name: 创建 tar.xz
+    shell: bash
+    run: |
+      set -eux
+
+      tar \
+        -cJf \
+        "${BUILD_NAME}.tar.xz" \
+        -C wine-package \
+        wine \
+        BUILD_INFO.txt
+
+      ls -lh \
+        "${BUILD_NAME}.tar.xz"
+
+  # ============================================================
+  # 28. SHA256
+  # ============================================================
+
+  - name: Generate SHA256
+    shell: bash
+    run: |
+      set -eux
+
+      sha256sum \
+        "${BUILD_NAME}.tar.xz" \
+        > checksums.txt
+
+      cat checksums.txt
+
+  # ============================================================
+  # 29. Artifact
+  # ============================================================
+
+  - name: Upload Wine artifact
+    uses: actions/upload-artifact@v4
+    with:
+      name: Wine-${{ inputs.wine_branch || 'proton' }}-${{ inputs.wine_version || 'latest' }}-ARM64-WOW64
+      path: |
+        *.tar.xz
+        checksums.txt
+        wine-package/BUILD_INFO.txt
+      retention-days: 30
+
+  # ============================================================
+  # 30. GitHub Release
+  # ============================================================
+
+  - name: Publish Wine GitHub Release
+    if: github.event_name == 'workflow_dispatch'
+    uses: softprops/action-gh-release@v2
+    with:
+      tag_name: ${{ env.BUILD_NAME }}
+      name: ${{ env.BUILD_NAME }}
+
+      body: |
+        # Wine ARM64 WOW64 / ARM64EC
+
+        ## Build
+
+        - Build type: `${{ inputs.wine_branch || 'proton' }}`
+        - Wine version: `${{ inputs.wine_version || 'latest' }}`
+        - Wine commit: `${{ env.WINE_COMMIT }}`
+        - Host: Debian 12 amd64
+        - Target: ARM64 Linux / Termux glibc
+
+        ## Windows architectures
+
+        - ARM64EC
+        - AArch64
+        - i386 / WOW64
+
+        ## Proton
+
+        - Branch: `${{ inputs.proton_branch }}`
+        - Commit: `${{ inputs.proton_commit }}`
+
+        ## Wine-Staging
+
+        - Version: `${{ inputs.staging_version }}`
+
+        ## Runtime
+
+        - Termux glibc loader:
+          `/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1`
+
+        - Termux tmp:
+          `/data/data/com.termux/files/usr/tmp`
+
+        ## Optional components
+
+        - Wayland: `${{ inputs.enable_wayland }}`
+        - DBus: `${{ inputs.enable_dbus }}`
+        - UDEV: `${{ inputs.enable_udev }}`
+        - GStreamer: enabled
+        - PulseAudio: enabled
+        - Vulkan: enabled
+        - vkd3d: enabled
+
+        ## Build information
+
+        The package contains `BUILD_INFO.txt` and SHA256 checksum.
+
+      files: |
+        ${{ github.workspace }}/${{ env.BUILD_NAME }}.tar.xz
+        ${{ github.workspace }}/checksums.txt
+        ${{ github.workspace }}/wine-package/BUILD_INFO.txt
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
