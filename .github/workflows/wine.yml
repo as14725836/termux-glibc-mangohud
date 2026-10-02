@@ -523,11 +523,12 @@ jobs:
 
       # ============================================================
       # 8. Termux compatibility patches
+      #
+      # 注意：外部 gstreamer01.patch 与当前 Proton 分支上下文不匹配，
+      # 已移除。其余为本地 sed 修改，不依赖外部补丁文件。
       # ============================================================
       - name: Termux compatibility patches
         shell: bash
-        env:
-          PATCH_BASE: https://raw.githubusercontent.com/mebabo1/menano/refs/heads/main/path
         run: |
           set -eux
 
@@ -651,48 +652,6 @@ jobs:
                 "${FILE_VIRTUAL}"
             fi
           fi
-
-          # --------------------------------------------------------
-          # External GStreamer patch
-          # --------------------------------------------------------
-          PATCH_FILES="gstreamer01.patch"
-
-          for PATCH_FILE in ${PATCH_FILES}; do
-            URL="${PATCH_BASE}/${PATCH_FILE}"
-
-            echo "============================================"
-            echo "Downloading ${PATCH_FILE}"
-            echo "${URL}"
-            echo "============================================"
-
-            rm -f "${PATCH_FILE}"
-
-            wget \
-              -q \
-              -O "${PATCH_FILE}" \
-              "${URL}"
-
-            if [ ! -s "${PATCH_FILE}" ]; then
-              echo "ERROR: Empty patch: ${PATCH_FILE}"
-              exit 1
-            fi
-
-            echo "=== Checking patch ==="
-
-            if git apply --check "${PATCH_FILE}" 2>/dev/null; then
-              echo "Applying normally"
-
-              git apply \
-                --whitespace=fix \
-                "${PATCH_FILE}"
-            elif git apply --3way "${PATCH_FILE}"; then
-              echo "Applying with 3-way merge"
-            else
-              echo "ERROR: Patch cannot be applied"
-              git apply --check "${PATCH_FILE}" || true
-              exit 1
-            fi
-          done
 
           echo "============================================"
           echo "Termux patches completed"
