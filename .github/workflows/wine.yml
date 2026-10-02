@@ -1041,7 +1041,7 @@ jobs:
             -maxdepth 3 \
             -type f |
           sort |
-          head -300
+          head -300 || true
 
       # ============================================================
       # 16. Install tree fix
@@ -1410,7 +1410,7 @@ jobs:
             -maxdepth 4 \
             -type f |
           sort |
-          head -500
+          head -500 || true
 
           echo
           echo "Directory sizes:"
