@@ -658,6 +658,56 @@ jobs:
           echo "============================================"
 
       # ============================================================
+      # 8.1 【关键修复】esync 头文件缺失
+      #
+      # 上游 WinNative-Emu/proton-wine@proton_11.0 的 tree 不一致：
+      #   dlls/ntdll/unix/server.c:1716 调用了 esync_init( shm_fd )
+      #   但该文件只 #include 了 "fsync.h"，漏了 "esync.h"
+      # 报错（本次 run #245 的真实失败原因）：
+      #   ../dlls/ntdll/unix/server.c:1716:17: error: call to undeclared function
+      #   'esync_init'; ISO C99 and later do not support implicit function
+      #   declarations [-Wimplicit-function-declaration]
+      #   note: did you mean 'fsync_init'?  (fsync.h:21 declared here)
+      #   make: *** [dlls/ntdll/unix/server.o] 오류 1
+      #
+      # 原因：隐式函数声明在 GCC 下只是 warning（上游用 gcc 所以没暴露），
+      #       但 clang 16+ 默认当 error；本 workflow 用 clang 就直接编译失败。
+      # 注意：sync.c / server/inproc_sync.c / server/main.c 都已正确 include，
+      #       全树只有 server.c 这一处遗漏，所以这是 1 行修复。
+      # ============================================================
+      - name: 修复 esync 头文件缺失 (server.c)
+        shell: bash
+        run: |
+          set -eux
+
+          cd "${WINE_SOURCE_DIR}/source"
+
+          FILE_SERVER_ESYNC="dlls/ntdll/unix/server.c"
+
+          test -f "${FILE_SERVER_ESYNC}"
+
+          if grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"; then
+            echo "已经包含 esync.h，无需修复"
+          else
+            # 插到 fsync.h 前面（与上游 esync 补丁的写法一致）
+            sed -i \
+              's|^#include "fsync.h"$|#include "esync.h"\n#include "fsync.h"|' \
+              "${FILE_SERVER_ESYNC}"
+          fi
+
+          echo "=== server.c 相关 include ==="
+
+          grep -n \
+            '#include "esync.h"\|#include "fsync.h"' \
+            "${FILE_SERVER_ESYNC}"
+
+          # 硬校验：两个 include 都必须存在，否则直接终止（不要浪费 30 分钟编译）
+          grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"
+          grep -q '#include "fsync.h"' "${FILE_SERVER_ESYNC}"
+
+          echo "esync.h include 修复完成"
+
+      # ============================================================
       # 9. Generate configure
       # ============================================================
       - name: Regenerate Wine configure
@@ -930,7 +980,7 @@ jobs:
       - name: 编译 ARM64 WOW64
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           cd "${WINE_SOURCE_DIR}/source/build-arm64"
 
@@ -938,8 +988,33 @@ jobs:
 
           echo "Building with ${JOBS} jobs"
 
+          # ---------------------------------------------------------------
+          # 打印真正生效的编译器 / 目标，并把日志落盘。
+          # 这段是"以后不用再猜"的关键：Actions 网页日志要登录才能看，
+          # 落成 artifact 后失败时能直接下载 build.log。
+          # ---------------------------------------------------------------
+          echo "=== config.status 里实际生效的编译器 / 目标 ==="
+          grep -aE '"(CC|CXX|HOST_ARCH|PE_ARCHS|(arm64ec|aarch64|i386|x86_64)_(CC|TARGET))"' \
+            config.status | head -40 || true
+
           make \
-            -j"${JOBS}"
+            -j"${JOBS}" \
+            --output-sync=target \
+            2>&1 | tee build.log
+
+      # ============================================================
+      # 14.5 失败时上传构建日志（Actions 网页日志需要登录，artifact 可直接下载）
+      # ============================================================
+      - name: 上传构建日志 (失败时)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-run${{ github.run_number }}
+          path: |
+            /opt/wine-src/source/build-arm64/build.log
+            /opt/wine-src/source/build-arm64/config.log
+            /opt/wine-src/source/build-arm64/config.status
+          retention-days: 7
 
       # ============================================================
       # 15. Install
