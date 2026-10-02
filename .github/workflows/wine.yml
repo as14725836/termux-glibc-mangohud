@@ -1263,6 +1263,7 @@ jobs:
 
           TERMUX_LOADER="${TERMUX_GLIBC_PREFIX}/lib/ld-linux-aarch64.so.1"
 
+          # ---------- bin/ ----------
           find "${TARGET}/bin" \
             -type f \
             -exec file {} \; |
@@ -1276,18 +1277,66 @@ jobs:
               "${ELF}" || true
           done
 
-          find "${TARGET}/lib/wine" \
-            -type f \
-            -name "*.so" \
-            -exec file {} \; |
-          grep -E 'ELF 64-bit LSB.*ARM aarch64' |
-          cut -d: -f1 |
-          while read -r ELF; do
-            echo "patchelf(so): ${ELF}"
-            patchelf \
-              --set-rpath "${TERMUX_GLIBC_PREFIX}/lib" \
-              "${ELF}" || true
+          # ---------- lib/wine/（含非 .so 的可执行文件）----------
+          # 【修复】原来只处理 -name "*.so"，漏掉了
+          #   lib/wine/aarch64-unix/wine        <- 真正的 loader 二进制
+          #   lib/wine/*-unix/wineserver 等
+          # 它们仍指向宿主 /lib/ld-linux-aarch64.so.1，在 Termux 上会 ENOENT。
+          # 现在：统一设置 Termux RPATH；若该 ELF 自带 PT_INTERP 再顺带改 interpreter。
+          while IFS= read -r -d '' ELF; do
+            case "$(file -b "$ELF")" in
+              *"ELF 64-bit LSB"*"ARM aarch64"*) ;;
+              *) continue ;;
+            esac
+            if readelf -lW "$ELF" 2>/dev/null | grep -q 'program interpreter'; then
+              echo "patchelf(exe): ${ELF}"
+              patchelf --set-interpreter "${TERMUX_LOADER}" \
+                       --set-rpath "${TERMUX_GLIBC_PREFIX}/lib" "${ELF}" || true
+            else
+              echo "patchelf(so): ${ELF}"
+              patchelf --set-rpath "${TERMUX_GLIBC_PREFIX}/lib" "${ELF}" || true
+            fi
+          done < <(find "${TARGET}/lib/wine" -type f -print0)
+
+          # ---------- 自检（不完整就直接失败，别让它跑到 Release）----------
+          echo "=========== runtime path 自检 ==========="
+          FAIL=0
+          for ELF in "${TARGET}/bin/wine" "${TARGET}/bin/wineserver" "${TARGET}"/lib/wine/*-unix/wine; do
+            [ -f "${ELF}" ] || continue
+            I="$(readelf -lW "${ELF}" 2>/dev/null | sed -n 's/.*program interpreter: \(.*\)\]/\1/p' | head -1)"
+            R="$(readelf -dW "${ELF}" 2>/dev/null | sed -n 's/.*RUNPATH.*\[\(.*\)\]/\1/p' | head -1)"
+            echo "  ${ELF}"
+            echo "      interp = ${I:-<none>}"
+            echo "      rpath  = ${R:-<none>}"
+            if [ -n "${I}" ] && [ "${I}" != "${TERMUX_LOADER}" ]; then
+              echo "      !! interpreter 不是 Termux loader"
+              FAIL=1
+            fi
+            case "${R}" in
+              *"${TERMUX_GLIBC_PREFIX}/lib"*) ;;
+              *) echo "      !! rpath 缺少 ${TERMUX_GLIBC_PREFIX}/lib"; FAIL=1 ;;
+            esac
           done
+
+          N_BAD=0
+          while IFS= read -r -d '' ELF; do
+            case "$(file -b "$ELF")" in
+              *"ELF 64-bit LSB"*"ARM aarch64"*) ;;
+              *) continue ;;
+            esac
+            if ! readelf -dW "$ELF" 2>/dev/null | grep -q "${TERMUX_GLIBC_PREFIX}/lib"; then
+              echo "  !! 缺 Termux rpath: ${ELF}"
+              N_BAD=$((N_BAD + 1))
+            fi
+          done < <(find "${TARGET}/lib/wine" -type f -print0)
+          echo "  lib/wine 下缺 Termux rpath 的 ARM64 ELF 数量: ${N_BAD}"
+
+          if [ "${FAIL}" != "0" ]; then
+            echo "FATAL: 关键二进制 runtime path 修复不完整"
+            exit 1
+          fi
+
+          echo "runtime path 修复完成"
 
       # ============================================================
       # 20. ARM64 ntdll verification
