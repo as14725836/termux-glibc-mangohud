@@ -706,10 +706,16 @@ jobs:
           done
 
           # 硬校验：socket 目录必须已指向 Termux tmp，否则立刻失败（别浪费 30 分钟编译）
-          if grep -rn '/tmp/\.wine-' server/request.c dlls/ntdll/unix/server.c 2>/dev/null; then
+          # 注意：替换后的字符串是 ".../usr/tmp/.wine-%u"，它同样包含子串 "/tmp/.wine-"，
+          #       所以这里必须用「引号开头」精确匹配原始字面量 "/tmp/.wine-，避免误判。
+          if grep -rn '"/tmp/\.wine-' server/request.c dlls/ntdll/unix/server.c 2>/dev/null; then
             echo "FATAL: /tmp/.wine- 仍然存在，socket 目录没有改到 Termux tmp"
             exit 1
           fi
+
+          # 反向确认：必须能看到 Termux tmp 版
+          grep -n 'usr/tmp/\.wine-' server/request.c dlls/ntdll/unix/server.c 2>/dev/null || \
+            { echo "FATAL: 没找到 Termux tmp 版 socket 路径"; exit 1; }
 
           echo "=== socket 目录现在的写法 ==="
 
@@ -1562,9 +1568,11 @@ jobs:
           # 例: wineserver: mkdir /tmp/.wine-10521: Permission denied
           echo "=========== /tmp 残留检查 ==========="
           TMP_LEFT=0
+          # 用 PCRE 负向后顾：只有「前面不是 usr」的 /tmp/.wine- 才算残留，
+          # 这样替换后的 ".../usr/tmp/.wine-" 不会被误判。
           for BIN in "${TARGET}/bin/wine" "${TARGET}/bin/wineserver" "${TARGET}"/lib/wine/*-unix/*.so; do
             [ -f "${BIN}" ] || continue
-            if grep -qa '/tmp/\.wine-' "${BIN}"; then
+            if grep -qaP '(?<!usr)/tmp/\.wine-' "${BIN}"; then
               echo "  !! $(basename "${BIN}") 里仍有 /tmp/.wine-（socket 目录没改到 Termux tmp）"
               TMP_LEFT=1
             fi
