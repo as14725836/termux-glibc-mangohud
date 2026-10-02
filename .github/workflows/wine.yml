@@ -484,7 +484,21 @@ jobs:
             WINE_VERSION_ACTUAL="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"
           fi
 
-          BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-${BUILD_TYPE}-arm64-wow64"
+          # 【修复】VERSION 文件里是 "Wine version 11.0" 这种带空格/大写的字符串，
+          # 直接拼进 BUILD_NAME 会生成带空格的 tag，GitHub 拒绝：
+          #   tag_name is not a valid tag / tag_name is not well-formed
+          # 所以做一个"可用于 tag/文件名"的净化版本：
+          #   去掉 "Wine version " 前缀 → 空格转 - → 只留 [A-Za-z0-9._-]
+          VER_SAFE="$(printf '%s' "${WINE_VERSION_ACTUAL}" \
+            | sed -E 's/^[Ww]ine[ -]?version[ -]?//' \
+            | tr ' ' '-' \
+            | tr -cd 'A-Za-z0-9._-')"
+          [ -n "${VER_SAFE}" ] || VER_SAFE="unknown"
+
+          echo "WINE_VERSION_ACTUAL = ${WINE_VERSION_ACTUAL}"
+          echo "VER_SAFE            = ${VER_SAFE}"
+
+          BUILD_NAME="wine-${VER_SAFE}-${COMMIT_HASH}-${BUILD_TYPE}-arm64-wow64"
 
           echo "BUILD_NAME=${BUILD_NAME}" >> "$GITHUB_ENV"
           echo "WINE_VERSION_ACTUAL=${WINE_VERSION_ACTUAL}" >> "$GITHUB_ENV"
