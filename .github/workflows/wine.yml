@@ -208,6 +208,7 @@ jobs:
             libudev-dev:arm64 \
             libvulkan-dev:arm64 \
             libgl-dev:arm64 \
+            libdrm-dev:arm64 \
             libepoxy-dev:arm64 \
             libxcb1-dev:arm64 \
             libx11-dev:arm64 \
@@ -317,6 +318,122 @@ jobs:
           echo "=== ARM64EC compiler ==="
 
           arm64ec-w64-mingw32-clang --version || true
+
+      # ============================================================
+      # 5.5 构建 FEX 模拟器 DLL（Hangover 方案）
+      #
+      # 目标：把真正能跑的 x86_64 / i386 模拟器编成 Wine 的 CPU DLL
+      #   libarm64ecfex.dll  <- x86_64 模拟（Hangover 里对应 HODLL64）
+      #   libwow64fex.dll    <- i386   模拟（Hangover 里对应 HODLL）
+      # 两者都安装到 wine 的 lib/wine/aarch64-windows/（Hangover 官方位置）
+      #
+      # 官方配方（AndreRH/hangover docs/COMPILE.md）：
+      #   cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      #         -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+      #         -DENABLE_LTO=False -DMINGW_TRIPLE=<triple> -DBUILD_TESTS=False ..
+      #   make -jN arm64ecfex   /   make -jN wow64fex
+      # PE 交叉工具链用 bylaws 的 llvm-mingw（ARM64EC 支持完整）
+      # ============================================================
+      - name: 构建 FEX 模拟器 DLL (arm64ecfex + wow64fex)
+        shell: bash
+        run: |
+          set -eux
+
+          # ---------- 1) bylaws llvm-mingw（FEX 的 PE 交叉工具链）----------
+          FEX_LLVMMINGW_TAG="20250920"
+          FEX_LLVMMINGW_NAME="llvm-mingw-${FEX_LLVMMINGW_TAG}-ucrt-ubuntu-22.04-x86_64"
+          FEX_LLVMMINGW_DIR="/opt/${FEX_LLVMMINGW_NAME}"
+
+          if [ ! -d "${FEX_LLVMMINGW_DIR}" ]; then
+            cd /opt
+            wget -q --show-progress \
+              "https://github.com/bylaws/llvm-mingw/releases/download/${FEX_LLVMMINGW_TAG}/${FEX_LLVMMINGW_NAME}.tar.xz"
+            tar -xJf "${FEX_LLVMMINGW_NAME}.tar.xz"
+            rm -f "${FEX_LLVMMINGW_NAME}.tar.xz"
+          fi
+
+          export PATH="${FEX_LLVMMINGW_DIR}/bin:${PATH}"
+
+          echo "=== FEX 交叉工具链检查 ==="
+
+          for T in \
+            arm64ec-w64-mingw32-clang \
+            arm64ec-w64-mingw32-clang++ \
+            arm64ec-w64-mingw32-dlltool \
+            aarch64-w64-mingw32-clang \
+            aarch64-w64-mingw32-clang++ \
+            aarch64-w64-mingw32-dlltool
+          do
+            printf '%-38s ' "${T}"
+            command -v "${T}" || echo MISSING
+          done
+
+          # ---------- 2) FEX 源码（Hangover 使用的 arm64ec 分支）----------
+          rm -rf /opt/fex-src
+
+          git clone \
+            --depth=1 \
+            --branch arm64ec \
+            --recurse-submodules \
+            --shallow-submodules \
+            https://github.com/AndreRH/FEX.git \
+            /opt/fex-src
+
+          cd /opt/fex-src
+
+          git log -1 --oneline || true
+
+          JOBS="${{ inputs.jobs || 8 }}"
+
+          # ---------- 3) x86_64 模拟：libarm64ecfex.dll ----------
+          rm -rf build_ec
+
+          mkdir -p build_ec
+
+          cd build_ec
+
+          cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+            -DENABLE_LTO=False \
+            -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
+            -DBUILD_TESTS=False \
+            ..
+
+          make -j"${JOBS}" arm64ecfex
+
+          test -f Bin/libarm64ecfex.dll
+
+          ls -lh Bin/libarm64ecfex.dll
+
+          cd ..
+
+          # ---------- 4) i386 模拟：libwow64fex.dll ----------
+          rm -rf build_pe
+
+          mkdir -p build_pe
+
+          cd build_pe
+
+          cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+            -DENABLE_LTO=False \
+            -DMINGW_TRIPLE=aarch64-w64-mingw32 \
+            -DBUILD_TESTS=False \
+            ..
+
+          make -j"${JOBS}" wow64fex
+
+          test -f Bin/libwow64fex.dll
+
+          ls -lh Bin/libwow64fex.dll
+
+          echo "=== FEX 产物汇总 ==="
+
+          ls -lh \
+            /opt/fex-src/build_ec/Bin/libarm64ecfex.dll \
+            /opt/fex-src/build_pe/Bin/libwow64fex.dll
 
       # ============================================================
       # 6. 获取 Wine / Proton / Staging 源码
@@ -483,7 +600,21 @@ jobs:
             WINE_VERSION_ACTUAL="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"
           fi
 
-          BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-${BUILD_TYPE}-arm64-wow64"
+          # 【修复】VERSION 文件里是 "Wine version 11.0" 这种带空格/大写的字符串，
+          # 直接拼进 BUILD_NAME 会生成带空格的 tag，GitHub 拒绝：
+          #   tag_name is not a valid tag / tag_name is not well-formed
+          # 所以做一个"可用于 tag/文件名"的净化版本：
+          #   去掉 "Wine version " 前缀 → 空格转 - → 只留 [A-Za-z0-9._-]
+          VER_SAFE="$(printf '%s' "${WINE_VERSION_ACTUAL}" \
+            | sed -E 's/^[Ww]ine[ -]?version[ -]?//' \
+            | tr ' ' '-' \
+            | tr -cd 'A-Za-z0-9._-')"
+          [ -n "${VER_SAFE}" ] || VER_SAFE="unknown"
+
+          echo "WINE_VERSION_ACTUAL = ${WINE_VERSION_ACTUAL}"
+          echo "VER_SAFE            = ${VER_SAFE}"
+
+          BUILD_NAME="wine-${VER_SAFE}-${COMMIT_HASH}-${BUILD_TYPE}-arm64-wow64"
 
           echo "BUILD_NAME=${BUILD_NAME}" >> "$GITHUB_ENV"
           echo "WINE_VERSION_ACTUAL=${WINE_VERSION_ACTUAL}" >> "$GITHUB_ENV"
@@ -543,11 +674,22 @@ jobs:
           # --------------------------------------------------------
           TERMUX_TMP="${TERMUX_TMP}"
 
+          # 【修复】socket 目录 /tmp/.wine-<uid> 也必须改到 Termux tmp：
+          #   server/request.c:675          asprintf(&base_dir, "/tmp/.wine-%u", getuid())
+          #   dlls/ntdll/unix/server.c:1323 asprintf(&dir, "/tmp/.wine-%u/server-%llx-%llx", ...)
+          # 这两个文件原来不在清单里，导致运行时直接失败：
+          #   wineserver: mkdir /tmp/.wine-10521: Permission denied
+          # 注意：旧的 s|"/tmp"|...|g 模式对 "/tmp/.wine-%u" 匹配不上（/tmp 后面不是引号），
+          #       靠的是下面 s|/tmp/|...|g 这一条，两条都要保留。
+          # 另外 全树扫过：dlls/wineps.drv/ps.c 里的 "/tmpmtrx" 是 PostScript 变量名，
+          # libs/gsm/** 是无关文档注释，都不能碰，所以这里只做定点替换。
           for FILE in \
             server/file.c \
             server/server.c \
+            server/request.c \
             loader/loader.c \
             dlls/ntdll/loader.c \
+            dlls/ntdll/unix/server.c \
             dlls/ntdll/unix/virtual.c
           do
             if [ -f "$FILE" ]; then
@@ -562,6 +704,23 @@ jobs:
                 "$FILE"
             fi
           done
+
+          # 硬校验：socket 目录必须已指向 Termux tmp，否则立刻失败（别浪费 30 分钟编译）
+          # 注意：替换后的字符串是 ".../usr/tmp/.wine-%u"，它同样包含子串 "/tmp/.wine-"，
+          #       所以这里必须用「引号开头」精确匹配原始字面量 "/tmp/.wine-，避免误判。
+          if grep -rn '"/tmp/\.wine-' server/request.c dlls/ntdll/unix/server.c 2>/dev/null; then
+            echo "FATAL: /tmp/.wine- 仍然存在，socket 目录没有改到 Termux tmp"
+            exit 1
+          fi
+
+          # 反向确认：必须能看到 Termux tmp 版
+          grep -n 'usr/tmp/\.wine-' server/request.c dlls/ntdll/unix/server.c 2>/dev/null || \
+            { echo "FATAL: 没找到 Termux tmp 版 socket 路径"; exit 1; }
+
+          echo "=== socket 目录现在的写法 ==="
+
+          grep -n 'wine-' server/request.c | head -3 || true
+          grep -n 'wine-' dlls/ntdll/unix/server.c | head -3 || true
 
           # --------------------------------------------------------
           # FEX DLL names
@@ -656,6 +815,56 @@ jobs:
           echo "============================================"
           echo "Termux patches completed"
           echo "============================================"
+
+      # ============================================================
+      # 8.1 【关键修复】esync 头文件缺失
+      #
+      # 上游 WinNative-Emu/proton-wine@proton_11.0 的 tree 不一致：
+      #   dlls/ntdll/unix/server.c:1716 调用了 esync_init( shm_fd )
+      #   但该文件只 #include 了 "fsync.h"，漏了 "esync.h"
+      # 报错（本次 run #245 的真实失败原因）：
+      #   ../dlls/ntdll/unix/server.c:1716:17: error: call to undeclared function
+      #   'esync_init'; ISO C99 and later do not support implicit function
+      #   declarations [-Wimplicit-function-declaration]
+      #   note: did you mean 'fsync_init'?  (fsync.h:21 declared here)
+      #   make: *** [dlls/ntdll/unix/server.o] 오류 1
+      #
+      # 原因：隐式函数声明在 GCC 下只是 warning（上游用 gcc 所以没暴露），
+      #       但 clang 16+ 默认当 error；本 workflow 用 clang 就直接编译失败。
+      # 注意：sync.c / server/inproc_sync.c / server/main.c 都已正确 include，
+      #       全树只有 server.c 这一处遗漏，所以这是 1 行修复。
+      # ============================================================
+      - name: 修复 esync 头文件缺失 (server.c)
+        shell: bash
+        run: |
+          set -eux
+
+          cd "${WINE_SOURCE_DIR}/source"
+
+          FILE_SERVER_ESYNC="dlls/ntdll/unix/server.c"
+
+          test -f "${FILE_SERVER_ESYNC}"
+
+          if grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"; then
+            echo "已经包含 esync.h，无需修复"
+          else
+            # 插到 fsync.h 前面（与上游 esync 补丁的写法一致）
+            sed -i \
+              's|^#include "fsync.h"$|#include "esync.h"\n#include "fsync.h"|' \
+              "${FILE_SERVER_ESYNC}"
+          fi
+
+          echo "=== server.c 相关 include ==="
+
+          grep -n \
+            '#include "esync.h"\|#include "fsync.h"' \
+            "${FILE_SERVER_ESYNC}"
+
+          # 硬校验：两个 include 都必须存在，否则直接终止（不要浪费 30 分钟编译）
+          grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"
+          grep -q '#include "fsync.h"' "${FILE_SERVER_ESYNC}"
+
+          echo "esync.h include 修复完成"
 
       # ============================================================
       # 9. Generate configure
@@ -930,7 +1139,7 @@ jobs:
       - name: 编译 ARM64 WOW64
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           cd "${WINE_SOURCE_DIR}/source/build-arm64"
 
@@ -938,8 +1147,33 @@ jobs:
 
           echo "Building with ${JOBS} jobs"
 
+          # ---------------------------------------------------------------
+          # 打印真正生效的编译器 / 目标，并把日志落盘。
+          # 这段是"以后不用再猜"的关键：Actions 网页日志要登录才能看，
+          # 落成 artifact 后失败时能直接下载 build.log。
+          # ---------------------------------------------------------------
+          echo "=== config.status 里实际生效的编译器 / 目标 ==="
+          grep -aE '"(CC|CXX|HOST_ARCH|PE_ARCHS|(arm64ec|aarch64|i386|x86_64)_(CC|TARGET))"' \
+            config.status | head -40 || true
+
           make \
-            -j"${JOBS}"
+            -j"${JOBS}" \
+            --output-sync=target \
+            2>&1 | tee build.log
+
+      # ============================================================
+      # 14.5 失败时上传构建日志（Actions 网页日志需要登录，artifact 可直接下载）
+      # ============================================================
+      - name: 上传构建日志 (失败时)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-run${{ github.run_number }}
+          path: |
+            /opt/wine-src/source/build-arm64/build.log
+            /opt/wine-src/source/build-arm64/config.log
+            /opt/wine-src/source/build-arm64/config.status
+          retention-days: 7
 
       # ============================================================
       # 15. Install
@@ -965,7 +1199,7 @@ jobs:
             -maxdepth 3 \
             -type f |
           sort |
-          head -300
+          head -300 || true
 
       # ============================================================
       # 16. Install tree fix
@@ -1160,6 +1394,90 @@ jobs:
           done
 
       # ============================================================
+      # 18.5 安装 FEX 模拟器 DLL + Termux 路径配置
+      #
+      # 把 FEX 编出来的两个模拟器 DLL 放进 wine 的
+      #   lib/wine/aarch64-windows/         <- Hangover 官方位置
+      #     libarm64ecfex.dll   x86_64 模拟
+      #     libwow64fex.dll     i386   模拟
+      #
+      # 同时处理 FEX 内置的默认路径：
+      #   /usr/lib/wine/aarch64-windows/fex-emu/HostThunks
+      #   /usr/share/fex-emu/GuestThunks
+      # 这两条在 Termux(非 root) 下不存在，改用 FEX 官方支持的环境变量
+      #   FEX_THUNKHOSTLIBS / FEX_THUNKGUESTLIBS / FEX_ROOTFS / FEX_THUNKCONFIG
+      # 覆盖成 Termux glibc 前缀内的真实位置（脚本自定位，不写死绝对路径）。
+      # ============================================================
+      - name: 安装 FEX 模拟器 DLL (aarch64-windows)
+        shell: bash
+        run: |
+          set -eux
+
+          TARGET="/tmp/wine-install-wow64"
+          DEST="${TARGET}/lib/wine/aarch64-windows"
+
+          mkdir -p "${DEST}"
+
+          install -m0644 /opt/fex-src/build_ec/Bin/libarm64ecfex.dll "${DEST}/libarm64ecfex.dll"
+          install -m0644 /opt/fex-src/build_pe/Bin/libwow64fex.dll   "${DEST}/libwow64fex.dll"
+
+          echo "=== 安装结果（期望 libarm64ecfex=PE x86-64 / libwow64fex=PE Aarch64）==="
+
+          ls -lh "${DEST}/libarm64ecfex.dll" "${DEST}/libwow64fex.dll"
+
+          file "${DEST}/libarm64ecfex.dll" "${DEST}/libwow64fex.dll"
+
+          echo "=== wine.inf / loader 里的模拟器引用 ==="
+
+          grep -a -i 'libarm64ecfex\|libwow64fex' "${TARGET}/share/wine/wine.inf" | head -6 || \
+            echo "(wine.inf 里没找到 FEX 名称，检查 Termux compatibility patches 步骤)"
+
+          # ---------- FEX 的 thunk / rootfs 目录 ----------
+          mkdir -p "${DEST}/fex-emu/HostThunks"
+          mkdir -p "${TARGET}/share/fex-emu/GuestThunks"
+          mkdir -p "${TARGET}/share/fex-emu/RootFS"
+
+          # ---------- 自定位的 FEX 环境脚本 ----------
+          cat > "${TARGET}/share/fex-emu/fex-env.sh" <<'EOS'
+          #!/bin/bash
+          # FEX 在 Termux glibc 环境下的路径配置
+          # 用法: source "<wine根>/share/fex-emu/fex-env.sh"
+          # 说明: FEX DLL 内置默认路径是 /usr/lib/wine/... 与 /usr/share/fex-emu/，
+          #       在 Termux(非 root) 里那些路径不存在也不可写，必须用环境变量覆盖。
+          _fex_share="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+          _fex_root="$(cd "${_fex_share}/../.." && pwd)"
+
+          export FEX_THUNKHOSTLIBS="${_fex_root}/lib/wine/aarch64-windows/fex-emu/HostThunks"
+          export FEX_THUNKGUESTLIBS="${_fex_share}/GuestThunks"
+          export FEX_ROOTFS="${_fex_share}/RootFS"
+          export FEX_THUNKCONFIG="${_fex_share}"
+          # FEX 用相对自身位置的路径（不再依赖 /usr、/etc）
+          export FEX_PORTABLE=1
+          # Wine 侧选择模拟器 DLL（Hangover 约定）
+          export HODLL64=libarm64ecfex.dll
+          export HODLL=libwow64fex.dll
+
+          echo "[fex-env] wine 根目录          = ${_fex_root}"
+          echo "[fex-env] FEX_THUNKHOSTLIBS    = ${FEX_THUNKHOSTLIBS}"
+          echo "[fex-env] FEX_THUNKGUESTLIBS   = ${FEX_THUNKGUESTLIBS}"
+          EOS
+
+          chmod 0755 "${TARGET}/share/fex-emu/fex-env.sh"
+
+          # 把 FEX 构建时生成的 thunk 数据（如果有）一并带上
+          if [ -d /opt/fex-src/build_ec/Bin/Thunks ]; then
+            cp -a /opt/fex-src/build_ec/Bin/Thunks/. "${DEST}/fex-emu/HostThunks/" || true
+          fi
+
+          if [ -d /opt/fex-src/build_ec/Bin/GuestThunks ]; then
+            cp -a /opt/fex-src/build_ec/Bin/GuestThunks/. "${TARGET}/share/fex-emu/GuestThunks/" || true
+          fi
+
+          echo "=== FEX 安装完成 ==="
+
+          find "${TARGET}" -maxdepth 5 -iname '*fex*' | sort
+
+      # ============================================================
       # 19. Termux runtime path fix (patchelf)
       # ============================================================
       - name: 写入 Termux runtime path
@@ -1173,6 +1491,7 @@ jobs:
 
           TERMUX_LOADER="${TERMUX_GLIBC_PREFIX}/lib/ld-linux-aarch64.so.1"
 
+          # ---------- bin/ ----------
           find "${TARGET}/bin" \
             -type f \
             -exec file {} \; |
@@ -1186,18 +1505,87 @@ jobs:
               "${ELF}" || true
           done
 
-          find "${TARGET}/lib/wine" \
-            -type f \
-            -name "*.so" \
-            -exec file {} \; |
-          grep -E 'ELF 64-bit LSB.*ARM aarch64' |
-          cut -d: -f1 |
-          while read -r ELF; do
-            echo "patchelf(so): ${ELF}"
-            patchelf \
-              --set-rpath "${TERMUX_GLIBC_PREFIX}/lib" \
-              "${ELF}" || true
+          # ---------- lib/wine/（含非 .so 的可执行文件）----------
+          # 【修复】原来只处理 -name "*.so"，漏掉了
+          #   lib/wine/aarch64-unix/wine        <- 真正的 loader 二进制
+          #   lib/wine/*-unix/wineserver 等
+          # 它们仍指向宿主 /lib/ld-linux-aarch64.so.1，在 Termux 上会 ENOENT。
+          # 现在：统一设置 Termux RPATH；若该 ELF 自带 PT_INTERP 再顺带改 interpreter。
+          while IFS= read -r -d '' ELF; do
+            case "$(file -b "$ELF")" in
+              *"ELF 64-bit LSB"*"ARM aarch64"*) ;;
+              *) continue ;;
+            esac
+            if readelf -lW "$ELF" 2>/dev/null | grep -q 'program interpreter'; then
+              echo "patchelf(exe): ${ELF}"
+              patchelf --set-interpreter "${TERMUX_LOADER}" \
+                       --set-rpath "${TERMUX_GLIBC_PREFIX}/lib" "${ELF}" || true
+            else
+              echo "patchelf(so): ${ELF}"
+              patchelf --set-rpath "${TERMUX_GLIBC_PREFIX}/lib" "${ELF}" || true
+            fi
+          done < <(find "${TARGET}/lib/wine" -type f -print0)
+
+          # ---------- 自检（不完整就直接失败，别让它跑到 Release）----------
+          echo "=========== runtime path 自检 ==========="
+          FAIL=0
+          for ELF in "${TARGET}/bin/wine" "${TARGET}/bin/wineserver" "${TARGET}"/lib/wine/*-unix/wine; do
+            [ -f "${ELF}" ] || continue
+            I="$(readelf -lW "${ELF}" 2>/dev/null | sed -n 's/.*program interpreter: \(.*\)\]/\1/p' | head -1)"
+            R="$(readelf -dW "${ELF}" 2>/dev/null | sed -n 's/.*RUNPATH.*\[\(.*\)\]/\1/p' | head -1)"
+            echo "  ${ELF}"
+            echo "      interp = ${I:-<none>}"
+            echo "      rpath  = ${R:-<none>}"
+            if [ -n "${I}" ] && [ "${I}" != "${TERMUX_LOADER}" ]; then
+              echo "      !! interpreter 不是 Termux loader"
+              FAIL=1
+            fi
+            case "${R}" in
+              *"${TERMUX_GLIBC_PREFIX}/lib"*) ;;
+              *) echo "      !! rpath 缺少 ${TERMUX_GLIBC_PREFIX}/lib"; FAIL=1 ;;
+            esac
           done
+
+          N_BAD=0
+          while IFS= read -r -d '' ELF; do
+            case "$(file -b "$ELF")" in
+              *"ELF 64-bit LSB"*"ARM aarch64"*) ;;
+              *) continue ;;
+            esac
+            if ! readelf -dW "$ELF" 2>/dev/null | grep -q "${TERMUX_GLIBC_PREFIX}/lib"; then
+              echo "  !! 缺 Termux rpath: ${ELF}"
+              N_BAD=$((N_BAD + 1))
+            fi
+          done < <(find "${TARGET}/lib/wine" -type f -print0)
+          echo "  lib/wine 下缺 Termux rpath 的 ARM64 ELF 数量: ${N_BAD}"
+
+          if [ "${FAIL}" != "0" ]; then
+            echo "FATAL: 关键二进制 runtime path 修复不完整"
+            exit 1
+          fi
+
+          # ---------- 残留 /tmp 路径检查（编译期不会报错、只有运行时才炸）----------
+          # 例: wineserver: mkdir /tmp/.wine-10521: Permission denied
+          echo "=========== /tmp 残留检查 ==========="
+          TMP_LEFT=0
+          # 用 PCRE 负向后顾：只有「前面不是 usr」的 /tmp/.wine- 才算残留，
+          # 这样替换后的 ".../usr/tmp/.wine-" 不会被误判。
+          for BIN in "${TARGET}/bin/wine" "${TARGET}/bin/wineserver" "${TARGET}"/lib/wine/*-unix/*.so; do
+            [ -f "${BIN}" ] || continue
+            if grep -qaP '(?<!usr)/tmp/\.wine-' "${BIN}"; then
+              echo "  !! $(basename "${BIN}") 里仍有 /tmp/.wine-（socket 目录没改到 Termux tmp）"
+              TMP_LEFT=1
+            fi
+          done
+
+          if [ "${TMP_LEFT}" != "0" ]; then
+            echo "FATAL: 二进制里仍有 /tmp/.wine-，设备上运行会 mkdir Permission denied"
+            exit 1
+          fi
+
+          echo "  未发现 /tmp/.wine- 残留"
+
+          echo "runtime path 修复完成"
 
       # ============================================================
       # 20. ARM64 ntdll verification
@@ -1334,7 +1722,7 @@ jobs:
             -maxdepth 4 \
             -type f |
           sort |
-          head -500
+          head -500 || true
 
           echo
           echo "Directory sizes:"
