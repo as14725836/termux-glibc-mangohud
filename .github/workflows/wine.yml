@@ -320,6 +320,122 @@ jobs:
           arm64ec-w64-mingw32-clang --version || true
 
       # ============================================================
+      # 5.5 构建 FEX 模拟器 DLL（Hangover 方案）
+      #
+      # 目标：把真正能跑的 x86_64 / i386 模拟器编成 Wine 的 CPU DLL
+      #   libarm64ecfex.dll  <- x86_64 模拟（Hangover 里对应 HODLL64）
+      #   libwow64fex.dll    <- i386   模拟（Hangover 里对应 HODLL）
+      # 两者都安装到 wine 的 lib/wine/aarch64-windows/（Hangover 官方位置）
+      #
+      # 官方配方（AndreRH/hangover docs/COMPILE.md）：
+      #   cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      #         -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+      #         -DENABLE_LTO=False -DMINGW_TRIPLE=<triple> -DBUILD_TESTS=False ..
+      #   make -jN arm64ecfex   /   make -jN wow64fex
+      # PE 交叉工具链用 bylaws 的 llvm-mingw（ARM64EC 支持完整）
+      # ============================================================
+      - name: 构建 FEX 模拟器 DLL (arm64ecfex + wow64fex)
+        shell: bash
+        run: |
+          set -eux
+
+          # ---------- 1) bylaws llvm-mingw（FEX 的 PE 交叉工具链）----------
+          FEX_LLVMMINGW_TAG="20250920"
+          FEX_LLVMMINGW_NAME="llvm-mingw-${FEX_LLVMMINGW_TAG}-ucrt-ubuntu-22.04-x86_64"
+          FEX_LLVMMINGW_DIR="/opt/${FEX_LLVMMINGW_NAME}"
+
+          if [ ! -d "${FEX_LLVMMINGW_DIR}" ]; then
+            cd /opt
+            wget -q --show-progress \
+              "https://github.com/bylaws/llvm-mingw/releases/download/${FEX_LLVMMINGW_TAG}/${FEX_LLVMMINGW_NAME}.tar.xz"
+            tar -xJf "${FEX_LLVMMINGW_NAME}.tar.xz"
+            rm -f "${FEX_LLVMMINGW_NAME}.tar.xz"
+          fi
+
+          export PATH="${FEX_LLVMMINGW_DIR}/bin:${PATH}"
+
+          echo "=== FEX 交叉工具链检查 ==="
+
+          for T in \
+            arm64ec-w64-mingw32-clang \
+            arm64ec-w64-mingw32-clang++ \
+            arm64ec-w64-mingw32-dlltool \
+            aarch64-w64-mingw32-clang \
+            aarch64-w64-mingw32-clang++ \
+            aarch64-w64-mingw32-dlltool
+          do
+            printf '%-38s ' "${T}"
+            command -v "${T}" || echo MISSING
+          done
+
+          # ---------- 2) FEX 源码（Hangover 使用的 arm64ec 分支）----------
+          rm -rf /opt/fex-src
+
+          git clone \
+            --depth=1 \
+            --branch arm64ec \
+            --recurse-submodules \
+            --shallow-submodules \
+            https://github.com/AndreRH/FEX.git \
+            /opt/fex-src
+
+          cd /opt/fex-src
+
+          git log -1 --oneline || true
+
+          JOBS="${{ inputs.jobs || 8 }}"
+
+          # ---------- 3) x86_64 模拟：libarm64ecfex.dll ----------
+          rm -rf build_ec
+
+          mkdir -p build_ec
+
+          cd build_ec
+
+          cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+            -DENABLE_LTO=False \
+            -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
+            -DBUILD_TESTS=False \
+            ..
+
+          make -j"${JOBS}" arm64ecfex
+
+          test -f Bin/libarm64ecfex.dll
+
+          ls -lh Bin/libarm64ecfex.dll
+
+          cd ..
+
+          # ---------- 4) i386 模拟：libwow64fex.dll ----------
+          rm -rf build_pe
+
+          mkdir -p build_pe
+
+          cd build_pe
+
+          cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+            -DENABLE_LTO=False \
+            -DMINGW_TRIPLE=aarch64-w64-mingw32 \
+            -DBUILD_TESTS=False \
+            ..
+
+          make -j"${JOBS}" wow64fex
+
+          test -f Bin/libwow64fex.dll
+
+          ls -lh Bin/libwow64fex.dll
+
+          echo "=== FEX 产物汇总 ==="
+
+          ls -lh \
+            /opt/fex-src/build_ec/Bin/libarm64ecfex.dll \
+            /opt/fex-src/build_pe/Bin/libwow64fex.dll
+
+      # ============================================================
       # 6. 获取 Wine / Proton / Staging 源码
       # ============================================================
       - name: 获取 Wine 源码
@@ -1248,6 +1364,90 @@ jobs:
                 || true
             fi
           done
+
+      # ============================================================
+      # 18.5 安装 FEX 模拟器 DLL + Termux 路径配置
+      #
+      # 把 FEX 编出来的两个模拟器 DLL 放进 wine 的
+      #   lib/wine/aarch64-windows/         <- Hangover 官方位置
+      #     libarm64ecfex.dll   x86_64 模拟
+      #     libwow64fex.dll     i386   模拟
+      #
+      # 同时处理 FEX 内置的默认路径：
+      #   /usr/lib/wine/aarch64-windows/fex-emu/HostThunks
+      #   /usr/share/fex-emu/GuestThunks
+      # 这两条在 Termux(非 root) 下不存在，改用 FEX 官方支持的环境变量
+      #   FEX_THUNKHOSTLIBS / FEX_THUNKGUESTLIBS / FEX_ROOTFS / FEX_THUNKCONFIG
+      # 覆盖成 Termux glibc 前缀内的真实位置（脚本自定位，不写死绝对路径）。
+      # ============================================================
+      - name: 安装 FEX 模拟器 DLL (aarch64-windows)
+        shell: bash
+        run: |
+          set -eux
+
+          TARGET="/tmp/wine-install-wow64"
+          DEST="${TARGET}/lib/wine/aarch64-windows"
+
+          mkdir -p "${DEST}"
+
+          install -m0644 /opt/fex-src/build_ec/Bin/libarm64ecfex.dll "${DEST}/libarm64ecfex.dll"
+          install -m0644 /opt/fex-src/build_pe/Bin/libwow64fex.dll   "${DEST}/libwow64fex.dll"
+
+          echo "=== 安装结果（期望 libarm64ecfex=PE x86-64 / libwow64fex=PE Aarch64）==="
+
+          ls -lh "${DEST}/libarm64ecfex.dll" "${DEST}/libwow64fex.dll"
+
+          file "${DEST}/libarm64ecfex.dll" "${DEST}/libwow64fex.dll"
+
+          echo "=== wine.inf / loader 里的模拟器引用 ==="
+
+          grep -a -i 'libarm64ecfex\|libwow64fex' "${TARGET}/share/wine/wine.inf" | head -6 || \
+            echo "(wine.inf 里没找到 FEX 名称，检查 Termux compatibility patches 步骤)"
+
+          # ---------- FEX 的 thunk / rootfs 目录 ----------
+          mkdir -p "${DEST}/fex-emu/HostThunks"
+          mkdir -p "${TARGET}/share/fex-emu/GuestThunks"
+          mkdir -p "${TARGET}/share/fex-emu/RootFS"
+
+          # ---------- 自定位的 FEX 环境脚本 ----------
+          cat > "${TARGET}/share/fex-emu/fex-env.sh" <<'EOS'
+          #!/bin/bash
+          # FEX 在 Termux glibc 环境下的路径配置
+          # 用法: source "<wine根>/share/fex-emu/fex-env.sh"
+          # 说明: FEX DLL 内置默认路径是 /usr/lib/wine/... 与 /usr/share/fex-emu/，
+          #       在 Termux(非 root) 里那些路径不存在也不可写，必须用环境变量覆盖。
+          _fex_share="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+          _fex_root="$(cd "${_fex_share}/../.." && pwd)"
+
+          export FEX_THUNKHOSTLIBS="${_fex_root}/lib/wine/aarch64-windows/fex-emu/HostThunks"
+          export FEX_THUNKGUESTLIBS="${_fex_share}/GuestThunks"
+          export FEX_ROOTFS="${_fex_share}/RootFS"
+          export FEX_THUNKCONFIG="${_fex_share}"
+          # FEX 用相对自身位置的路径（不再依赖 /usr、/etc）
+          export FEX_PORTABLE=1
+          # Wine 侧选择模拟器 DLL（Hangover 约定）
+          export HODLL64=libarm64ecfex.dll
+          export HODLL=libwow64fex.dll
+
+          echo "[fex-env] wine 根目录          = ${_fex_root}"
+          echo "[fex-env] FEX_THUNKHOSTLIBS    = ${FEX_THUNKHOSTLIBS}"
+          echo "[fex-env] FEX_THUNKGUESTLIBS   = ${FEX_THUNKGUESTLIBS}"
+          EOS
+
+          chmod 0755 "${TARGET}/share/fex-emu/fex-env.sh"
+
+          # 把 FEX 构建时生成的 thunk 数据（如果有）一并带上
+          if [ -d /opt/fex-src/build_ec/Bin/Thunks ]; then
+            cp -a /opt/fex-src/build_ec/Bin/Thunks/. "${DEST}/fex-emu/HostThunks/" || true
+          fi
+
+          if [ -d /opt/fex-src/build_ec/Bin/GuestThunks ]; then
+            cp -a /opt/fex-src/build_ec/Bin/GuestThunks/. "${TARGET}/share/fex-emu/GuestThunks/" || true
+          fi
+
+          echo "=== FEX 安装完成 ==="
+
+          find "${TARGET}" -maxdepth 5 -iname '*fex*' | sort
 
       # ============================================================
       # 19. Termux runtime path fix (patchelf)
