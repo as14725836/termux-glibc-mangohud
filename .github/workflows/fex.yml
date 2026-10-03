@@ -272,6 +272,20 @@ jobs:
           FEX_COMMIT="$(git rev-parse --short HEAD)"
           FEX_COMMIT_FULL="$(git rev-parse HEAD)"
 
+          # ---- 旧版本源码兼容补丁 ----
+          # 老 FEX（如 FEX-2505）自带的 fmt 里用了 malloc/free 但没有 include <cstdlib>，
+          # 在较新的 clang（LLVM 20/21）下会直接报 "use of undeclared identifier 'malloc'"。
+          for H in \
+            External/fmt/include/fmt/base.h \
+            External/fmt/include/fmt/format.h \
+            External/fmt/include/fmt/core.h
+          do
+            if [ -f "${H}" ] && ! grep -q '#include <cstdlib>' "${H}"; then
+              echo "旧版本兼容补丁: 给 ${H} 补 #include <cstdlib>"
+              sed -i '1i #include <cstdlib>' "${H}"
+            fi
+          done
+
           # ---- 自动定位 mingw 工具链文件（不同 FEX 版本目录结构不一样）----
           # 例：FEX-2605 有 Data/CMake/toolchain_mingw.cmake，而 FEX-2505 没有
           TOOLCHAIN_FILE="$(find /opt/fex-src -path '*/Data/CMake/toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
