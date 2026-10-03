@@ -12,6 +12,7 @@ on:
           - proton
           - staging
           - winearm64ec
+          - pipetto-proton9-arm64ec
 
       wine_version:
         description: 'Wine 版本，例如 10.20；latest 表示使用源码默认版本'
@@ -567,6 +568,22 @@ jobs:
               fi
               ;;
 
+            pipetto-proton9-arm64ec)
+              echo "=== Pipetto wine (proton-9.0-arm64ec, Wine 9.0 内核 + arm64ec) ==="
+
+              git clone \
+                --branch proton-9.0-arm64ec \
+                --single-branch \
+                https://github.com/Pipetto-crypto/wine.git \
+                source
+
+              cd source
+
+              git config advice.detachedHead false
+
+              echo "Pipetto wine HEAD: $(git rev-parse --short HEAD)"
+              ;;
+
             winearm64ec)
               echo "=== Wine ARM64EC / wine-tkg ==="
 
@@ -613,8 +630,11 @@ jobs:
           #   tag_name is not a valid tag / tag_name is not well-formed
           # 所以做一个"可用于 tag/文件名"的净化版本：
           #   去掉 "Wine version " 前缀 → 空格转 - → 只留 [A-Za-z0-9._-]
+          # 兼容 "Wine version 11.0" / "Wine 9.0" / "9.0" 几种写法
           VER_SAFE="$(printf '%s' "${WINE_VERSION_ACTUAL}" \
             | sed -E 's/^[Ww]ine[ -]?version[ -]?//' \
+            | sed -E 's/^[Ww]ine[ -]?//' \
+            | sed -E 's/^v//' \
             | tr ' ' '-' \
             | tr -cd 'A-Za-z0-9._-')"
           [ -n "${VER_SAFE}" ] || VER_SAFE="unknown"
@@ -851,9 +871,14 @@ jobs:
 
           FILE_SERVER_ESYNC="dlls/ntdll/unix/server.c"
 
-          test -f "${FILE_SERVER_ESYNC}"
-
-          if grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"; then
+          # 这个修复只针对 proton / arm64ec 型 tree：
+          #   * 文件不存在  -> 直接跳过
+          #   * 没调用 esync_init（上游 Wine 9.0 之类）-> 跳过，避免插了不存在的头文件
+          if [ ! -f "${FILE_SERVER_ESYNC}" ]; then
+            echo "跳过 esync 修复：不存在 ${FILE_SERVER_ESYNC}"
+          elif [ ! -f dlls/ntdll/unix/esync.h ] && ! grep -q 'esync_init' "${FILE_SERVER_ESYNC}"; then
+            echo "跳过 esync 修复：该 tree 没有 esync（无 esync.h 且未调用 esync_init）"
+          elif grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"; then
             echo "已经包含 esync.h，无需修复"
           else
             # 插到 fsync.h 前面（与上游 esync 补丁的写法一致）
@@ -868,11 +893,13 @@ jobs:
             '#include "esync.h"\|#include "fsync.h"' \
             "${FILE_SERVER_ESYNC}"
 
-          # 硬校验：两个 include 都必须存在，否则直接终止（不要浪费 30 分钟编译）
-          grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"
-          grep -q '#include "fsync.h"' "${FILE_SERVER_ESYNC}"
-
-          echo "esync.h include 修复完成"
+          # 硬校验：仅当确实存在 esync.h（即需要这个修复）时才强制要求
+          if [ -f dlls/ntdll/unix/esync.h ]; then
+            grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"
+            echo "esync.h include 修复完成（已校验）"
+          else
+            echo "该 tree 无 esync，跳过校验"
+          fi
 
       # ============================================================
       # 9. Generate configure
