@@ -753,6 +753,60 @@ jobs:
           done
 
       # ============================================================
+      # 6.2 修复 wineboot.c：aarch64 分支缺 initialize_xstate_features
+      #
+      # 触发原因（run274 / proton-10.34-GE 的真实编译错误）：
+      #   ../programs/wineboot/wineboot.c:539:5: error:
+      #     call to undeclared function 'initialize_xstate_features';
+      #     ISO C99 and later do not support implicit function declarations
+      #
+      # 该树 wineboot.c 的结构是：
+      #   #if defined(__i386__) || defined(__x86_64__)   -> 有实现
+      #   #elif defined(__aarch64__)                    -> 只写了 read_tsc_frequency，漏了它
+      #   #else                                          -> 有空实现
+      # 于是 aarch64 上该函数既无声明也无定义。
+      #
+      # 本步骤在 aarch64 分支里补一个空实现（幂等；其它 wine 树不受影响）。
+      # ============================================================
+      - name: 修复 wineboot.c (aarch64 缺 initialize_xstate_features)
+        shell: bash
+        run: |
+          set -eux
+
+          cd "${WINE_SOURCE_DIR}/source"
+
+          F="programs/wineboot/wineboot.c"
+          if [ ! -f "${F}" ]; then
+            echo "无 ${F}，跳过"
+            exit 0
+          fi
+
+          if ! grep -q 'initialize_xstate_features' "${F}"; then
+            echo "该树未使用 initialize_xstate_features，跳过"
+            exit 0
+          fi
+
+          if awk '/#elif defined\(__aarch64__\)/{f=1} f && /initialize_xstate_features/{print "yes"; exit}' "${F}" | grep -q yes; then
+            echo "aarch64 分支已有 initialize_xstate_features，跳过"
+            exit 0
+          fi
+
+          echo "=== 修改前：aarch64 分支附近 ==="
+          awk '/#elif defined\(__aarch64__\)/{f=1} f{print; n++} n>6{exit}' "${F}" || true
+
+          perl -0pi -e 's/(#elif defined\(__aarch64__\)\nstatic UINT64 read_tsc_frequency)/static void initialize_xstate_features( struct _KUSER_SHARED_DATA *data )\n{\n    (void)data;\n}\n\n$1/' "${F}"
+
+          echo "=== 修改后：aarch64 分支附近 ==="
+          awk '/#elif defined\(__aarch64__\)/{f=1} f{print; n++} n>10{exit}' "${F}" || true
+
+          if awk '/#elif defined\(__aarch64__\)/{f=1} f && /initialize_xstate_features/{print "yes"; exit}' "${F}" | grep -q yes; then
+            echo "OK: aarch64 分支已补上 initialize_xstate_features 空实现"
+          else
+            echo "FAIL: 补丁未生效（锚点不匹配）"
+            exit 1
+          fi
+
+      # ============================================================
       # 7. Wine source preparation
       # ============================================================
       - name: Wine source preparation
