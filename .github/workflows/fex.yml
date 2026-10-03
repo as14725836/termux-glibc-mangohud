@@ -400,6 +400,33 @@ jobs:
 
           JOBS="${{ inputs.jobs || '8' }}"
 
+          # ---- 兼容老版本 FEX：它硬编码 -lclang_rt.builtins-arm64ec ----
+          # LLVM 工具链里这个库名为 libclang_rt.builtins-aarch64.a（ARM64EC 的 builtins
+          # 就是 AArch64 代码），老 FEX（如 FEX-2505）会因为找不到 arm64ec 名字而链接失败：
+          #   lld: error: unable to find library -lclang_rt.builtins-arm64ec
+          BUILTINS_DIR=""
+          for CAND in \
+            "$(find "${LLVMMINGW_DIR}" -type d -path '*lib/clang*' -name windows -print -quit 2>/dev/null || true)" \
+            "$(dirname "$(find "${LLVMMINGW_DIR}" -name 'libclang_rt.builtins-aarch64.a' -print -quit 2>/dev/null || true)")"
+          do
+            if [ -n "${CAND}" ] && [ -d "${CAND}" ]; then BUILTINS_DIR="${CAND}"; break; fi
+          done
+
+          echo "builtins 目录 = ${BUILTINS_DIR:-<未找到>}"
+
+          if [ -n "${BUILTINS_DIR}" ]; then
+            ls "${BUILTINS_DIR}" | grep -i builtins | head -10 || true
+
+            if [ ! -e "${BUILTINS_DIR}/libclang_rt.builtins-arm64ec.a" ] \
+               && [ -e "${BUILTINS_DIR}/libclang_rt.builtins-aarch64.a" ]; then
+              cp -f "${BUILTINS_DIR}/libclang_rt.builtins-aarch64.a" \
+                    "${BUILTINS_DIR}/libclang_rt.builtins-arm64ec.a"
+              echo "已创建 libclang_rt.builtins-arm64ec.a（复制自 aarch64 版）"
+            else
+              ls "${BUILTINS_DIR}" | grep -i 'builtins-arm64ec' || echo "(无需创建：已有或源缺失)"
+            fi
+          fi
+
           cd /opt/fex-src
 
           rm -rf build_ec
