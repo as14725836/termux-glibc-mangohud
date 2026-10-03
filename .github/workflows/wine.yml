@@ -687,6 +687,72 @@ jobs:
           echo "WINE_COMMIT=${COMMIT_HASH}"
 
       # ============================================================
+      # 6.1 初始化子模块 + 剪除缺失组件的 WINE_CONFIG_MAKEFILE
+      #
+      # 触发原因（run272 / wine_branch=proton-10.34-GE 的真实失败）：
+      #   The412Banner/proton-wine@proton_10.34-GE 里 dlls/winedirectaudio.drv
+      #   是一个 git submodule（.gitmodules → https://github.com/The412Banner/directaudio）。
+      #   普通 `git clone --single-branch` 不会拉子模块 → 该目录为空，
+      #   而 configure.ac:3351 有 WINE_CONFIG_MAKEFILE(dlls/winedirectaudio.drv)，
+      #   于是 config.status 生成 Makefile 时报：
+      #     dlls/winedirectaudio.drv/Makefile.in: error: open : No such file or directory
+      #     config.status: error: could not create Makefile
+      #
+      # 本步骤：
+      #   1) 有 .gitmodules 就初始化子模块（递归）
+      #   2) 兜底：若某目录仍缺 Makefile.in，就把对应的 WINE_CONFIG_MAKEFILE 注释掉
+      #      （打印清单），保证 configure 能过；对没有子模块的树完全无影响
+      # ============================================================
+      - name: 初始化子模块 + 剪除缺失的 WINE_CONFIG_MAKEFILE
+        shell: bash
+        run: |
+          set -eux
+
+          cd "${WINE_SOURCE_DIR}/source"
+
+          if [ -f .gitmodules ]; then
+            echo "=== .gitmodules ==="
+            cat .gitmodules || true
+            echo "=== 初始化子模块 ==="
+            git submodule sync --recursive || true
+            if git submodule update --init --recursive; then
+              echo "OK: 子模块已初始化"
+            else
+              echo "WARN: 子模块初始化失败（下面用剪除兜底）"
+            fi
+          else
+            echo "无 .gitmodules，跳过子模块初始化"
+          fi
+
+          echo "=== 检查 configure.ac 里指向缺失目录的 WINE_CONFIG_MAKEFILE ==="
+          cp -f configure.ac configure.ac.bak
+          MISSING=0
+          for d in $(grep -oE 'WINE_CONFIG_MAKEFILE\([^)]+\)' configure.ac \
+                       | sed -E 's/WINE_CONFIG_MAKEFILE\((.*)\)/\1/'); do
+            if [ ! -f "${d}/Makefile.in" ]; then
+              echo "  MISS ${d} -> 注释掉该 WINE_CONFIG_MAKEFILE"
+              sed -i "s|^\([[:space:]]*WINE_CONFIG_MAKEFILE(${d})\)|# [CI] 组件缺失，已跳过: \1|" configure.ac
+              MISSING=$((MISSING + 1))
+            fi
+          done
+          echo "被剪除的条目数: ${MISSING}"
+          if [ "${MISSING}" != "0" ]; then
+            echo "=== 剪除 diff（前 40 行）==="
+            diff configure.ac.bak configure.ac | sed -n '1,40p' || true
+            sed -i 's|^enable_winedirectaudio_drv=${enable_winedirectaudio_drv:-yes}|enable_winedirectaudio_drv=${enable_winedirectaudio_drv:-no}|' configure.ac || true
+          fi
+          rm -f configure.ac.bak
+
+          echo "=== 子模块目录抽查 ==="
+          for d in dlls/winedirectaudio.drv; do
+            if [ -d "${d}" ]; then
+              echo "  ${d}: $(ls -A "${d}" | tr '\n' ' ')"
+            else
+              echo "  ${d}: 目录不存在"
+            fi
+          done
+
+      # ============================================================
       # 7. Wine source preparation
       # ============================================================
       - name: Wine source preparation
