@@ -397,6 +397,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=../${TOOLCHAIN_REL} \
             -DENABLE_LTO=False \
             -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
+            # 老版本(FEX-2505等)用 BUILD_TESTS、新版本(2509+)用 BUILD_TESTING，两个都传最稳
+            -DBUILD_TESTS=OFF \
             -DBUILD_TESTING=OFF \
             ..
 
@@ -431,6 +433,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=../${TOOLCHAIN_REL} \
             -DENABLE_LTO=False \
             -DMINGW_TRIPLE=aarch64-w64-mingw32 \
+            # 老版本(FEX-2505等)用 BUILD_TESTS、新版本(2509+)用 BUILD_TESTING，两个都传最稳
+            -DBUILD_TESTS=OFF \
             -DBUILD_TESTING=OFF \
             ..
 
