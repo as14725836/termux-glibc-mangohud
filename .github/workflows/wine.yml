@@ -724,24 +724,24 @@ jobs:
             echo "无 .gitmodules，跳过子模块初始化"
           fi
 
-          echo "=== 检查 configure.ac 里指向缺失目录的 WINE_CONFIG_MAKEFILE ==="
-          cp -f configure.ac configure.ac.bak
-          MISSING=0
-          for d in $(grep -oE 'WINE_CONFIG_MAKEFILE\([^)]+\)' configure.ac \
-                       | sed -E 's/WINE_CONFIG_MAKEFILE\((.*)\)/\1/'); do
-            if [ ! -f "${d}/Makefile.in" ]; then
-              echo "  MISS ${d} -> 注释掉该 WINE_CONFIG_MAKEFILE"
-              sed -i "s|^\([[:space:]]*WINE_CONFIG_MAKEFILE(${d})\)|# [CI] 组件缺失，已跳过: \1|" configure.ac
-              MISSING=$((MISSING + 1))
+          # 精准兜底：只针对已知"可能因缺组件而失败"的目录，
+          # 按【行号】注释对应行（不把路径拼进 sed 模式，避免 , ( [ 等字符把 s 命令搞坏）
+          for d in dlls/winedirectaudio.drv; do
+            if [ -f "${d}/Makefile.in" ]; then
+              echo "OK: ${d}/Makefile.in 存在（子模块已就位）"
+              continue
             fi
-          done
-          echo "被剪除的条目数: ${MISSING}"
-          if [ "${MISSING}" != "0" ]; then
-            echo "=== 剪除 diff（前 40 行）==="
-            diff configure.ac.bak configure.ac | sed -n '1,40p' || true
+            echo "MISS: ${d}/Makefile.in 缺失 -> 注释掉对应 WINE_CONFIG_MAKEFILE"
+            n="$(grep -n "WINE_CONFIG_MAKEFILE(${d})" configure.ac | sed -n '1p' | cut -d: -f1 || true)"
+            if [ -n "${n}" ]; then
+              sed -i "${n}s|^|# [CI] 组件缺失，已跳过: |" configure.ac
+              echo "  已注释 configure.ac 第 ${n} 行"
+            else
+              echo "  未找到 WINE_CONFIG_MAKEFILE(${d})"
+            fi
             sed -i 's|^enable_winedirectaudio_drv=${enable_winedirectaudio_drv:-yes}|enable_winedirectaudio_drv=${enable_winedirectaudio_drv:-no}|' configure.ac || true
-          fi
-          rm -f configure.ac.bak
+          done
+
 
           echo "=== 子模块目录抽查 ==="
           for d in dlls/winedirectaudio.drv; do
