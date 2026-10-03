@@ -231,11 +231,53 @@ jobs:
           git submodule status | head -25 || true
 
           FEX_COMMIT="$(git rev-parse --short HEAD)"
-          FEX_DESC="$(git describe --tags --always 2>/dev/null || echo "${FEX_COMMIT}")"
+          FEX_COMMIT_FULL="$(git rev-parse HEAD)"
+
+          # ------------------------------------------------------------
+          # 版本号（放进包名 / Release tag / artifact 名）
+          #
+          # 浅克隆只取了指定 ref，tag 对象默认拿不到（git describe 会失败），
+          # 以前就只能退回 commit，导致包名里看不到版本号。
+          # 现在按优先级推导：
+          #   1) fex_ref 本身是 tag，且该 tag 指向的 commit == 本次构建的 commit
+          #   2) git describe --tags --exact-match（能把 tag 取下来时）
+          #   3) 兜底：<日期>-g<commit>，保证仍然可追溯
+          # 想要"版本号出现在包名里"，最稳的做法就是把 fex_ref 填成 tag，
+          # 例如 fex_ref=FEX-2507。
+          # ------------------------------------------------------------
+          git fetch --depth=1 origin "refs/tags/*:refs/tags/*" >/dev/null 2>&1 || true
+
+          FEX_TAG=""
+
+          TAG_SHA="$(git ls-remote --tags --refs origin "refs/tags/${FEX_REF}" 2>/dev/null \
+            | awk '{print $1}' | head -1 || true)"
+
+          if [ -n "${TAG_SHA}" ] && [ "${TAG_SHA}" = "${FEX_COMMIT_FULL}" ]; then
+            FEX_TAG="${FEX_REF}"
+            echo "版本: 使用 tag ${FEX_TAG}（与构建 commit 一致）"
+          fi
+
+          if [ -z "${FEX_TAG}" ]; then
+            D="$(git describe --tags --exact-match 2>/dev/null || true)"
+            [ -n "${D}" ] && FEX_TAG="${D}" && echo "版本: git describe 得到 ${FEX_TAG}"
+          fi
+
+          if [ -n "${FEX_TAG}" ]; then
+            FEX_DESC="${FEX_TAG}"
+            FEX_VERSION_SOURCE="tag"
+          else
+            FEX_DESC="$(date -u +%Y%m%d)-g${FEX_COMMIT}"
+            FEX_VERSION_SOURCE="date+commit（没找到对应 tag：ref=${FEX_REF} 不是 tag，或 tag 未指向该 commit）"
+          fi
+
+          echo "版本来源: ${FEX_VERSION_SOURCE}"
+          echo "版本串  : ${FEX_DESC}"
 
           # tag 里不能有空格/斜杠
           FEX_DESC_SAFE="$(printf '%s' "${FEX_DESC}" | tr ' ' '-' | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
           [ -n "${FEX_DESC_SAFE}" ] || FEX_DESC_SAFE="unknown"
+
+          echo "FEX_VERSION_SOURCE=${FEX_VERSION_SOURCE}" >> "$GITHUB_ENV"
 
           echo "FEX_COMMIT=${FEX_COMMIT}" >> "$GITHUB_ENV"
           echo "FEX_DESC=${FEX_DESC}" >> "$GITHUB_ENV"
@@ -407,6 +449,7 @@ jobs:
           fex_ref     : ${{ inputs.fex_ref || 'arm64ec' }}
           fex_commit  : ${FEX_COMMIT}
           fex_describe: ${FEX_DESC}
+          version_src : ${FEX_VERSION_SOURCE}
           llvm-mingw  : ${LLVMMINGW_NAME}
           build date  : $(date -u +%Y-%m-%dT%H:%M:%SZ)
           runner      : $(uname -m)
