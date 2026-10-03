@@ -249,7 +249,7 @@ jobs:
       # 4. 构建 libarm64ecfex.dll（x86_64 模拟）
       # ============================================================
       - name: 构建 libarm64ecfex.dll (x86_64 模拟)
-        if: ${{ inputs.build_arm64ecfex != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_arm64ecfex }}
         shell: bash
         run: |
           set -eux
@@ -283,7 +283,7 @@ jobs:
       # 5. 构建 libwow64fex.dll（i386 模拟）
       # ============================================================
       - name: 构建 libwow64fex.dll (i386 模拟)
-        if: ${{ inputs.build_wow64fex != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_wow64fex }}
         shell: bash
         run: |
           set -eux
@@ -490,7 +490,7 @@ jobs:
       # 9. 发布 Release
       # ============================================================
       - name: Publish FEX Release
-        if: ${{ inputs.publish_release != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_release }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: fex-${{ env.FEX_DESC_SAFE }}-arm64ec-wow64
