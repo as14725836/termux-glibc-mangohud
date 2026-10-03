@@ -397,7 +397,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
             -DENABLE_LTO=False \
             -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
-            -DBUILD_TESTS=False \
+            -DBUILD_TESTING=OFF \
             ..
 
           make -j"${JOBS}" arm64ecfex
@@ -420,7 +420,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
             -DENABLE_LTO=False \
             -DMINGW_TRIPLE=aarch64-w64-mingw32 \
-            -DBUILD_TESTS=False \
+            -DBUILD_TESTING=OFF \
             ..
 
           make -j"${JOBS}" wow64fex
