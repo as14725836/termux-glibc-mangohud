@@ -909,6 +909,63 @@ jobs:
           grep -n 'wg_task_pool_new\|gst_task_pool_new\|GType=%lu' "${FILE_PARSER}" | head -20
 
       # ============================================================
+      # ============================================================
+      # 8.0 【关键修复】去掉 winegstreamer 的 GstGL 依赖（对齐 AndreRH/wine）
+      #
+      # 对比 AndreRH/wine@3ea3a14941b6a122b892c84141ce9662c008081e 与
+      #      proton-9.0-arm64ec 的 dlls/winegstreamer：
+      #   AndreRH : 无 gst/gl 依赖、无自定义 GstTaskPool      -> 依赖面最小
+      #   Proton  : GstGL 互操作(gl_display/glupload) + WgTaskPool 子类
+      # 后果：Proton 版 winegstreamer.so 的 NEEDED 多一个 libgstgl-1.0.so.0，
+      #       而 libgstgl 自身还链 libEGL / libGL / libwayland / libX11，
+      #       在 Termux(Android) 上极易断链 -> dlopen 失败
+      #       -> PE 侧 init_gstreamer() 静默吞错(main.c 永远 return TRUE)
+      #       -> quartz/MF 全部报 hr 0x8007000e，且 GST_DEBUG 一行都不输出。
+      #
+      # 做法（只去 GL 互操作，不动解码逻辑）：
+      #   configure.ac : GSTREAMER pkg 列表去掉 gstreamer-gl-1.0
+      #   unixlib.c    : 不再 #include <gst/gl/gl.h>，gl_display 恒为 NULL
+      #   wg_parser.c  : 同上；use_opengl 自然恒为 FALSE（不再需要 glupload）
+      # 预期：winegstreamer.so 的 NEEDED 不再含 libgstgl，解码只需 core/base 库。
+      # ============================================================
+      - name: 去掉 winegstreamer 的 GstGL 依赖 (对齐 AndreRH)
+        shell: bash
+        run: |
+          set -eux
+
+          cd "${WINE_SOURCE_DIR}/source"
+
+          apt-get install -y --no-install-recommends perl >/dev/null 2>&1 || true
+
+          echo "=== 修改前 ==="
+          grep -n 'GSTREAMER,\[' configure.ac || true
+          grep -n 'gst/gl/gl.h' dlls/winegstreamer/*.c || true
+
+          # ---- (1) configure.ac：pkg 列表去掉 gstreamer-gl-1.0 ----
+          sed -i 's/gstreamer-tag-1\.0 gstreamer-gl-1\.0/gstreamer-tag-1.0/' configure.ac
+
+          # ---- (2) 用宏垫片把 gst-gl 引用全部中和（比多行正则手术稳，两版源码都适用）----
+          SHIM='typedef struct _GstGLDisplay GstGLDisplay;\n#define gst_gl_display_new() (NULL)\n#define GST_GL_DISPLAY_CONTEXT_TYPE "gst.gl.GLDisplay"\n#define gst_context_set_gl_display(c, d) ((void)0)'
+          for f in dlls/winegstreamer/unixlib.c dlls/winegstreamer/wg_parser.c; do
+            if grep -q '#include <gst/gl/gl.h>' "${f}"; then
+              sed -i "s|#include <gst/gl/gl.h>|${SHIM}|" "${f}"
+              echo "OK: ${f} gst-gl 垫片已注入"
+            fi
+          done
+
+          # gst 不再尝试用 x11 的 GL 窗口
+          sed -i '/setenv("GST_GL_WINDOW", "x11",1);/d' dlls/winegstreamer/unixlib.c || true
+
+          echo "=== 修改后自检 ==="
+          grep -n 'GSTREAMER,\[' configure.ac || true
+          if grep -rn '#include <gst/gl/gl.h>' dlls/winegstreamer/; then
+            echo "FAIL: 仍有 gst-gl 头文件引用"
+            exit 1
+          fi
+          echo "OK: 已无 gst/gl/gl.h 引用"
+          grep -n 'GstGLDisplay\|gst_gl_display_new\|GST_GL_DISPLAY_CONTEXT_TYPE\|gst_context_set_gl_display' dlls/winegstreamer/*.c || true
+          grep -c 'gstreamer-gl-1.0' configure.ac || echo "OK: configure.ac 已无 gstreamer-gl-1.0"
+
       # 8.1 【关键修复】esync 头文件缺失
       #
       # 上游 WinNative-Emu/proton-wine@proton_11.0 的 tree 不一致：
@@ -1798,9 +1855,12 @@ jobs:
           readelf -dW "${TARGET}/lib/wine/aarch64-unix/winegstreamer.so" \
             | grep -q 'libgstreamer-1.0.so.0'
           echo "OK: winegstreamer.so -> libgstreamer-1.0"
-          readelf -dW "${TARGET}/lib/wine/aarch64-unix/winegstreamer.so" \
-            | grep -q 'libgstgl-1.0.so.0'
-          echo "OK: winegstreamer.so -> libgstgl-1.0"
+          echo "=== 断言：winegstreamer.so 不应再依赖 libgstgl（对齐 AndreRH 的依赖面）==="
+          if readelf -dW "${TARGET}/lib/wine/aarch64-unix/winegstreamer.so" | grep -q 'libgstgl'; then
+            echo "WARN: winegstreamer.so 仍然依赖 libgstgl（设备缺它时 dlopen 会失败）"
+          else
+            echo "OK: winegstreamer.so 已无 libgstgl 依赖"
+          fi
 
           echo "=== 断言：winepulse.drv 存在时 winealsa.drv 必须也存在 ==="
           if [ -f "${TARGET}/lib/wine/aarch64-windows/winepulse.drv" ]; then
