@@ -248,7 +248,9 @@ jobs:
           git fetch --tags origin >/dev/null 2>&1 || true
 
           # ---- 防呆 ②：确认 checkout 真的落在 FEX 源码上（而不是别的 commit/空树）----
-          for MUST in Data/CMake/toolchain_mingw.cmake CMakeLists.txt Source; do
+          # 注意：不要在这里要求 toolchain_mingw.cmake —— 它在新旧版本里位置不同
+          # （新版 Data/CMake/，FEX-2505 在 CMakeToolchains/），交给下面的自动定位处理
+          for MUST in CMakeLists.txt Source; do
             if [ ! -e "${MUST}" ]; then
               echo "FATAL: checkout 结果里缺少 ${MUST} —— 说明落到的不是预期的 FEX 源码"
               echo "       当前 HEAD = $(git rev-parse HEAD)  ($(git log -1 --format=%s 2>/dev/null | cut -c1-60))"
