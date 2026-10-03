@@ -212,10 +212,15 @@ jobs:
           git config advice.detachedHead false
 
           # 支持 分支 / tag / commit：先浅取，失败再完整取
-          if ! git fetch --depth=1 origin "${FEX_REF}"; then
-            echo "浅取 ${FEX_REF} 失败，回退为完整 fetch"
+          # 浅取 250 层历史（够 git describe 找到最近的 tag），失败再退回 depth=1
+          if ! git fetch --depth=250 origin "${FEX_REF}"; then
+            echo "depth=250 取 ${FEX_REF} 失败，退回 depth=1"
 
-            git fetch origin
+            if ! git fetch --depth=1 origin "${FEX_REF}"; then
+              echo "浅取 ${FEX_REF} 失败，回退为完整 fetch"
+
+              git fetch origin
+            fi
           fi
 
           git checkout -q FETCH_HEAD
@@ -258,7 +263,8 @@ jobs:
           fi
 
           if [ -z "${FEX_TAG}" ]; then
-            D="$(git describe --tags --exact-match 2>/dev/null || true)"
+            # 先看能否精确命中 tag，再退回 <tag>-<距离>-g<sha>（形如 FEX-2507-42-gfa55616）
+            D="$(git describe --tags --exact-match 2>/dev/null || git describe --tags 2>/dev/null || true)"
             [ -n "${D}" ] && FEX_TAG="${D}" && echo "版本: git describe 得到 ${FEX_TAG}"
           fi
 
