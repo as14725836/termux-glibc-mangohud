@@ -64,6 +64,12 @@ on:
         default: true
         type: boolean
 
+      version_label:
+        description: '可选：手动指定版本号（留空则自动探测，例如填 FEX-2605）'
+        required: false
+        default: ''
+        type: string
+
       jobs:
         description: '并行编译线程'
         required: false
@@ -124,7 +130,8 @@ jobs:
             cmake \
             ninja-build \
             build-essential \
-            pkg-config
+            pkg-config \
+            nasm
 
           cmake --version
           ninja --version || true
@@ -211,13 +218,46 @@ jobs:
           git config advice.detachedHead false
 
           # 支持 分支 / tag / commit：先浅取，失败再完整取
-          if ! git fetch --depth=1 origin "${FEX_REF}"; then
-            echo "浅取 ${FEX_REF} 失败，回退为完整 fetch"
+          # 取完整历史 + 全部 tags：
+          # 只有历史完整，git describe 才能跨到上游的 FEX-* 版本标签
+          # （否则只会命中压在 HEAD 上的 hangover-* 标签）
+          # ---- 防呆 ①：先确认 fex_ref 在远端存在，避免 fetch 失败后静默落到默认分支 tip ----
+          if ! git ls-remote --exit-code origin "${FEX_REF}" "refs/tags/${FEX_REF}" >/dev/null 2>&1; then
+            echo "FATAL: 远端 ${FEX_REPO} 里找不到 ref/tag: ${FEX_REF}"
+            echo "       可选示例：分支 arm64ec / tag FEX-2605 / 具体 commit sha"
+            echo "       （可用如下命令自查：git ls-remote --tags https://github.com/${FEX_REPO}.git | tail -20）"
+            exit 1
+          fi
 
-            git fetch origin
+          # 注意：不要把 --tags 和 ref 放在同一条 fetch 里，
+          # 否则 FETCH_HEAD 会被 tag 覆盖，git checkout FETCH_HEAD 会切到别的 commit
+          # （曾因此切到 FEX-2301 附近的老提交，导致 cmake 找不到 toolchain 文件）
+          if ! git fetch origin "${FEX_REF}"; then
+            echo "完整 fetch ${FEX_REF} 失败，退回 depth=250"
+
+            if ! git fetch --depth=250 origin "${FEX_REF}"; then
+              echo "退回 depth=1"
+
+              git fetch --depth=1 origin "${FEX_REF}"
+            fi
           fi
 
           git checkout -q FETCH_HEAD
+
+          # tags 单独补（对工作区无影响，仅供 git describe 用）
+          git fetch --tags origin >/dev/null 2>&1 || true
+
+          # ---- 防呆 ②：确认 checkout 真的落在 FEX 源码上（而不是别的 commit/空树）----
+          # 注意：不要在这里要求 toolchain_mingw.cmake —— 它在新旧版本里位置不同
+          # （新版 Data/CMake/，FEX-2505 在 CMakeToolchains/），交给下面的自动定位处理
+          for MUST in CMakeLists.txt Source; do
+            if [ ! -e "${MUST}" ]; then
+              echo "FATAL: checkout 结果里缺少 ${MUST} —— 说明落到的不是预期的 FEX 源码"
+              echo "       当前 HEAD = $(git rev-parse HEAD)  ($(git log -1 --format=%s 2>/dev/null | cut -c1-60))"
+              exit 1
+            fi
+          done
+          echo "HEAD = $(git rev-parse --short HEAD)  ($(git log -1 --format=%s | cut -c1-60))"
 
           echo "=== FEX 源码信息 ==="
 
@@ -230,11 +270,99 @@ jobs:
           git submodule status | head -25 || true
 
           FEX_COMMIT="$(git rev-parse --short HEAD)"
-          FEX_DESC="$(git describe --tags --always 2>/dev/null || echo "${FEX_COMMIT}")"
+          FEX_COMMIT_FULL="$(git rev-parse HEAD)"
 
-          # tag 里不能有空格/斜杠
+          # ---- 自动定位 mingw 工具链文件（不同 FEX 版本目录结构不一样）----
+          # 例：FEX-2605 有 Data/CMake/toolchain_mingw.cmake，而 FEX-2505 没有
+          TOOLCHAIN_FILE="$(find /opt/fex-src -path '*/Data/CMake/toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
+          if [ -z "${TOOLCHAIN_FILE}" ]; then
+            TOOLCHAIN_FILE="$(find /opt/fex-src -name 'toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
+          fi
+
+          if [ -z "${TOOLCHAIN_FILE}" ]; then
+            echo "FATAL: 这个版本（${FEX_REF}）里找不到 toolchain_mingw.cmake"
+            echo "该版本里和 toolchain/mingw 相关的文件："
+            find /opt/fex-src \( -iname '*toolchain*' -o -iname '*mingw*.cmake' \) 2>/dev/null | head -20 || true
+            echo "提示：老版本可能尚未支持 ARM64EC PE 交叉构建；建议改用 FEX-2605 / arm64ec 分支"
+            exit 1
+          fi
+
+          TOOLCHAIN_REL="${TOOLCHAIN_FILE#/opt/fex-src/}"
+          echo "TOOLCHAIN_REL=${TOOLCHAIN_REL}"
+          echo "TOOLCHAIN_REL=${TOOLCHAIN_REL}" >> "$GITHUB_ENV"
+
+          # ------------------------------------------------------------
+          # 版本号（进入包名 / Release tag / artifact 名）
+          # 优先级：
+          #   1) 手动输入 version_label（最高优先，想叫什么叫什么）
+          #   2) git describe --match 'FEX-*'  → 上游 FEX 版本，形如 FEX-2605-654-gfa55616
+          #   3) fex_ref 本身是 tag 且指向本次 commit
+          #   4) git describe --match 'hangover-*'（Hangover 版本）
+          #   5) 任意 tag 的 git describe
+          #   6) 兜底 <日期>-g<commit>
+          # 说明：describe 只有在历史完整时才可能命中 FEX-*（上游版本可能已经
+          #       离 HEAD 有几百个 commit），所以上面用的是完整 fetch。
+          # ------------------------------------------------------------
+          FEX_TAG=""
+          FEX_VERSION_SOURCE=""
+
+          if [ -n "${{ inputs.version_label || '' }}" ]; then
+            FEX_TAG="${{ inputs.version_label }}"
+            FEX_VERSION_SOURCE="手动输入 version_label"
+          fi
+
+          if [ -z "${FEX_TAG}" ]; then
+            D="$(git describe --tags --match 'FEX-*' --abbrev=7 2>/dev/null || true)"
+            if [ -n "${D}" ]; then
+              FEX_TAG="${D}"
+              FEX_VERSION_SOURCE="git describe --match FEX-*（上游 FEX 版本）"
+            fi
+          fi
+
+          if [ -z "${FEX_TAG}" ]; then
+            TAG_SHA="$(git ls-remote --tags --refs origin "refs/tags/${FEX_REF}" 2>/dev/null \
+              | awk '{print $1}' | head -1 || true)"
+
+            if [ -n "${TAG_SHA}" ] && [ "${TAG_SHA}" = "${FEX_COMMIT_FULL}" ]; then
+              FEX_TAG="${FEX_REF}"
+              FEX_VERSION_SOURCE="fex_ref 本身是 tag 且与 commit 一致"
+            fi
+          fi
+
+          if [ -z "${FEX_TAG}" ]; then
+            D="$(git describe --tags --match 'hangover-*' --abbrev=7 2>/dev/null || true)"
+            if [ -n "${D}" ]; then
+              FEX_TAG="${D}"
+              FEX_VERSION_SOURCE="git describe --match hangover-*（Hangover 版本）"
+            fi
+          fi
+
+          if [ -z "${FEX_TAG}" ]; then
+            D="$(git describe --tags --always --abbrev=7 2>/dev/null || true)"
+            if [ -n "${D}" ]; then
+              FEX_TAG="${D}"
+              FEX_VERSION_SOURCE="git describe --tags（任意 tag）"
+            fi
+          fi
+
+          if [ -n "${FEX_TAG}" ]; then
+            FEX_DESC="${FEX_TAG}"
+          else
+            FEX_DESC="$(date -u +%Y%m%d)-g${FEX_COMMIT}"
+            FEX_VERSION_SOURCE="兜底：日期+commit（未找到可用 tag）"
+          fi
+
+          # 所有 tag 一览（便于排查）
+          echo "=== 可用 tag（FEX-* 最后 5 个）==="
+          git tag | grep -E '^FEX-' | sort -V | tail -5 || true
+
+          echo "版本来源: ${FEX_VERSION_SOURCE}"
+          echo "版本串  : ${FEX_DESC}"
+
           FEX_DESC_SAFE="$(printf '%s' "${FEX_DESC}" | tr ' ' '-' | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
           [ -n "${FEX_DESC_SAFE}" ] || FEX_DESC_SAFE="unknown"
+
+          echo "FEX_VERSION_SOURCE=${FEX_VERSION_SOURCE}" >> "$GITHUB_ENV"
 
           echo "FEX_COMMIT=${FEX_COMMIT}" >> "$GITHUB_ENV"
           echo "FEX_DESC=${FEX_DESC}" >> "$GITHUB_ENV"
@@ -249,7 +377,7 @@ jobs:
       # 4. 构建 libarm64ecfex.dll（x86_64 模拟）
       # ============================================================
       - name: 构建 libarm64ecfex.dll (x86_64 模拟)
-        if: ${{ inputs.build_arm64ecfex != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_arm64ecfex }}
         shell: bash
         run: |
           set -eux
@@ -266,10 +394,11 @@ jobs:
 
           cmake \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+            -DCMAKE_TOOLCHAIN_FILE=../${TOOLCHAIN_REL} \
             -DENABLE_LTO=False \
             -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
-            -DBUILD_TESTS=False \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_TESTING=OFF \
             ..
 
           make -j"${JOBS}" arm64ecfex
@@ -283,7 +412,7 @@ jobs:
       # 5. 构建 libwow64fex.dll（i386 模拟）
       # ============================================================
       - name: 构建 libwow64fex.dll (i386 模拟)
-        if: ${{ inputs.build_wow64fex != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_wow64fex }}
         shell: bash
         run: |
           set -eux
@@ -300,10 +429,11 @@ jobs:
 
           cmake \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+            -DCMAKE_TOOLCHAIN_FILE=../${TOOLCHAIN_REL} \
             -DENABLE_LTO=False \
             -DMINGW_TRIPLE=aarch64-w64-mingw32 \
-            -DBUILD_TESTS=False \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_TESTING=OFF \
             ..
 
           make -j"${JOBS}" wow64fex
@@ -406,6 +536,7 @@ jobs:
           fex_ref     : ${{ inputs.fex_ref || 'arm64ec' }}
           fex_commit  : ${FEX_COMMIT}
           fex_describe: ${FEX_DESC}
+          version_src : ${FEX_VERSION_SOURCE}
           llvm-mingw  : ${LLVMMINGW_NAME}
           build date  : $(date -u +%Y-%m-%dT%H:%M:%SZ)
           runner      : $(uname -m)
@@ -419,7 +550,12 @@ jobs:
 
           cd "${PKG}"
 
-          PKG_NAME="fex-${FEX_DESC_SAFE}-arm64ec-wow64"
+          case "${FEX_DESC_SAFE}" in
+            FEX-*|fex-*) PKG_PREFIX="" ;;
+            *)           PKG_PREFIX="fex-" ;;
+          esac
+
+          PKG_NAME="${PKG_PREFIX}${FEX_DESC_SAFE}-arm64ec-wow64"
 
           tar cJf "${PKG_NAME}.tar.xz" fex
 
@@ -480,7 +616,7 @@ jobs:
       - name: Upload FEX artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FEX-${{ env.FEX_DESC_SAFE }}-termux-glibc
+          name: ${{ env.PKG_NAME }}
           path: |
             /tmp/fex-pkg/*.tar.xz
             /tmp/fex-pkg/checksums.txt
@@ -490,10 +626,10 @@ jobs:
       # 9. 发布 Release
       # ============================================================
       - name: Publish FEX Release
-        if: ${{ inputs.publish_release != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_release }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: fex-${{ env.FEX_DESC_SAFE }}-arm64ec-wow64
+          tag_name: ${{ env.PKG_NAME }}
           name: FEX ${{ env.FEX_DESC }} (Termux glibc, arm64ec + wow64)
           draft: false
           prerelease: false
