@@ -798,7 +798,7 @@ jobs:
 
           # 注意：该树在 #elif defined(__aarch64__) 与函数之间还有一个空行，
           # 所以锚点要用 [\r\n ]* 容忍空白（run275 就是死在这里）
-          perl -0pi -e 's/(#elif defined\(__aarch64__\)[\r\n ]*static UINT64 read_tsc_frequency)/static void initialize_xstate_features( struct _KUSER_SHARED_DATA *data )\n{\n    (void)data;\n}\n\n$1/' "${F}"
+          perl -0pi -e 's/(#elif defined\(__aarch64__\)(?:\r?\n){1,3}static UINT64 read_tsc_frequency)/static void initialize_xstate_features( struct _KUSER_SHARED_DATA *data )\n{\n    (void)data;\n}\n\n$1/' "${F}"
 
           after_md5="$(md5sum "${F}" | cut -d' ' -f1)"
           if [ "${before_md5}" = "${after_md5}" ]; then
@@ -809,10 +809,14 @@ jobs:
           echo "=== 修改后：aarch64 分支附近 ==="
           awk '/#elif defined\(__aarch64__\)/{f=1} f{print; n++} n>10{exit}' "${F}" || true
 
-          if awk '/#elif defined\(__aarch64__\)/{f=1} f && /initialize_xstate_features/{print "yes"; exit}' "${F}" | grep -q yes; then
-            echo "OK: aarch64 分支已补上 initialize_xstate_features 空实现"
+          # 该补丁是插在 `#elif defined(__aarch64__)` 行【之前】的，
+          # 所以校验要按这个方向来（run276 之前的 awk 校验方向写反了）
+          if perl -0777 -ne 'exit(/static void initialize_xstate_features\( struct _KUSER_SHARED_DATA \*data \)\s*\{\s*\(void\)data;\s*\}\s*#elif defined\(__aarch64__\)/ ? 0 : 1)' "${F}"; then
+            echo "OK: 已在 #elif defined(__aarch64__) 前插入 initialize_xstate_features 空实现"
           else
-            echo "FAIL: 补丁未生效（锚点不匹配）"
+            echo "FAIL: 未在 #elif defined(__aarch64__) 前发现空实现"
+            echo "--- #elif aarch64 及其前 8 行 ---"
+            grep -n -B8 '#elif defined(__aarch64__)' "${F}" | sed -n '1,24p' || true
             exit 1
           fi
 
