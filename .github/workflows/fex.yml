@@ -221,7 +221,10 @@ jobs:
           # 取完整历史 + 全部 tags：
           # 只有历史完整，git describe 才能跨到上游的 FEX-* 版本标签
           # （否则只会命中压在 HEAD 上的 hangover-* 标签）
-          if ! git fetch --tags origin "${FEX_REF}"; then
+          # 注意：不要把 --tags 和 ref 放在同一条 fetch 里，
+          # 否则 FETCH_HEAD 会被 tag 覆盖，git checkout FETCH_HEAD 会切到别的 commit
+          # （曾因此切到 FEX-2301 附近的老提交，导致 cmake 找不到 toolchain 文件）
+          if ! git fetch origin "${FEX_REF}"; then
             echo "完整 fetch ${FEX_REF} 失败，退回 depth=250"
 
             if ! git fetch --depth=250 origin "${FEX_REF}"; then
@@ -231,9 +234,11 @@ jobs:
             fi
           fi
 
-          git fetch --tags origin >/dev/null 2>&1 || true
-
           git checkout -q FETCH_HEAD
+
+          # tags 单独补（对工作区无影响，仅供 git describe 用）
+          git fetch --tags origin >/dev/null 2>&1 || true
+          echo "HEAD = $(git rev-parse --short HEAD)  ($(git log -1 --format=%s | cut -c1-60))"
 
           echo "=== FEX 源码信息 ==="
 
