@@ -55,6 +55,12 @@ on:
         default: false
         type: boolean
 
+      wine_archs:
+        description: 'PE 架构组合：默认 arm64ec,aarch64,i386（ARM64X 混合，跑 x86_64 靠 FEX）；排查问题时可用 aarch64,i386 出纯 ARM64 版做对比'
+        required: false
+        default: 'arm64ec,aarch64,i386'
+        type: string
+
       jobs:
         description: '并行编译线程'
         required: false
@@ -1052,7 +1058,7 @@ jobs:
             --enable-win64
             --host=aarch64-linux-gnu
             --with-mingw=clang
-            --enable-archs=arm64ec,aarch64,i386
+            --enable-archs=${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}
             --with-wine-tools="${WINE_NATIVE_DIR}"
             --prefix=/tmp/wine-install-wow64
             --disable-win16
