@@ -64,6 +64,12 @@ on:
         default: true
         type: boolean
 
+      version_label:
+        description: '可选：手动指定版本号（留空则自动探测，例如填 FEX-2605）'
+        required: false
+        default: ''
+        type: string
+
       jobs:
         description: '并行编译线程'
         required: false
@@ -212,16 +218,20 @@ jobs:
           git config advice.detachedHead false
 
           # 支持 分支 / tag / commit：先浅取，失败再完整取
-          # 浅取 250 层历史（够 git describe 找到最近的 tag），失败再退回 depth=1
-          if ! git fetch --depth=250 origin "${FEX_REF}"; then
-            echo "depth=250 取 ${FEX_REF} 失败，退回 depth=1"
+          # 取完整历史 + 全部 tags：
+          # 只有历史完整，git describe 才能跨到上游的 FEX-* 版本标签
+          # （否则只会命中压在 HEAD 上的 hangover-* 标签）
+          if ! git fetch --tags origin "${FEX_REF}"; then
+            echo "完整 fetch ${FEX_REF} 失败，退回 depth=250"
 
-            if ! git fetch --depth=1 origin "${FEX_REF}"; then
-              echo "浅取 ${FEX_REF} 失败，回退为完整 fetch"
+            if ! git fetch --depth=250 origin "${FEX_REF}"; then
+              echo "退回 depth=1"
 
-              git fetch origin
+              git fetch --depth=1 origin "${FEX_REF}"
             fi
           fi
+
+          git fetch --tags origin >/dev/null 2>&1 || true
 
           git checkout -q FETCH_HEAD
 
@@ -239,47 +249,73 @@ jobs:
           FEX_COMMIT_FULL="$(git rev-parse HEAD)"
 
           # ------------------------------------------------------------
-          # 版本号（放进包名 / Release tag / artifact 名）
-          #
-          # 浅克隆只取了指定 ref，tag 对象默认拿不到（git describe 会失败），
-          # 以前就只能退回 commit，导致包名里看不到版本号。
-          # 现在按优先级推导：
-          #   1) fex_ref 本身是 tag，且该 tag 指向的 commit == 本次构建的 commit
-          #   2) git describe --tags --exact-match（能把 tag 取下来时）
-          #   3) 兜底：<日期>-g<commit>，保证仍然可追溯
-          # 想要"版本号出现在包名里"，最稳的做法就是把 fex_ref 填成 tag，
-          # 例如 fex_ref=FEX-2507。
+          # 版本号（进入包名 / Release tag / artifact 名）
+          # 优先级：
+          #   1) 手动输入 version_label（最高优先，想叫什么叫什么）
+          #   2) git describe --match 'FEX-*'  → 上游 FEX 版本，形如 FEX-2605-654-gfa55616
+          #   3) fex_ref 本身是 tag 且指向本次 commit
+          #   4) git describe --match 'hangover-*'（Hangover 版本）
+          #   5) 任意 tag 的 git describe
+          #   6) 兜底 <日期>-g<commit>
+          # 说明：describe 只有在历史完整时才可能命中 FEX-*（上游版本可能已经
+          #       离 HEAD 有几百个 commit），所以上面用的是完整 fetch。
           # ------------------------------------------------------------
-          git fetch --depth=1 origin "refs/tags/*:refs/tags/*" >/dev/null 2>&1 || true
-
           FEX_TAG=""
+          FEX_VERSION_SOURCE=""
 
-          TAG_SHA="$(git ls-remote --tags --refs origin "refs/tags/${FEX_REF}" 2>/dev/null \
-            | awk '{print $1}' | head -1 || true)"
-
-          if [ -n "${TAG_SHA}" ] && [ "${TAG_SHA}" = "${FEX_COMMIT_FULL}" ]; then
-            FEX_TAG="${FEX_REF}"
-            echo "版本: 使用 tag ${FEX_TAG}（与构建 commit 一致）"
+          if [ -n "${{ inputs.version_label || '' }}" ]; then
+            FEX_TAG="${{ inputs.version_label }}"
+            FEX_VERSION_SOURCE="手动输入 version_label"
           fi
 
           if [ -z "${FEX_TAG}" ]; then
-            # 先看能否精确命中 tag，再退回 <tag>-<距离>-g<sha>（形如 FEX-2507-42-gfa55616）
-            D="$(git describe --tags --exact-match 2>/dev/null || git describe --tags 2>/dev/null || true)"
-            [ -n "${D}" ] && FEX_TAG="${D}" && echo "版本: git describe 得到 ${FEX_TAG}"
+            D="$(git describe --tags --match 'FEX-*' --abbrev=7 2>/dev/null || true)"
+            if [ -n "${D}" ]; then
+              FEX_TAG="${D}"
+              FEX_VERSION_SOURCE="git describe --match FEX-*（上游 FEX 版本）"
+            fi
+          fi
+
+          if [ -z "${FEX_TAG}" ]; then
+            TAG_SHA="$(git ls-remote --tags --refs origin "refs/tags/${FEX_REF}" 2>/dev/null \
+              | awk '{print $1}' | head -1 || true)"
+
+            if [ -n "${TAG_SHA}" ] && [ "${TAG_SHA}" = "${FEX_COMMIT_FULL}" ]; then
+              FEX_TAG="${FEX_REF}"
+              FEX_VERSION_SOURCE="fex_ref 本身是 tag 且与 commit 一致"
+            fi
+          fi
+
+          if [ -z "${FEX_TAG}" ]; then
+            D="$(git describe --tags --match 'hangover-*' --abbrev=7 2>/dev/null || true)"
+            if [ -n "${D}" ]; then
+              FEX_TAG="${D}"
+              FEX_VERSION_SOURCE="git describe --match hangover-*（Hangover 版本）"
+            fi
+          fi
+
+          if [ -z "${FEX_TAG}" ]; then
+            D="$(git describe --tags --always --abbrev=7 2>/dev/null || true)"
+            if [ -n "${D}" ]; then
+              FEX_TAG="${D}"
+              FEX_VERSION_SOURCE="git describe --tags（任意 tag）"
+            fi
           fi
 
           if [ -n "${FEX_TAG}" ]; then
             FEX_DESC="${FEX_TAG}"
-            FEX_VERSION_SOURCE="tag"
           else
             FEX_DESC="$(date -u +%Y%m%d)-g${FEX_COMMIT}"
-            FEX_VERSION_SOURCE="date+commit（没找到对应 tag：ref=${FEX_REF} 不是 tag，或 tag 未指向该 commit）"
+            FEX_VERSION_SOURCE="兜底：日期+commit（未找到可用 tag）"
           fi
+
+          # 所有 tag 一览（便于排查）
+          echo "=== 可用 tag（FEX-* 最后 5 个）==="
+          git tag | grep -E '^FEX-' | sort -V | tail -5 || true
 
           echo "版本来源: ${FEX_VERSION_SOURCE}"
           echo "版本串  : ${FEX_DESC}"
 
-          # tag 里不能有空格/斜杠
           FEX_DESC_SAFE="$(printf '%s' "${FEX_DESC}" | tr ' ' '-' | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
           [ -n "${FEX_DESC_SAFE}" ] || FEX_DESC_SAFE="unknown"
 
@@ -469,7 +505,12 @@ jobs:
 
           cd "${PKG}"
 
-          PKG_NAME="fex-${FEX_DESC_SAFE}-arm64ec-wow64"
+          case "${FEX_DESC_SAFE}" in
+            FEX-*|fex-*) PKG_PREFIX="" ;;
+            *)           PKG_PREFIX="fex-" ;;
+          esac
+
+          PKG_NAME="${PKG_PREFIX}${FEX_DESC_SAFE}-arm64ec-wow64"
 
           tar cJf "${PKG_NAME}.tar.xz" fex
 
@@ -530,7 +571,7 @@ jobs:
       - name: Upload FEX artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FEX-${{ env.FEX_DESC_SAFE }}-termux-glibc
+          name: ${{ env.PKG_NAME }}
           path: |
             /tmp/fex-pkg/*.tar.xz
             /tmp/fex-pkg/checksums.txt
@@ -543,7 +584,7 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_release }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: fex-${{ env.FEX_DESC_SAFE }}-arm64ec-wow64
+          tag_name: ${{ env.PKG_NAME }}
           name: FEX ${{ env.FEX_DESC }} (Termux glibc, arm64ec + wow64)
           draft: false
           prerelease: false
