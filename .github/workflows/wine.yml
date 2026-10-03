@@ -239,6 +239,8 @@ jobs:
             libpulse-dev:arm64 \
             libgstreamer1.0-dev:arm64 \
             libgstreamer-plugins-base1.0-dev:arm64 \
+            libgnutls28-dev:arm64 \
+            libgcrypt20-dev:arm64 \
             dpkg-dev \
             fakeroot \
             debhelper \
@@ -1829,6 +1831,47 @@ jobs:
             done
             echo
           done
+
+      # ============================================================
+      # 22.2 【自检】加密链路（gnutls / schannel / bcrypt）
+      #
+      # 症状（wineboot 日志实测，出现 80 次）：
+      #   err:bcrypt:key_asymmetric_create no encryption support
+      # 原因：configure 阶段没找到 libgnutls（漏装 libgnutls28-dev:arm64）
+      #   configure: WARNING: libgnutls 64-bit development files not found,
+      #              no schannel support.
+      # 影响：schannel(TLS/WinHTTP) 不可用 + bcrypt 无加密后端
+      #       -> 联网游戏/启动器、DRM、证书校验会失败
+      # ============================================================
+      - name: 验证加密链依赖 (gnutls / schannel)
+        shell: bash
+        run: |
+          set -eux
+
+          TARGET="/tmp/wine-install-wow64"
+
+          echo "=== bcrypt.so（无 gnutls 就会打 key_asymmetric_create 错误）==="
+          BCRYPT="${TARGET}/lib/wine/aarch64-unix/bcrypt.so"
+          test -f "${BCRYPT}"
+          readelf -dW "${BCRYPT}" | grep -E 'NEEDED|RUNPATH' || true
+          readelf -dW "${BCRYPT}" | grep -q 'libgnutls.so' || {
+            echo "FAIL: bcrypt.so 未链上 libgnutls —— schannel/bcrypt 不可用（需要 libgnutls28-dev:arm64）"
+            exit 1
+          }
+          echo "OK: bcrypt.so -> libgnutls（schannel/bcrypt 可用）"
+
+          echo "=== secur32.so（报告用，不做硬断言）==="
+          SEC="${TARGET}/lib/wine/aarch64-unix/secur32.so"
+          if [ -f "${SEC}" ]; then
+            readelf -dW "${SEC}" | grep -E 'NEEDED' || true
+            if readelf -dW "${SEC}" | grep -q 'libgnutls.so'; then
+              echo "OK: secur32.so -> libgnutls"
+            else
+              echo "WARN: secur32.so 未链 libgnutls"
+            fi
+          else
+            echo "（没有 secur32.so，跳过）"
+          fi
 
       # ============================================================
       # 23. Vulkan verification
