@@ -221,6 +221,14 @@ jobs:
           # 取完整历史 + 全部 tags：
           # 只有历史完整，git describe 才能跨到上游的 FEX-* 版本标签
           # （否则只会命中压在 HEAD 上的 hangover-* 标签）
+          # ---- 防呆 ①：先确认 fex_ref 在远端存在，避免 fetch 失败后静默落到默认分支 tip ----
+          if ! git ls-remote --exit-code origin "${FEX_REF}" "refs/tags/${FEX_REF}" >/dev/null 2>&1; then
+            echo "FATAL: 远端 ${FEX_REPO} 里找不到 ref/tag: ${FEX_REF}"
+            echo "       可选示例：分支 arm64ec / tag FEX-2605 / 具体 commit sha"
+            echo "       （可用如下命令自查：git ls-remote --tags https://github.com/${FEX_REPO}.git | tail -20）"
+            exit 1
+          fi
+
           # 注意：不要把 --tags 和 ref 放在同一条 fetch 里，
           # 否则 FETCH_HEAD 会被 tag 覆盖，git checkout FETCH_HEAD 会切到别的 commit
           # （曾因此切到 FEX-2301 附近的老提交，导致 cmake 找不到 toolchain 文件）
@@ -238,6 +246,15 @@ jobs:
 
           # tags 单独补（对工作区无影响，仅供 git describe 用）
           git fetch --tags origin >/dev/null 2>&1 || true
+
+          # ---- 防呆 ②：确认 checkout 真的落在 FEX 源码上（而不是别的 commit/空树）----
+          for MUST in Data/CMake/toolchain_mingw.cmake CMakeLists.txt Source; do
+            if [ ! -e "${MUST}" ]; then
+              echo "FATAL: checkout 结果里缺少 ${MUST} —— 说明落到的不是预期的 FEX 源码"
+              echo "       当前 HEAD = $(git rev-parse HEAD)  ($(git log -1 --format=%s 2>/dev/null | cut -c1-60))"
+              exit 1
+            fi
+          done
           echo "HEAD = $(git rev-parse --short HEAD)  ($(git log -1 --format=%s | cut -c1-60))"
 
           echo "=== FEX 源码信息 ==="
