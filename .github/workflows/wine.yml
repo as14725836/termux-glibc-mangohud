@@ -910,21 +910,22 @@ jobs:
 
       # ============================================================
       # ============================================================
+      # ============================================================
       # 8.0 【关键修复】去掉 winegstreamer 的 GstGL 依赖（对齐 AndreRH/wine）
       #
       # 对比 AndreRH/wine@3ea3a14941b6a122b892c84141ce9662c008081e 与
       #      proton-9.0-arm64ec 的 dlls/winegstreamer：
-      #   AndreRH : 无 gst/gl 依赖、无自定义 GstTaskPool      -> 依赖面最小
-      #   Proton  : GstGL 互操作(gl_display/glupload) + WgTaskPool 子类
+      #   AndreRH : 无 gst/gl 依赖、无自定义 GstTaskPool      -> 依赖面最小，实测能解码
+      #   Proton  : GstGL 互操作(gl_display / glupload / GL context) + WgTaskPool 子类
       # 后果：Proton 版 winegstreamer.so 的 NEEDED 多一个 libgstgl-1.0.so.0，
       #       而 libgstgl 自身还链 libEGL / libGL / libwayland / libX11，
       #       在 Termux(Android) 上极易断链 -> dlopen 失败
       #       -> PE 侧 init_gstreamer() 静默吞错(main.c 永远 return TRUE)
       #       -> quartz/MF 全部报 hr 0x8007000e，且 GST_DEBUG 一行都不输出。
       #
-      # 做法（只去 GL 互操作，不动解码逻辑）：
+      # 做法（纯宏垫片，不删任何源码，两版 wine 通吃）：
       #   configure.ac : GSTREAMER pkg 列表去掉 gstreamer-gl-1.0
-      #   unixlib.c    : 不再 #include <gst/gl/gl.h>，gl_display 恒为 NULL
+      #   unixlib.c    : <gst/gl/gl.h> 换成垫片；gl_display 恒为 NULL
       #   wg_parser.c  : 同上；use_opengl 自然恒为 FALSE（不再需要 glupload）
       # 预期：winegstreamer.so 的 NEEDED 不再含 libgstgl，解码只需 core/base 库。
       # ============================================================
@@ -935,8 +936,6 @@ jobs:
 
           cd "${WINE_SOURCE_DIR}/source"
 
-          apt-get install -y --no-install-recommends perl >/dev/null 2>&1 || true
-
           echo "=== 修改前 ==="
           grep -n 'GSTREAMER,\[' configure.ac || true
           grep -n 'gst/gl/gl.h' dlls/winegstreamer/*.c || true
@@ -944,26 +943,57 @@ jobs:
           # ---- (1) configure.ac：pkg 列表去掉 gstreamer-gl-1.0 ----
           sed -i 's/gstreamer-tag-1\.0 gstreamer-gl-1\.0/gstreamer-tag-1.0/' configure.ac
 
-          # ---- (2) 用宏垫片把 gst-gl 引用全部中和（比多行正则手术稳，两版源码都适用）----
-          SHIM='typedef struct _GstGLDisplay GstGLDisplay;\n#define gst_gl_display_new() (NULL)\n#define GST_GL_DISPLAY_CONTEXT_TYPE "gst.gl.GLDisplay"\n#define gst_context_set_gl_display(c, d) ((void)0)'
+          # ---- (2) 宏垫片：把 gst-gl 的类型/函数全部中和 ----
+          #   gst_gl_display_new()             -> NULL        （gl_display 恒为 NULL）
+          #   gst_gl_display_create_context()  -> 0 / FALSE   （旧版 pipetto 才用）
+          #   gst_gl_display_add_context()     -> no-op
+          #   GST_GL_DISPLAY_CONTEXT_TYPE      -> 字符串常量  （不再引用 libgstgl 的 GType）
+          #   从而不再产生任何对 libgstgl 的符号引用 -> NEEDED 里不会再出现 libgstgl
+          SHIM='typedef struct _GstGLDisplay GstGLDisplay;\ntypedef struct _GstGLContext GstGLContext;\n#define gst_gl_display_new() (NULL)\n#define gst_gl_display_create_context(d, c, o, e) (0)\n#define gst_gl_display_add_context(d, c) ((void)0)\n#define GST_GL_DISPLAY_CONTEXT_TYPE "gst.gl.GLDisplay"\n#define gst_context_set_gl_display(c, d) ((void)0)'
           for f in dlls/winegstreamer/unixlib.c dlls/winegstreamer/wg_parser.c; do
             if grep -q '#include <gst/gl/gl.h>' "${f}"; then
               sed -i "s|#include <gst/gl/gl.h>|${SHIM}|" "${f}"
               echo "OK: ${f} gst-gl 垫片已注入"
+            else
+              echo "WARN: ${f} 未见 gst/gl 头（可能上游已改）"
             fi
           done
 
           # gst 不再尝试用 x11 的 GL 窗口
-          sed -i '/setenv("GST_GL_WINDOW", "x11",1);/d' dlls/winegstreamer/unixlib.c || true
+          sed -i '/setenv("GST_GL_WINDOW"/d' dlls/winegstreamer/unixlib.c || true
 
           echo "=== 修改后自检 ==="
-          grep -n 'GSTREAMER,\[' configure.ac || true
           if grep -rn '#include <gst/gl/gl.h>' dlls/winegstreamer/; then
             echo "FAIL: 仍有 gst-gl 头文件引用"
             exit 1
           fi
           echo "OK: 已无 gst/gl/gl.h 引用"
-          grep -n 'GstGLDisplay\|gst_gl_display_new\|GST_GL_DISPLAY_CONTEXT_TYPE\|gst_context_set_gl_display' dlls/winegstreamer/*.c || true
+
+          echo "--- 源码里出现的所有 gst_gl_* 函数，必须全部被垫片覆盖 ---"
+          BAD=0
+          for id in $(grep -oh 'gst_gl_[a-z_]*' dlls/winegstreamer/*.c | sort -u); do
+            case "${id}" in
+              gst_gl_display_new|gst_gl_display_create_context|gst_gl_display_add_context)
+                echo "  OK   ${id} (垫片)" ;;
+              *)
+                echo "  MISS ${id} 未被垫片覆盖"
+                BAD=1 ;;
+            esac
+          done
+          [ "${BAD}" = "0" ] || { echo "FAIL: 存在未覆盖的 gst-gl 符号"; exit 1; }
+
+          echo "--- 类型名检查 ---"
+          for t in $(grep -oh 'GstGL[A-Za-z]*' dlls/winegstreamer/*.c | sort -u); do
+            case "${t}" in
+              GstGLDisplay|GstGLContext) echo "  OK   ${t} (垫片 typedef)" ;;
+              *) echo "  MISS ${t} 未定义"; BAD=1 ;;
+            esac
+          done
+          [ "${BAD}" = "0" ] || { echo "FAIL: 存在未定义的 GstGL 类型"; exit 1; }
+
+          echo "--- 垫片注入后的样子 ---"
+          grep -n -A7 'typedef struct _GstGLDisplay' dlls/winegstreamer/unixlib.c
+          grep -n 'GSTREAMER,\[' configure.ac || true
           grep -c 'gstreamer-gl-1.0' configure.ac || echo "OK: configure.ac 已无 gstreamer-gl-1.0"
 
       # 8.1 【关键修复】esync 头文件缺失
