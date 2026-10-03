@@ -786,7 +786,7 @@ jobs:
             exit 0
           fi
 
-          if awk '/#elif defined\(__aarch64__\)/{f=1} f && /initialize_xstate_features/{print "yes"; exit}' "${F}" | grep -q yes; then
+          if awk '/#elif defined\(__aarch64__\)/{f=1} /^#else/{f=0} f && /static void initialize_xstate_features/{found=1} END{exit(found?0:1)}' "${F}"; then
             echo "aarch64 分支已有 initialize_xstate_features，跳过"
             exit 0
           fi
@@ -794,7 +794,17 @@ jobs:
           echo "=== 修改前：aarch64 分支附近 ==="
           awk '/#elif defined\(__aarch64__\)/{f=1} f{print; n++} n>6{exit}' "${F}" || true
 
-          perl -0pi -e 's/(#elif defined\(__aarch64__\)\nstatic UINT64 read_tsc_frequency)/static void initialize_xstate_features( struct _KUSER_SHARED_DATA *data )\n{\n    (void)data;\n}\n\n$1/' "${F}"
+          before_md5="$(md5sum "${F}" | cut -d' ' -f1)"
+
+          # 注意：该树在 #elif defined(__aarch64__) 与函数之间还有一个空行，
+          # 所以锚点要用 [\r\n ]* 容忍空白（run275 就是死在这里）
+          perl -0pi -e 's/(#elif defined\(__aarch64__\)[\r\n ]*static UINT64 read_tsc_frequency)/static void initialize_xstate_features( struct _KUSER_SHARED_DATA *data )\n{\n    (void)data;\n}\n\n$1/' "${F}"
+
+          after_md5="$(md5sum "${F}" | cut -d' ' -f1)"
+          if [ "${before_md5}" = "${after_md5}" ]; then
+            echo "FAIL: 补丁未修改文件（锚点不匹配）"
+            exit 1
+          fi
 
           echo "=== 修改后：aarch64 分支附近 ==="
           awk '/#elif defined\(__aarch64__\)/{f=1} f{print; n++} n>10{exit}' "${F}" || true
