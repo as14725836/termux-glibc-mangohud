@@ -12,6 +12,7 @@ on:
           - proton
           - staging
           - winearm64ec
+          - pipetto-proton9-arm64ec
 
       wine_version:
         description: 'Wine 版本，例如 10.20；latest 表示使用源码默认版本'
@@ -567,6 +568,22 @@ jobs:
               fi
               ;;
 
+            pipetto-proton9-arm64ec)
+              echo "=== Pipetto wine (proton-9.0-arm64ec, Wine 9.0 内核 + arm64ec) ==="
+
+              git clone \
+                --branch proton-9.0-arm64ec \
+                --single-branch \
+                https://github.com/Pipetto-crypto/wine.git \
+                source
+
+              cd source
+
+              git config advice.detachedHead false
+
+              echo "Pipetto wine HEAD: $(git rev-parse --short HEAD)"
+              ;;
+
             winearm64ec)
               echo "=== Wine ARM64EC / wine-tkg ==="
 
@@ -613,8 +630,11 @@ jobs:
           #   tag_name is not a valid tag / tag_name is not well-formed
           # 所以做一个"可用于 tag/文件名"的净化版本：
           #   去掉 "Wine version " 前缀 → 空格转 - → 只留 [A-Za-z0-9._-]
+          # 兼容 "Wine version 11.0" / "Wine 9.0" / "9.0" 几种写法
           VER_SAFE="$(printf '%s' "${WINE_VERSION_ACTUAL}" \
             | sed -E 's/^[Ww]ine[ -]?version[ -]?//' \
+            | sed -E 's/^[Ww]ine[ -]?//' \
+            | sed -E 's/^v//' \
             | tr ' ' '-' \
             | tr -cd 'A-Za-z0-9._-')"
           [ -n "${VER_SAFE}" ] || VER_SAFE="unknown"
@@ -825,6 +845,68 @@ jobs:
           echo "============================================"
 
       # ============================================================
+      # 8.05 【诊断 + 兜底】winegstreamer task pool
+      #
+      # 症状（arm wine 跑游戏实测）：
+      #   err:quartz:autoplug Failed to create filter ... hr 0x8007000e
+      #   fixme:ole:CoCreateInstanceEx no instance created ... hr 0x8007000e
+      #
+      # 源码链路（本树已核对）：
+      #   quartz_parser.c:1873  parser_create()
+      #     -> main.c:176       WINE_UNIX_CALL(unix_wg_parser_create) 失败 -> 返回 0
+      #       -> wg_parser.c    unix 侧只有两个 E_OUTOFMEMORY 出口：
+      #                         calloc()  /  wg_task_pool_new()
+      #         -> wg_task_pool.c  WgTaskPool 是 GstTaskPool 的 GObject 子类
+      #                            G_DEFINE_TYPE(WgTaskPool, wg_task_pool, GST_TYPE_TASK_POOL)
+      #
+      # 宿主 GStreamer/GLib 版本与构建时头文件不一致时，GType 注册可能失败，
+      # g_object_new() 返回 NULL -> parser 创建失败 -> MF/quartz 解码全灭。
+      #
+      # 这里做两件事：
+      #   1) 兜底：wg_task_pool_new() 失败时退回 GStreamer 自带 gst_task_pool_new()
+      #   2) 打点：把 wg_task_pool 的 GType 与宿主 gst/glib 版本打到 stderr
+      # ============================================================
+      - name: winegstreamer task pool 兜底 + 诊断打点
+        shell: bash
+        run: |
+          set -eux
+
+          cd "${WINE_SOURCE_DIR}/source"
+
+          FILE_PARSER="dlls/winegstreamer/wg_parser.c"
+          FILE_UNIXLIB="dlls/winegstreamer/unixlib.c"
+
+          test -f "${FILE_PARSER}" || { echo "缺少 ${FILE_PARSER}"; exit 1; }
+
+          apt-get install -y --no-install-recommends perl >/dev/null 2>&1 || true
+
+          # ---- (1) 入口打点：确认 unix 函数体是否真的被进入 + GType 是否为 0 ----
+          perl -0pi -e 's/(static NTSTATUS wg_parser_create\(void \*args\)\n\{\n)/$1    { extern GType wg_task_pool_get_type(void); static int dbg_printed; if (!dbg_printed) { dbg_printed = 1; fprintf(stderr, "winegstreamer: unix wg_parser_create entered, wg_task_pool GType=%lu\n", (unsigned long)wg_task_pool_get_type()); } }\n/' "${FILE_PARSER}"
+
+          # ---- (2) 兜底：task pool 创建失败时退回默认 pool ----
+          perl -0pi -e 's/if \(!\(parser->task_pool = wg_task_pool_new\(\)\)\)\n    \{\n        free\(parser\);\n        return E_OUTOFMEMORY;\n    \}/if (!(parser->task_pool = wg_task_pool_new()))\n    {\n        fprintf(stderr, "winegstreamer: wg_task_pool_new() failed, falling back to the default GstTaskPool\n");\n        if (!(parser->task_pool = gst_task_pool_new()))\n        {\n            free(parser);\n            return E_OUTOFMEMORY;\n        }\n    }/' "${FILE_PARSER}"
+
+          # ---- (3) 宿主 gst/glib 版本打点 ----
+          if [ -f "${FILE_UNIXLIB}" ]; then
+            perl -0pi -e 's/(GST_INFO\("GStreamer library version %s; wine built with %d\.%d\.%d\.",\n\s*gst_version_string\(\), GST_VERSION_MAJOR, GST_VERSION_MINOR, GST_VERSION_MICRO\);)/$1\n    fprintf(stderr, "winegstreamer: unix init: host gst %s, host glib %u.%u.%u, built with gst %d.%d.%d\n", gst_version_string(), glib_major_version, glib_minor_version, glib_micro_version, GST_VERSION_MAJOR, GST_VERSION_MINOR, GST_VERSION_MICRO);/' "${FILE_UNIXLIB}"
+          fi
+
+          echo "=== 注入结果检查 ==="
+          grep -q 'falling back to the default GstTaskPool' "${FILE_PARSER}" \
+            && echo "OK: task pool 兜底已注入" \
+            || echo "WARN: 未能注入兜底（锚点不一致，不影响本次构建）"
+          grep -q 'unix wg_parser_create entered' "${FILE_PARSER}" \
+            && echo "OK: 入口打点已注入" \
+            || echo "WARN: 未注入入口打点"
+          if [ -f "${FILE_UNIXLIB}" ]; then
+            grep -q 'unix init: host gst' "${FILE_UNIXLIB}" \
+              && echo "OK: 版本打点已注入" \
+              || echo "WARN: 未注入版本打点"
+          fi
+
+          grep -n 'wg_task_pool_new\|gst_task_pool_new\|GType=%lu' "${FILE_PARSER}" | head -20
+
+      # ============================================================
       # 8.1 【关键修复】esync 头文件缺失
       #
       # 上游 WinNative-Emu/proton-wine@proton_11.0 的 tree 不一致：
@@ -851,9 +933,14 @@ jobs:
 
           FILE_SERVER_ESYNC="dlls/ntdll/unix/server.c"
 
-          test -f "${FILE_SERVER_ESYNC}"
-
-          if grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"; then
+          # 这个修复只针对 proton / arm64ec 型 tree：
+          #   * 文件不存在  -> 直接跳过
+          #   * 没调用 esync_init（上游 Wine 9.0 之类）-> 跳过，避免插了不存在的头文件
+          if [ ! -f "${FILE_SERVER_ESYNC}" ]; then
+            echo "跳过 esync 修复：不存在 ${FILE_SERVER_ESYNC}"
+          elif [ ! -f dlls/ntdll/unix/esync.h ] && ! grep -q 'esync_init' "${FILE_SERVER_ESYNC}"; then
+            echo "跳过 esync 修复：该 tree 没有 esync（无 esync.h 且未调用 esync_init）"
+          elif grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"; then
             echo "已经包含 esync.h，无需修复"
           else
             # 插到 fsync.h 前面（与上游 esync 补丁的写法一致）
@@ -868,11 +955,13 @@ jobs:
             '#include "esync.h"\|#include "fsync.h"' \
             "${FILE_SERVER_ESYNC}"
 
-          # 硬校验：两个 include 都必须存在，否则直接终止（不要浪费 30 分钟编译）
-          grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"
-          grep -q '#include "fsync.h"' "${FILE_SERVER_ESYNC}"
-
-          echo "esync.h include 修复完成"
+          # 硬校验：仅当确实存在 esync.h（即需要这个修复）时才强制要求
+          if [ -f dlls/ntdll/unix/esync.h ]; then
+            grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"
+            echo "esync.h include 修复完成（已校验）"
+          else
+            echo "该 tree 无 esync，跳过校验"
+          fi
 
       # ============================================================
       # 9. Generate configure
@@ -1077,7 +1166,7 @@ jobs:
             --without-gphoto
             --without-gssapi
             --without-krb5
-            --without-alsa
+            --with-alsa
             --without-oss
             --without-pcap
             --without-pcsclite
@@ -1383,6 +1472,13 @@ jobs:
 
               file "${FILE}"
 
+              # Wine 9.0 里 bin/wineboot 是 POSIX shell 脚本（不是 ELF），
+              # 直接 readelf 会报 "Not an ELF file" 并让步骤失败 —— 这里先判断类型
+              if ! file -b "${FILE}" | grep -q 'ELF'; then
+                echo "  (非 ELF 文件，跳过 readelf: $(file -b "${FILE}"))"
+                continue
+              fi
+
               readelf -h "${FILE}" |
                 grep -E \
                   'Class:|Machine:|Type:'
@@ -1669,6 +1765,72 @@ jobs:
           head -100 || true
 
       # ============================================================
+      # 22.1 【自检】解码 / 音频链依赖
+      #
+      # - winegstreamer.so 必须链上宿主 gstreamer（否则 MF/quartz 全灭，
+      #   典型现象 hr=0x8007000e）
+      # - winepulse.drv 的 DriverProc 转发到 winealsa.drv，所以 --with-pulse
+      #   时必须同时 --with-alsa，否则运行时：
+      #   err:module:find_forwarded_export module not found for forward
+      #   'winealsa.drv.DriverProc' used by winepulse.drv
+      # ============================================================
+      - name: 验证解码链依赖 (gstreamer + alsa)
+        shell: bash
+        run: |
+          set -eux
+
+          TARGET="/tmp/wine-install-wow64"
+
+          echo "=== unix 侧解码/音频库的运行时依赖 ==="
+          for so in \
+            "${TARGET}/lib/wine/aarch64-unix/winegstreamer.so" \
+            "${TARGET}/lib/wine/aarch64-unix/winedmo.so" \
+            "${TARGET}/lib/wine/aarch64-unix/winepulse.so"
+          do
+            [ -f "${so}" ] || continue
+            echo "--- $(basename "${so}")"
+            readelf -dW "${so}" | grep -E 'NEEDED|RUNPATH' || true
+          done
+
+          echo "=== 断言：winegstreamer.so 必须链上宿主 libgstreamer ==="
+          readelf -dW "${TARGET}/lib/wine/aarch64-unix/winegstreamer.so" \
+            | grep -q 'libgstreamer-1.0.so.0'
+          echo "OK: winegstreamer.so -> libgstreamer-1.0"
+          readelf -dW "${TARGET}/lib/wine/aarch64-unix/winegstreamer.so" \
+            | grep -q 'libgstgl-1.0.so.0'
+          echo "OK: winegstreamer.so -> libgstgl-1.0"
+
+          echo "=== 断言：winepulse.drv 存在时 winealsa.drv 必须也存在 ==="
+          if [ -f "${TARGET}/lib/wine/aarch64-windows/winepulse.drv" ]; then
+            test -f "${TARGET}/lib/wine/aarch64-windows/winealsa.drv" || {
+              echo "FAIL: winepulse.drv 的 DriverProc 转发到 winealsa.drv，但后者缺失（需要 --with-alsa）"
+              exit 1
+            }
+            test -f "${TARGET}/lib/wine/aarch64-unix/winealsa.so" || {
+              echo "FAIL: 缺少 aarch64-unix/winealsa.so"
+              exit 1
+            }
+            echo "OK: winealsa.drv + winealsa.so 齐备（winepulse 转发可解析）"
+          fi
+
+          echo "=== PE <-> unix 关键模块配对抽查 ==="
+          for m in winegstreamer winedmo winealsa winepulse winex11 win32u winevulkan
+          do
+            printf '  %-16s' "$m"
+            for d in aarch64-unix; do
+              if [ -f "${TARGET}/lib/wine/$d/$m.so" ]; then printf 'unix:OK '; else printf 'unix:MISS '; fi
+            done
+            for d in aarch64-windows i386-windows; do
+              if [ -f "${TARGET}/lib/wine/$d/$m.dll" ] || [ -f "${TARGET}/lib/wine/$d/$m.drv" ]; then
+                printf '%s:OK ' "$d"
+              else
+                printf '%s:MISS ' "$d"
+              fi
+            done
+            echo
+          done
+
+      # ============================================================
       # 23. Vulkan verification
       # ============================================================
       - name: 验证 Vulkan
@@ -1825,6 +1987,31 @@ jobs:
 
           cat wine-package/BUILD_INFO.txt
 
+          # ---------- 运行时依赖清单（给设备侧核对“缺哪个库”）----------
+          {
+            echo "Wine ARM64 WOW64 / Termux glibc - runtime dependency manifest"
+            echo "Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo
+            echo "说明：下面每个 aarch64-unix/*.so 的 NEEDED 都必须由宿主（Termux glibc 前缀）提供；"
+            echo "      ntdll.so 由 Wine 自身提供，可忽略。"
+            echo
+            for so in wine-package/wine/lib/wine/aarch64-unix/*.so; do
+              [ -f "$so" ] || continue
+              echo "### $(basename "$so")"
+              readelf -dW "$so" 2>/dev/null \
+                | sed -n 's/.*Shared library: \[\(.*\)\]/  \1/p' \
+                | sort -u
+              echo
+            done
+            echo "=== winegstreamer.so 需要的宿主 GStreamer 库（必须全部存在）==="
+            readelf -dW wine-package/wine/lib/wine/aarch64-unix/winegstreamer.so 2>/dev/null \
+              | sed -n 's/.*\[\(libgst.*\)\]/  \1/p' \
+              | sort -u
+            echo
+          } > wine-package/RUNTIME_DEPS.txt
+
+          cat wine-package/RUNTIME_DEPS.txt
+
       # ============================================================
       # 28. tar.xz
       # ============================================================
@@ -1868,6 +2055,7 @@ jobs:
             *.tar.xz
             checksums.txt
             wine-package/BUILD_INFO.txt
+            wine-package/RUNTIME_DEPS.txt
           retention-days: 30
 
       # ============================================================
@@ -1920,7 +2108,7 @@ jobs:
             - DBus: `${{ inputs.enable_dbus }}`
             - UDEV: `${{ inputs.enable_udev }}`
             - GStreamer: enabled
-            - PulseAudio: enabled
+            - PulseAudio: enabled (ALSA backend: enabled)
             - Vulkan: enabled
             - vkd3d: enabled
 
@@ -1932,6 +2120,7 @@ jobs:
             ${{ github.workspace }}/${{ env.BUILD_NAME }}.tar.xz
             ${{ github.workspace }}/checksums.txt
             ${{ github.workspace }}/wine-package/BUILD_INFO.txt
+            ${{ github.workspace }}/wine-package/RUNTIME_DEPS.txt
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
