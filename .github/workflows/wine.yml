@@ -1410,6 +1410,13 @@ jobs:
 
               file "${FILE}"
 
+              # Wine 9.0 里 bin/wineboot 是 POSIX shell 脚本（不是 ELF），
+              # 直接 readelf 会报 "Not an ELF file" 并让步骤失败 —— 这里先判断类型
+              if ! file -b "${FILE}" | grep -q 'ELF'; then
+                echo "  (非 ELF 文件，跳过 readelf: $(file -b "${FILE}"))"
+                continue
+              fi
+
               readelf -h "${FILE}" |
                 grep -E \
                   'Class:|Machine:|Type:'
