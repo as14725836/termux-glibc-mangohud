@@ -270,6 +270,25 @@ jobs:
           FEX_COMMIT="$(git rev-parse --short HEAD)"
           FEX_COMMIT_FULL="$(git rev-parse HEAD)"
 
+          # ---- 自动定位 mingw 工具链文件（不同 FEX 版本目录结构不一样）----
+          # 例：FEX-2605 有 Data/CMake/toolchain_mingw.cmake，而 FEX-2505 没有
+          TOOLCHAIN_FILE="$(find /opt/fex-src -path '*/Data/CMake/toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
+          if [ -z "${TOOLCHAIN_FILE}" ]; then
+            TOOLCHAIN_FILE="$(find /opt/fex-src -name 'toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
+          fi
+
+          if [ -z "${TOOLCHAIN_FILE}" ]; then
+            echo "FATAL: 这个版本（${FEX_REF}）里找不到 toolchain_mingw.cmake"
+            echo "该版本里和 toolchain/mingw 相关的文件："
+            find /opt/fex-src \( -iname '*toolchain*' -o -iname '*mingw*.cmake' \) 2>/dev/null | head -20 || true
+            echo "提示：老版本可能尚未支持 ARM64EC PE 交叉构建；建议改用 FEX-2605 / arm64ec 分支"
+            exit 1
+          fi
+
+          TOOLCHAIN_REL="${TOOLCHAIN_FILE#/opt/fex-src/}"
+          echo "TOOLCHAIN_REL=${TOOLCHAIN_REL}"
+          echo "TOOLCHAIN_REL=${TOOLCHAIN_REL}" >> "$GITHUB_ENV"
+
           # ------------------------------------------------------------
           # 版本号（进入包名 / Release tag / artifact 名）
           # 优先级：
@@ -373,7 +392,7 @@ jobs:
 
           cmake \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+            -DCMAKE_TOOLCHAIN_FILE=../${TOOLCHAIN_REL} \
             -DENABLE_LTO=False \
             -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
             -DBUILD_TESTING=OFF \
@@ -407,7 +426,7 @@ jobs:
 
           cmake \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+            -DCMAKE_TOOLCHAIN_FILE=../${TOOLCHAIN_REL} \
             -DENABLE_LTO=False \
             -DMINGW_TRIPLE=aarch64-w64-mingw32 \
             -DBUILD_TESTING=OFF \
