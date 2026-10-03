@@ -1,0 +1,498 @@
+name: Build FEX for Termux glibc
+
+# ============================================================
+# 专属 FEX 构建流程（面向 termux-pacman / glibc-runner 环境）
+#
+# 产物：
+#   libarm64ecfex.dll   x86_64 模拟（HODLL64）
+#   libwow64fex.dll     i386   模拟（HODLL）
+# 安装位置：<wine 根>/lib/wine/aarch64-windows/
+#
+# 关于路径：FEX 内置默认路径是
+#   /usr/lib/wine/aarch64-windows/fex-emu/HostThunks
+#   /usr/share/fex-emu/GuestThunks
+# Termux(非 root) 下这两条不存在，本流程会一并产出 fex-env.sh，
+# 用 FEX 官方支持的 FEX_THUNKHOSTLIBS / FEX_THUNKGUESTLIBS /
+# FEX_ROOTFS / FEX_THUNKCONFIG / FEX_PORTABLE 覆盖成 glibc 前缀内的真实位置。
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      fex_repo:
+        description: 'FEX 仓库（默认 Hangover 同款 AndreRH/FEX）'
+        required: false
+        default: 'AndreRH/FEX'
+        type: string
+
+      fex_ref:
+        description: 'FEX 版本：分支 / tag / commit（例：arm64ec、FEX-2507、b2c3d4e）'
+        required: false
+        default: 'arm64ec'
+        type: string
+
+      llvm_mingw_distro:
+        description: 'llvm-mingw 发行方（bylaws 的 ARM64EC 支持完整，Hangover 官方推荐）'
+        required: false
+        default: 'bylaws'
+        type: choice
+        options:
+          - bylaws
+          - mstorsjo
+
+      llvm_mingw_version:
+        description: 'llvm-mingw 版本，latest 表示取最新 release'
+        required: false
+        default: '20250920'
+        type: string
+
+      build_arm64ecfex:
+        description: '构建 libarm64ecfex.dll（x86_64 模拟，Hangover 必需）'
+        required: false
+        default: true
+        type: boolean
+
+      build_wow64fex:
+        description: '构建 libwow64fex.dll（i386 模拟，可选）'
+        required: false
+        default: true
+        type: boolean
+
+      jobs:
+        description: '并行编译线程'
+        required: false
+        default: '8'
+        type: string
+
+      publish_release:
+        description: '构建成功后发布 GitHub Release'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  TERMUX_GLIBC_PREFIX: /data/data/com.termux/files/usr/glibc
+  TERMUX_PREFIX: /data/data/com.termux/files/usr
+  TERMUX_TMP: /data/data/com.termux/files/usr/tmp
+
+  DEBIAN_FRONTEND: noninteractive
+
+permissions:
+  contents: write
+
+jobs:
+  build-fex:
+    runs-on: ubuntu-latest
+
+    container:
+      image: debian:12
+      options: --user root
+
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # 1. 基础工具
+      # ============================================================
+      - name: 安装基础工具
+        shell: bash
+        run: |
+          set -eux
+
+          apt-get update
+
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            wget \
+            curl \
+            git \
+            xz-utils \
+            zip \
+            unzip \
+            file \
+            python3 \
+            python3-pip \
+            cmake \
+            ninja-build \
+            build-essential \
+            pkg-config
+
+          cmake --version
+          ninja --version || true
+
+      # ============================================================
+      # 2. PE 交叉工具链（llvm-mingw）
+      # ============================================================
+      - name: 安装 PE 交叉工具链 (llvm-mingw)
+        shell: bash
+        env:
+          DISTRO: ${{ inputs.llvm_mingw_distro }}
+          VER: ${{ inputs.llvm_mingw_version }}
+        run: |
+          set -eux
+
+          if [ "${DISTRO}" = "bylaws" ]; then
+            REPO="bylaws/llvm-mingw"
+          else
+            REPO="mstorsjo/llvm-mingw"
+          fi
+
+          TAG="${VER}"
+
+          if [ "${TAG}" = "latest" ] || [ -z "${TAG}" ]; then
+            TAG="$(curl -sSL "https://api.github.com/repos/${REPO}/releases/latest" \
+              | python3 -c "import json,sys;print(json.load(sys.stdin)['tag_name'])")"
+          fi
+
+          DIR_NAME="llvm-mingw-${TAG}-ucrt-ubuntu-22.04-x86_64"
+          URL="https://github.com/${REPO}/releases/download/${TAG}/${DIR_NAME}.tar.xz"
+
+          echo "llvm-mingw: ${REPO} @ ${TAG}"
+          echo "URL: ${URL}"
+
+          mkdir -p /opt
+          cd /opt
+
+          if [ ! -d "/opt/${DIR_NAME}" ]; then
+            wget -q --show-progress "${URL}"
+            tar -xJf "${DIR_NAME}.tar.xz"
+            rm -f "${DIR_NAME}.tar.xz"
+          fi
+
+          echo "/opt/${DIR_NAME}/bin" >> "$GITHUB_PATH"
+          echo "LLVMMINGW_DIR=/opt/${DIR_NAME}" >> "$GITHUB_ENV"
+          echo "LLVMMINGW_NAME=${DIR_NAME}" >> "$GITHUB_ENV"
+
+          export PATH="/opt/${DIR_NAME}/bin:${PATH}"
+
+          echo "=== 工具链自检 ==="
+
+          for T in \
+            arm64ec-w64-mingw32-clang \
+            arm64ec-w64-mingw32-clang++ \
+            arm64ec-w64-mingw32-dlltool \
+            aarch64-w64-mingw32-clang \
+            aarch64-w64-mingw32-clang++ \
+            aarch64-w64-mingw32-dlltool
+          do
+            printf '%-38s ' "${T}"
+            command -v "${T}" || echo MISSING
+          done
+
+      # ============================================================
+      # 3. 获取 FEX 源码（按手动输入的版本）
+      # ============================================================
+      - name: 获取 FEX 源码
+        shell: bash
+        env:
+          FEX_REPO: ${{ inputs.fex_repo }}
+          FEX_REF: ${{ inputs.fex_ref }}
+        run: |
+          set -eux
+
+          echo "FEX repo : ${FEX_REPO}"
+          echo "FEX ref  : ${FEX_REF}"
+
+          rm -rf /opt/fex-src
+          mkdir -p /opt/fex-src
+          cd /opt/fex-src
+
+          git init -q
+          git remote add origin "https://github.com/${FEX_REPO}.git"
+          git config advice.detachedHead false
+
+          # 支持 分支 / tag / commit：先浅取，失败再完整取
+          if ! git fetch --depth=1 origin "${FEX_REF}"; then
+            echo "浅取 ${FEX_REF} 失败，回退为完整 fetch"
+
+            git fetch origin
+          fi
+
+          git checkout -q FETCH_HEAD
+
+          echo "=== FEX 源码信息 ==="
+
+          git log -1 --format='commit %H%nsubject %s%nauthor  %an%ndate    %ad' || true
+
+          # 子模块：vixl / fmt / xxhash / zydis / range-v3 / Catch2 等
+          git submodule update --init --recursive --depth=1 \
+            || git submodule update --init --recursive
+
+          git submodule status | head -25 || true
+
+          FEX_COMMIT="$(git rev-parse --short HEAD)"
+          FEX_DESC="$(git describe --tags --always 2>/dev/null || echo "${FEX_COMMIT}")"
+
+          # tag 里不能有空格/斜杠
+          FEX_DESC_SAFE="$(printf '%s' "${FEX_DESC}" | tr ' ' '-' | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
+          [ -n "${FEX_DESC_SAFE}" ] || FEX_DESC_SAFE="unknown"
+
+          echo "FEX_COMMIT=${FEX_COMMIT}" >> "$GITHUB_ENV"
+          echo "FEX_DESC=${FEX_DESC}" >> "$GITHUB_ENV"
+          echo "FEX_DESC_SAFE=${FEX_DESC_SAFE}" >> "$GITHUB_ENV"
+
+          echo "FEX_COMMIT=${FEX_COMMIT}"
+          echo "FEX_DESC=${FEX_DESC}"
+
+          ls -la
+
+      # ============================================================
+      # 4. 构建 libarm64ecfex.dll（x86_64 模拟）
+      # ============================================================
+      - name: 构建 libarm64ecfex.dll (x86_64 模拟)
+        if: ${{ inputs.build_arm64ecfex }}
+        shell: bash
+        run: |
+          set -eux
+
+          export PATH="${LLVMMINGW_DIR}/bin:${PATH}"
+
+          JOBS="${{ inputs.jobs || 8 }}"
+
+          cd /opt/fex-src
+
+          rm -rf build_ec
+          mkdir -p build_ec
+          cd build_ec
+
+          cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+            -DENABLE_LTO=False \
+            -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
+            -DBUILD_TESTS=False \
+            ..
+
+          make -j"${JOBS}" arm64ecfex
+
+          test -f Bin/libarm64ecfex.dll
+
+          ls -lh Bin/libarm64ecfex.dll
+          file Bin/libarm64ecfex.dll
+
+      # ============================================================
+      # 5. 构建 libwow64fex.dll（i386 模拟）
+      # ============================================================
+      - name: 构建 libwow64fex.dll (i386 模拟)
+        if: ${{ inputs.build_wow64fex }}
+        shell: bash
+        run: |
+          set -eux
+
+          export PATH="${LLVMMINGW_DIR}/bin:${PATH}"
+
+          JOBS="${{ inputs.jobs || 8 }}"
+
+          cd /opt/fex-src
+
+          rm -rf build_pe
+          mkdir -p build_pe
+          cd build_pe
+
+          cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+            -DENABLE_LTO=False \
+            -DMINGW_TRIPLE=aarch64-w64-mingw32 \
+            -DBUILD_TESTS=False \
+            ..
+
+          make -j"${JOBS}" wow64fex
+
+          test -f Bin/libwow64fex.dll
+
+          ls -lh Bin/libwow64fex.dll
+          file Bin/libwow64fex.dll
+
+      # ============================================================
+      # 6. 打包（DLL + Termux 路径配置 + 说明）
+      # ============================================================
+      - name: 打包 FEX (Termux glibc)
+        shell: bash
+        run: |
+          set -eux
+
+          PKG="/tmp/fex-pkg"
+          rm -rf "${PKG}"
+          mkdir -p "${PKG}/fex"
+
+          if [ -f /opt/fex-src/build_ec/Bin/libarm64ecfex.dll ]; then
+            install -m0644 /opt/fex-src/build_ec/Bin/libarm64ecfex.dll "${PKG}/fex/libarm64ecfex.dll"
+          fi
+
+          if [ -f /opt/fex-src/build_pe/Bin/libwow64fex.dll ]; then
+            install -m0644 /opt/fex-src/build_pe/Bin/libwow64fex.dll "${PKG}/fex/libwow64fex.dll"
+          fi
+
+          test -n "$(ls -A "${PKG}/fex")" || { echo "FATAL: 没有任何 FEX DLL 产物"; exit 1; }
+
+          # ---------- Termux glibc 路径配置（自定位，不写死绝对路径）----------
+          cat > "${PKG}/fex/fex-env.sh" <<'EOS'
+          #!/bin/bash
+          # FEX 在 Termux glibc 环境下的路径配置
+          # 用法: source "<wine根>/share/fex-emu/fex-env.sh"
+          #
+          # FEX DLL 内置默认路径是 /usr/lib/wine/... 与 /usr/share/fex-emu/，
+          # 在 Termux(非 root) 里既不存在也不可写，必须用环境变量覆盖：
+          #   FEX_THUNKHOSTLIBS / FEX_THUNKGUESTLIBS / FEX_ROOTFS / FEX_THUNKCONFIG
+          _fex_share="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+          _fex_root="$(cd "${_fex_share}/../.." && pwd)"
+
+          export FEX_THUNKHOSTLIBS="${_fex_root}/lib/wine/aarch64-windows/fex-emu/HostThunks"
+          export FEX_THUNKGUESTLIBS="${_fex_share}/GuestThunks"
+          export FEX_ROOTFS="${_fex_share}/RootFS"
+          export FEX_THUNKCONFIG="${_fex_share}"
+          # 让 FEX 用相对自身位置的路径（不再依赖 /usr、/etc）
+          export FEX_PORTABLE=1
+          # Wine 侧选择模拟器 DLL（Hangover 约定）
+          export HODLL64=libarm64ecfex.dll
+          export HODLL=libwow64fex.dll
+
+          echo "[fex-env] wine 根目录        = ${_fex_root}"
+          echo "[fex-env] FEX_THUNKHOSTLIBS  = ${FEX_THUNKHOSTLIBS}"
+          echo "[fex-env] FEX_THUNKGUESTLIBS = ${FEX_THUNKGUESTLIBS}"
+          EOS
+
+          chmod 0755 "${PKG}/fex/fex-env.sh"
+
+          cat > "${PKG}/fex/INSTALL.md" <<'EOS'
+          # FEX (Termux glibc) 安装方法
+
+          1) 把两个 DLL 放进 wine 的 aarch64-windows 目录：
+
+             ```sh
+             WINE_ROOT=/path/to/wine          # 例如 $PREFIX/glibc/wine
+             cp libarm64ecfex.dll libwow64fex.dll "$WINE_ROOT/lib/wine/aarch64-windows/"
+             ```
+
+          2) 放进 FEX 路径配置脚本：
+
+             ```sh
+             mkdir -p "$WINE_ROOT/share/fex-emu"
+             cp fex-env.sh "$WINE_ROOT/share/fex-emu/"
+             mkdir -p "$WINE_ROOT/share/fex-emu/GuestThunks" \
+                      "$WINE_ROOT/share/fex-emu/RootFS" \
+                      "$WINE_ROOT/lib/wine/aarch64-windows/fex-emu/HostThunks"
+             ```
+
+          3) 启动 wine 前先 source（把 FEX 路径指向 Termux glibc 内的真实位置）：
+
+             ```sh
+             source "$WINE_ROOT/share/fex-emu/fex-env.sh"
+             "$WINE_ROOT/bin/wine" your_app.exe
+             ```
+
+          说明：
+          - libarm64ecfex.dll = x86_64 模拟（HODLL64），libwow64fex.dll = i386 模拟（HODLL）
+          - wine 侧名字必须一致：workflow 已把 xtajit64.dll→libarm64ecfex.dll、
+            xtajit.dll→libwow64fex.dll 的引用改好
+          - 若使用了 HostThunks/GuestThunks，需要额外构建 FEX 的 thunk 层
+            （cmake -DBUILD_THUNKS=ON），否则目录为空、只是没有 host 库 thunk
+          EOS
+
+          cat > "${PKG}/fex/BUILD_INFO.txt" <<EOS
+          FEX for Termux glibc
+          ====================
+          fex_repo    : ${{ inputs.fex_repo }}
+          fex_ref     : ${{ inputs.fex_ref }}
+          fex_commit  : ${FEX_COMMIT}
+          fex_describe: ${FEX_DESC}
+          llvm-mingw  : ${LLVMMINGW_NAME}
+          build date  : $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          runner      : $(uname -m)
+
+          DLLs:
+          $( (cd "${PKG}/fex" && ls -lh *.dll) || true )
+
+          Note: 路径已通过 fex-env.sh 指向 Termux glibc 前缀，
+                不依赖容器/发行版的 /usr 布局。
+          EOS
+
+          cd "${PKG}"
+
+          PKG_NAME="fex-${FEX_DESC_SAFE}-arm64ec-wow64"
+
+          tar cJf "${PKG_NAME}.tar.xz" fex
+
+          sha256sum "${PKG_NAME}.tar.xz" > checksums.txt
+
+          ls -lh
+
+          echo "PKG_NAME=${PKG_NAME}" >> "$GITHUB_ENV"
+          echo "PKG_DIR=${PKG}" >> "$GITHUB_ENV"
+
+          cat checksums.txt
+
+      # ============================================================
+      # 7. 校验产物
+      # ============================================================
+      - name: 校验产物
+        shell: bash
+        run: |
+          set -eux
+
+          cd "${PKG_DIR}"
+
+          echo "=== 归档内容 ==="
+
+          tar tJf "${PKG_NAME}.tar.xz"
+
+          echo "=== 解包复检 ==="
+
+          rm -rf /tmp/fex-verify
+          mkdir -p /tmp/fex-verify
+          tar xJf "${PKG_NAME}.tar.xz" -C /tmp/fex-verify
+
+          find /tmp/fex-verify -type f | sort
+
+          echo "=== PE 类型 ==="
+
+          file /tmp/fex-verify/fex/*.dll
+
+          echo "=== 关键文件存在性 ==="
+
+          test -f /tmp/fex-verify/fex/fex-env.sh
+
+          test -f /tmp/fex-verify/fex/INSTALL.md
+
+          test -f /tmp/fex-verify/fex/libarm64ecfex.dll || \
+            echo "(未构建 libarm64ecfex.dll)"
+
+          test -f /tmp/fex-verify/fex/libwow64fex.dll || \
+            echo "(未构建 libwow64fex.dll)"
+
+          echo "=== fex-env.sh 语法检查 ==="
+
+          bash -n /tmp/fex-verify/fex/fex-env.sh && echo OK
+
+      # ============================================================
+      # 8. 上传 artifact
+      # ============================================================
+      - name: Upload FEX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FEX-${{ env.FEX_DESC_SAFE }}-termux-glibc
+          path: |
+            /tmp/fex-pkg/*.tar.xz
+            /tmp/fex-pkg/checksums.txt
+          retention-days: 30
+
+      # ============================================================
+      # 9. 发布 Release
+      # ============================================================
+      - name: Publish FEX Release
+        if: ${{ inputs.publish_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: fex-${{ env.FEX_DESC_SAFE }}-arm64ec-wow64
+          name: FEX ${{ env.FEX_DESC }} (Termux glibc, arm64ec + wow64)
+          draft: false
+          prerelease: false
+          overwrite_files: true
+          generate_release_notes: false
+          files: |
+            /tmp/fex-pkg/${{ env.PKG_NAME }}.tar.xz
+            /tmp/fex-pkg/checksums.txt
