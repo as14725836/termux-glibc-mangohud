@@ -1976,13 +1976,16 @@ jobs:
           esac
 
           echo "=== secur32.so（报告用，不做硬断言）==="
+          # secur32 与 bcrypt 一样是运行时 dlopen 加载 gnutls，NEEDED 里不会有 libgnutls，
+          # 所以判定要看“内嵌 soname”，并且先把 strings 落到临时文件（避开 pipefail + SIGPIPE 的假失败）。
           SEC="${TARGET}/lib/wine/aarch64-unix/secur32.so"
           if [ -f "${SEC}" ]; then
             readelf -dW "${SEC}" | grep -E 'NEEDED' || true
-            if readelf -dW "${SEC}" | grep -q 'libgnutls.so'; then
-              echo "OK: secur32.so -> libgnutls"
+            strings -a "${SEC}" > /tmp/_secur32_strings.txt || true
+            if grep -qE '^libgnutls\.so' /tmp/_secur32_strings.txt; then
+              echo "OK: secur32.so 内嵌 libgnutls soname（运行时 dlopen）"
             else
-              echo "WARN: secur32.so 未链 libgnutls"
+              echo "WARN: secur32.so 未内嵌 libgnutls soname"
             fi
           else
             echo "（没有 secur32.so，跳过）"
