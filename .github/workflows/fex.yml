@@ -17,6 +17,12 @@ name: Build FEX for Termux glibc
 # ============================================================
 
 on:
+  # 只在改动本文件时自动跑一次（方便在分支上验证；手动输入版本仍走 workflow_dispatch）
+  push:
+    paths:
+      - '.github/workflows/fex.yml'
+      - '.github/workflows/fex.yaml'
+
   workflow_dispatch:
     inputs:
       fex_repo:
@@ -129,8 +135,8 @@ jobs:
       - name: 安装 PE 交叉工具链 (llvm-mingw)
         shell: bash
         env:
-          DISTRO: ${{ inputs.llvm_mingw_distro }}
-          VER: ${{ inputs.llvm_mingw_version }}
+          DISTRO: ${{ inputs.llvm_mingw_distro || 'bylaws' }}
+          VER: ${{ inputs.llvm_mingw_version || 'latest' }}
         run: |
           set -eux
 
@@ -188,8 +194,8 @@ jobs:
       - name: 获取 FEX 源码
         shell: bash
         env:
-          FEX_REPO: ${{ inputs.fex_repo }}
-          FEX_REF: ${{ inputs.fex_ref }}
+          FEX_REPO: ${{ inputs.fex_repo || 'AndreRH/FEX' }}
+          FEX_REF: ${{ inputs.fex_ref || 'arm64ec' }}
         run: |
           set -eux
 
@@ -243,14 +249,14 @@ jobs:
       # 4. 构建 libarm64ecfex.dll（x86_64 模拟）
       # ============================================================
       - name: 构建 libarm64ecfex.dll (x86_64 模拟)
-        if: ${{ inputs.build_arm64ecfex }}
+        if: ${{ inputs.build_arm64ecfex != false }}
         shell: bash
         run: |
           set -eux
 
           export PATH="${LLVMMINGW_DIR}/bin:${PATH}"
 
-          JOBS="${{ inputs.jobs || 8 }}"
+          JOBS="${{ inputs.jobs || '8' }}"
 
           cd /opt/fex-src
 
@@ -277,14 +283,14 @@ jobs:
       # 5. 构建 libwow64fex.dll（i386 模拟）
       # ============================================================
       - name: 构建 libwow64fex.dll (i386 模拟)
-        if: ${{ inputs.build_wow64fex }}
+        if: ${{ inputs.build_wow64fex != false }}
         shell: bash
         run: |
           set -eux
 
           export PATH="${LLVMMINGW_DIR}/bin:${PATH}"
 
-          JOBS="${{ inputs.jobs || 8 }}"
+          JOBS="${{ inputs.jobs || '8' }}"
 
           cd /opt/fex-src
 
@@ -396,8 +402,8 @@ jobs:
           cat > "${PKG}/fex/BUILD_INFO.txt" <<EOS
           FEX for Termux glibc
           ====================
-          fex_repo    : ${{ inputs.fex_repo }}
-          fex_ref     : ${{ inputs.fex_ref }}
+          fex_repo    : ${{ inputs.fex_repo || 'AndreRH/FEX' }}
+          fex_ref     : ${{ inputs.fex_ref || 'arm64ec' }}
           fex_commit  : ${FEX_COMMIT}
           fex_describe: ${FEX_DESC}
           llvm-mingw  : ${LLVMMINGW_NAME}
@@ -484,7 +490,7 @@ jobs:
       # 9. 发布 Release
       # ============================================================
       - name: Publish FEX Release
-        if: ${{ inputs.publish_release }}
+        if: ${{ inputs.publish_release != false }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: fex-${{ env.FEX_DESC_SAFE }}-arm64ec-wow64
