@@ -1872,12 +1872,18 @@ jobs:
           # 注意：Wine 的 bcrypt 是 dlopen(SONAME_LIBGNUTLS) 动态加载的，
           #       所以 NEEDED 里不会有 libgnutls —— 要查内嵌的 soname 字符串。
           echo "--- bcrypt.so 内嵌的动态库 soname ---"
-          strings -a "${BCRYPT}" | grep -E '^lib(gnutls|gmp|gcrypt)\.so' | sort -u | sed 's/^/  /' || true
-          strings -a "${BCRYPT}" | grep -qE '^libgnutls\.so' || {
-            echo "FAIL: bcrypt.so 未内嵌 libgnutls soname —— gnutls 后端没启用（configure 未认到 gnutls_cipher_init）"
-            exit 1
-          }
-          echo "OK: bcrypt.so 内嵌 libgnutls（运行时 dlopen；设备端 glibc 前缀需有该库）"
+          # 注意：workflow 默认 shell 是 `bash -e -o pipefail`，
+          #       而 `strings | grep -q` 会因为 grep 提前退出触发 SIGPIPE(141) 被误判失败！
+          #       所以先把结果存进变量再判断。
+          DLOPEN_SONAMES=$(strings -a "${BCRYPT}" | grep -E '^lib(gnutls|gmp|gcrypt)\.so' | sort -u || true)
+          echo "${DLOPEN_SONAMES}" | sed 's/^/  /'
+          case "${DLOPEN_SONAMES}" in
+            *libgnutls.so*)
+              echo "OK: bcrypt.so 内嵌 libgnutls（运行时 dlopen；设备端 glibc 前缀需有该库）" ;;
+            *)
+              echo "FAIL: bcrypt.so 未内嵌 libgnutls soname —— gnutls 后端没启用"
+              exit 1 ;;
+          esac
 
           echo "=== secur32.so（报告用，不做硬断言）==="
           SEC="${TARGET}/lib/wine/aarch64-unix/secur32.so"
