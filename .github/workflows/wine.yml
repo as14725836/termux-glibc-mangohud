@@ -1854,11 +1854,15 @@ jobs:
           BCRYPT="${TARGET}/lib/wine/aarch64-unix/bcrypt.so"
           test -f "${BCRYPT}"
           readelf -dW "${BCRYPT}" | grep -E 'NEEDED|RUNPATH' || true
-          readelf -dW "${BCRYPT}" | grep -q 'libgnutls.so' || {
-            echo "FAIL: bcrypt.so 未链上 libgnutls —— schannel/bcrypt 不可用（需要 libgnutls28-dev:arm64）"
+          # 注意：Wine 的 bcrypt 是 dlopen(SONAME_LIBGNUTLS) 动态加载的，
+          #       所以 NEEDED 里不会有 libgnutls —— 要查内嵌的 soname 字符串。
+          echo "--- bcrypt.so 内嵌的动态库 soname ---"
+          strings -a "${BCRYPT}" | grep -E '^lib(gnutls|gmp|gcrypt)\.so' | sort -u | sed 's/^/  /' || true
+          strings -a "${BCRYPT}" | grep -qE '^libgnutls\.so' || {
+            echo "FAIL: bcrypt.so 未内嵌 libgnutls soname —— gnutls 后端没启用（configure 未认到 gnutls_cipher_init）"
             exit 1
           }
-          echo "OK: bcrypt.so -> libgnutls（schannel/bcrypt 可用）"
+          echo "OK: bcrypt.so 内嵌 libgnutls（运行时 dlopen；设备端 glibc 前缀需有该库）"
 
           echo "=== secur32.so（报告用，不做硬断言）==="
           SEC="${TARGET}/lib/wine/aarch64-unix/secur32.so"
@@ -2046,6 +2050,14 @@ jobs:
                 | sort -u
               echo
             done
+            echo "=== 通过 dlopen 加载的宿主库（不在 NEEDED 里，但设备端必须存在）==="
+            for _so in bcrypt secur32; do
+              [ -f "wine-package/wine/lib/wine/aarch64-unix/${_so}.so" ] || continue
+              echo "  [${_so}.so]"
+              strings -a "wine-package/wine/lib/wine/aarch64-unix/${_so}.so" 2>/dev/null \
+                | grep -E '^lib(gnutls|gmp|gcrypt)\.so' | sort -u | sed 's/^/    /'
+            done
+            echo
             echo "=== winegstreamer.so 需要的宿主 GStreamer 库（必须全部存在）==="
             readelf -dW wine-package/wine/lib/wine/aarch64-unix/winegstreamer.so 2>/dev/null \
               | sed -n 's/.*\[\(libgst.*\)\]/  \1/p' \
