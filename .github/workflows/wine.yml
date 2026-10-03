@@ -893,6 +893,21 @@ jobs:
             perl -0pi -e 's/(GST_INFO\("GStreamer library version %s; wine built with %d\.%d\.%d\.",\n\s*gst_version_string\(\), GST_VERSION_MAJOR, GST_VERSION_MINOR, GST_VERSION_MICRO\);)/$1\n    fprintf(stderr, "winegstreamer: unix init: host gst %s, host glib %u.%u.%u, built with gst %d.%d.%d\\n", gst_version_string(), glib_major_version, glib_minor_version, glib_micro_version, GST_VERSION_MAJOR, GST_VERSION_MINOR, GST_VERSION_MICRO);/' "${FILE_UNIXLIB}"
           fi
 
+          # ---- (4) PE 侧打点：把 unixlib 调用的真实返回码用 ERR() 打出来 ----
+          # ERR() 走 Wine 的 err 通道，默认就显示在 stderr，不依赖 unix 侧是否跑起来。
+          # 0xc0000135 = STATUS_DLL_NOT_FOUND（多半是 .so 没加载到）
+          FILE_MAIN="dlls/winegstreamer/main.c"
+          if [ -f "${FILE_MAIN}" ]; then
+            perl -0pi -e 's/if \(WINE_UNIX_CALL\(unix_wg_init_gstreamer, &params\)\)\n        return FALSE;/{ NTSTATUS _wg_rc = WINE_UNIX_CALL(unix_wg_init_gstreamer, &params); if (_wg_rc) { ERR("unix_wg_init_gstreamer FAILED rc=0x%08x\\n", (unsigned int)_wg_rc); return FALSE; } }/' "${FILE_MAIN}"
+            perl -0pi -e 's/if \(WINE_UNIX_CALL\(unix_wg_parser_create, &params\)\)\n        return 0;/{ NTSTATUS _wg_rc = WINE_UNIX_CALL(unix_wg_parser_create, &params); if (_wg_rc) { ERR("unix_wg_parser_create FAILED rc=0x%08x\\n", (unsigned int)_wg_rc); return 0; } }/' "${FILE_MAIN}"
+            echo "=== PE 侧打点注入检查 ==="
+            grep -c 'unix_wg_init_gstreamer FAILED' "${FILE_MAIN}" || true
+            grep -c 'unix_wg_parser_create FAILED' "${FILE_MAIN}" || true
+            grep -n 'unix_wg_parser_create FAILED' "${FILE_MAIN}" | head -3 || true
+          else
+            echo "WARN: 没有 ${FILE_MAIN}，跳过 PE 侧打点"
+          fi
+
           echo "=== 注入结果检查 ==="
           grep -q 'falling back to the default GstTaskPool' "${FILE_PARSER}" \
             && echo "OK: task pool 兜底已注入" \
