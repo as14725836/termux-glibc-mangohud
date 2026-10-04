@@ -26,9 +26,9 @@ on:
   workflow_dispatch:
     inputs:
       fex_repo:
-        description: 'FEX 仓库（默认 Hangover 同款 AndreRH/FEX）'
+        description: 'FEX 仓库（默认官方 FEX-Emu/FEX）'
         required: false
-        default: 'AndreRH/FEX'
+        default: 'FEX-Emu/FEX'
         type: string
 
       fex_ref:
@@ -201,7 +201,7 @@ jobs:
       - name: 获取 FEX 源码
         shell: bash
         env:
-          FEX_REPO: ${{ inputs.fex_repo || 'AndreRH/FEX' }}
+          FEX_REPO: ${{ inputs.fex_repo || 'FEX-Emu/FEX' }}
           FEX_REF: ${{ inputs.fex_ref || 'arm64ec' }}
         run: |
           set -eux
@@ -573,7 +573,7 @@ jobs:
           cat > "${PKG}/fex/BUILD_INFO.txt" <<EOS
           FEX for Termux glibc
           ====================
-          fex_repo    : ${{ inputs.fex_repo || 'AndreRH/FEX' }}
+          fex_repo    : ${{ inputs.fex_repo || 'FEX-Emu/FEX' }}
           fex_ref     : ${{ inputs.fex_ref || 'arm64ec' }}
           fex_commit  : ${FEX_COMMIT}
           fex_describe: ${FEX_DESC}
