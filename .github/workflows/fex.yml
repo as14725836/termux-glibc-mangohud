@@ -538,15 +538,11 @@ jobs:
           curl -sSL --max-time 600 -o /tmp/box64dev.tar.gz "https://github.com/${BOX64_REPO}/releases/download/${TAG}/${ASSET}"
           rm -rf /tmp/box64dev; mkdir -p /tmp/box64dev
           tar xzf /tmp/box64dev.tar.gz -C /tmp/box64dev
-          for F in wowbox64.dll box64ec.dll; do
-            SRC=$(find /tmp/box64dev -name "${F}" | head -1)
-            if [ -n "${SRC}" ]; then
-              install -m0644 "${SRC}" "${OUT}/${F}"
-              echo "  ✔ ${F}"
-            else
-              echo "  ⚠ 包里没有 ${F}"
-            fi
-          done
+          SRC=$(find /tmp/box64dev -name wowbox64.dll | head -1)
+          if [ -n "${SRC}" ]; then
+            install -m0644 "${SRC}" "${OUT}/wowbox64.dll"
+            echo "  ✔ wowbox64.dll"
+          fi
           test -f "${OUT}/wowbox64.dll" || { echo "FATAL: 未取到 wowbox64.dll"; exit 1; }
           echo "${TAG}" > "${OUT}/BOX64_TAG"
           file "${OUT}"/*.dll
@@ -573,20 +569,15 @@ jobs:
           fi
 
           test -n "$(ls -A "${PKG}/fex")" || { echo "FATAL: 没有任何 FEX DLL 产物"; exit 1; }
-          # ---------- box64 的 WOW64 DLL ----------
-          if [ -d /opt/box64-wow64 ] && [ -n "$(ls -A /opt/box64-wow64 2>/dev/null)" ]; then
-            mkdir -p "${PKG}/box64"
-            for F in wowbox64.dll box64ec.dll; do
-              if [ -f "/opt/box64-wow64/${F}" ]; then
-                install -m0644 "/opt/box64-wow64/${F}" "${PKG}/box64/${F}"
-              fi
-            done
-            if [ -f /opt/box64-wow64/BOX64_TAG ]; then
-              cp -a /opt/box64-wow64/BOX64_TAG "${PKG}/box64/BOX64_TAG"
-            fi
-            echo "box64 侧产物: $(ls "${PKG}/box64")"
+          # ---------- box64 的 wowbox64.dll（与 FEX dll 放同一目录）----------
+          if [ -f /opt/box64-wow64/wowbox64.dll ]; then
+            install -m0644 /opt/box64-wow64/wowbox64.dll "${PKG}/fex/wowbox64.dll"
+            echo "已并入 wowbox64.dll"
           else
-            echo "box64 侧产物: (无)"
+            echo "wowbox64.dll: (无)"
+          fi
+          if [ -f /opt/box64-wow64/BOX64_TAG ]; then
+            cp -a /opt/box64-wow64/BOX64_TAG "${PKG}/fex/BOX64_TAG"
           fi
 
           # ---------- Termux glibc 路径配置（自定位，不写死绝对路径）----------
@@ -667,9 +658,9 @@ jobs:
 
           DLLs:
           $( (cd "${PKG}/fex" && ls -lh *.dll) || true )
-          box64 DLLs (WOW64/ARM64EC):
-          $( (cd "${PKG}/box64" && ls -lh *.dll) 2>/dev/null || echo "(未包含)" )
-          box64 release: $(cat "${PKG}/box64/BOX64_TAG" 2>/dev/null || echo "(未包含)")
+          box64 wowbox64.dll (同一目录):
+          $( (cd "${PKG}/fex" && ls -lh wowbox64.dll) 2>/dev/null || echo "(未包含)" )
+          box64 release: $(cat "${PKG}/fex/BOX64_TAG" 2>/dev/null || echo "(未包含)")
 
           Note: 路径已通过 fex-env.sh 指向 Termux glibc 前缀，
                 不依赖容器/发行版的 /usr 布局。
@@ -684,9 +675,7 @@ jobs:
 
           PKG_NAME="${PKG_PREFIX}${FEX_DESC_SAFE}-arm64ec-wow64"
 
-          TAR_DIRS="fex"
-          if [ -d box64 ]; then TAR_DIRS="fex box64"; fi
-          tar cJf "${PKG_NAME}.tar.xz" ${TAR_DIRS}
+          tar cJf "${PKG_NAME}.tar.xz" fex
 
           sha256sum "${PKG_NAME}.tar.xz" > checksums.txt
 
@@ -726,9 +715,9 @@ jobs:
           echo "=== 关键文件存在性 ==="
 
           test -f /tmp/fex-verify/fex/fex-env.sh
-          echo "=== box64 WOW64 DLL 检查 ==="
-          if [ -f /tmp/fex-verify/box64/wowbox64.dll ]; then
-            file /tmp/fex-verify/box64/wowbox64.dll
+          echo "=== box64 WOW64 DLL 检查（与 FEX dll 同目录）==="
+          if [ -f /tmp/fex-verify/fex/wowbox64.dll ]; then
+            file /tmp/fex-verify/fex/wowbox64.dll
           else
             echo "(未包含 wowbox64.dll)"
           fi
