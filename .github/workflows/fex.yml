@@ -73,6 +73,21 @@ on:
         required: false
         default: true
         type: boolean
+      include_wowbox64:
+        description: '一并打包 box64 的 wowbox64.dll（box64 WOW64 CPU DLL）'
+        required: false
+        default: true
+        type: boolean
+      box64_repo:
+        description: 'box64 开发版仓库（默认 as14725836/termux-glibc-box64）'
+        required: false
+        default: 'as14725836/termux-glibc-box64'
+        type: string
+      box64_release_tag:
+        description: 'box64 开发版 Release tag（留空 = 自动取最新 box64-dev-*）'
+        required: false
+        default: ''
+        type: string
 
       version_label:
         description: '可选：手动指定版本号（留空则自动探测，例如填 FEX-2605）'
@@ -493,6 +508,51 @@ jobs:
           file Bin/libwow64fex.dll
 
       # ============================================================
+      # 5.5 取 box64 的 WOW64 DLL（wowbox64.dll / box64ec.dll）
+      # ============================================================
+      - name: 获取 box64 WOW64 DLL (wowbox64.dll)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.include_wowbox64 }}
+        shell: bash
+        env:
+          BOX64_REPO: ${{ inputs.box64_repo || 'as14725836/termux-glibc-box64' }}
+          BOX64_TAG: ${{ inputs.box64_release_tag || '' }}
+        run: |
+          set -eu
+          OUT=/opt/box64-wow64
+          rm -rf "${OUT}"; mkdir -p "${OUT}"
+          API="https://api.github.com/repos/${BOX64_REPO}"
+          TAG="${BOX64_TAG}"
+          if [ -z "${TAG}" ]; then
+            curl -sSL --max-time 60 "${API}/releases?per_page=30" -o /tmp/box64-rel.json
+            TAG=$(python3 -c 'import json;d=json.load(open("/tmp/box64-rel.json"));t=sorted(str(x.get("tag_name","")) for x in d if str(x.get("tag_name","")).startswith("box64-dev-"));print(t[-1] if t else "")')
+          fi
+          if [ -z "${TAG}" ]; then
+            echo "⚠ 未找到 box64-dev-* Release，跳过 wowbox64.dll"
+            exit 0
+          fi
+          echo "box64 开发版 tag = ${TAG}"
+          curl -sSL --max-time 60 "${API}/releases/tags/${TAG}" -o /tmp/box64-tagx.json
+          ASSET=$(python3 -c 'import json;d=json.load(open("/tmp/box64-tagx.json"));a=[str(x["name"]) for x in d.get("assets",[]) if str(x["name"]).endswith(".tar.gz")];print(a[0] if a else "")')
+          test -n "${ASSET}" || { echo "FATAL: ${TAG} 没有 .tar.gz 资产"; exit 1; }
+          echo "asset = ${ASSET}"
+          curl -sSL --max-time 600 -o /tmp/box64dev.tar.gz "https://github.com/${BOX64_REPO}/releases/download/${TAG}/${ASSET}"
+          rm -rf /tmp/box64dev; mkdir -p /tmp/box64dev
+          tar xzf /tmp/box64dev.tar.gz -C /tmp/box64dev
+          for F in wowbox64.dll box64ec.dll; do
+            SRC=$(find /tmp/box64dev -name "${F}" | head -1)
+            if [ -n "${SRC}" ]; then
+              install -m0644 "${SRC}" "${OUT}/${F}"
+              echo "  ✔ ${F}"
+            else
+              echo "  ⚠ 包里没有 ${F}"
+            fi
+          done
+          test -f "${OUT}/wowbox64.dll" || { echo "FATAL: 未取到 wowbox64.dll"; exit 1; }
+          echo "${TAG}" > "${OUT}/BOX64_TAG"
+          file "${OUT}"/*.dll
+          ls -lh "${OUT}"
+
+      # ============================================================
       # 6. 打包（DLL + Termux 路径配置 + 说明）
       # ============================================================
       - name: 打包 FEX (Termux glibc)
@@ -513,6 +573,21 @@ jobs:
           fi
 
           test -n "$(ls -A "${PKG}/fex")" || { echo "FATAL: 没有任何 FEX DLL 产物"; exit 1; }
+          # ---------- box64 的 WOW64 DLL ----------
+          if [ -d /opt/box64-wow64 ] && [ -n "$(ls -A /opt/box64-wow64 2>/dev/null)" ]; then
+            mkdir -p "${PKG}/box64"
+            for F in wowbox64.dll box64ec.dll; do
+              if [ -f "/opt/box64-wow64/${F}" ]; then
+                install -m0644 "/opt/box64-wow64/${F}" "${PKG}/box64/${F}"
+              fi
+            done
+            if [ -f /opt/box64-wow64/BOX64_TAG ]; then
+              cp -a /opt/box64-wow64/BOX64_TAG "${PKG}/box64/BOX64_TAG"
+            fi
+            echo "box64 侧产物: $(ls "${PKG}/box64")"
+          else
+            echo "box64 侧产物: (无)"
+          fi
 
           # ---------- Termux glibc 路径配置（自定位，不写死绝对路径）----------
           cat > "${PKG}/fex/fex-env.sh" <<'EOS'
@@ -592,6 +667,9 @@ jobs:
 
           DLLs:
           $( (cd "${PKG}/fex" && ls -lh *.dll) || true )
+          box64 DLLs (WOW64/ARM64EC):
+          $( (cd "${PKG}/box64" && ls -lh *.dll) 2>/dev/null || echo "(未包含)" )
+          box64 release: $(cat "${PKG}/box64/BOX64_TAG" 2>/dev/null || echo "(未包含)")
 
           Note: 路径已通过 fex-env.sh 指向 Termux glibc 前缀，
                 不依赖容器/发行版的 /usr 布局。
@@ -606,7 +684,9 @@ jobs:
 
           PKG_NAME="${PKG_PREFIX}${FEX_DESC_SAFE}-arm64ec-wow64"
 
-          tar cJf "${PKG_NAME}.tar.xz" fex
+          TAR_DIRS="fex"
+          if [ -d box64 ]; then TAR_DIRS="fex box64"; fi
+          tar cJf "${PKG_NAME}.tar.xz" ${TAR_DIRS}
 
           sha256sum "${PKG_NAME}.tar.xz" > checksums.txt
 
@@ -646,6 +726,12 @@ jobs:
           echo "=== 关键文件存在性 ==="
 
           test -f /tmp/fex-verify/fex/fex-env.sh
+          echo "=== box64 WOW64 DLL 检查 ==="
+          if [ -f /tmp/fex-verify/box64/wowbox64.dll ]; then
+            file /tmp/fex-verify/box64/wowbox64.dll
+          else
+            echo "(未包含 wowbox64.dll)"
+          fi
 
           test -f /tmp/fex-verify/fex/INSTALL.md
 
