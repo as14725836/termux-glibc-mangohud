@@ -1070,6 +1070,21 @@ jobs:
           echo "  enable_39bit_va        = ${ENABLE_39BIT}"
           echo "  enable_noexec_fallback = ${ENABLE_NOEXEC}"
 
+          # ---- 定位 wine 源码树（与其它步骤一致：${WINE_SOURCE_DIR}/source）----
+          for CAND in "${WINE_SOURCE_DIR}/source" "${WINE_SOURCE_DIR}" /opt/wine-src/source; do
+            if [ -f "${CAND}/dlls/ntdll/unix/virtual.c" ]; then
+              cd "${CAND}"
+              break
+            fi
+          done
+          if [ ! -f dlls/ntdll/unix/virtual.c ]; then
+            echo "FATAL: 找不到 wine 源码树 (dlls/ntdll/unix/virtual.c)"
+            echo "  PWD=$(pwd)  WINE_SOURCE_DIR=${WINE_SOURCE_DIR:-<unset>}"
+            ls -la "${WINE_SOURCE_DIR}" 2>/dev/null | head -20
+            exit 1
+          fi
+          echo "  wine source: $(pwd)"
+
           # ---------- 1) 39-bit VA 适配 ----------
           if [ "${ENABLE_39BIT}" = "true" ]; then
             for F in dlls/ntdll/unix/virtual.c loader/preloader.c; do
@@ -1101,13 +1116,13 @@ jobs:
 
           # ---------- 2) noexec 分区兜底 ----------
           if [ "${ENABLE_NOEXEC}" = "true" ]; then
-            python3 - <<'PYEOF'
-          import io, sys
+            if python3 - <<'PYEOF'
+          import io
           p = 'dlls/ntdll/unix/virtual.c'
           src = io.open(p, encoding='utf-8', errors='surrogateescape').read()
           if 'failed to set PROT_EXEC on file map, noexec filesystem?' not in src:
-              print('  noexec fallback: 上游已支持（只读映射自动回退 read()），无需改动')
-              raise SystemExit(0)
+              print('  noexec fallback: 上游已支持（只读映射自动回退 read()），跳过注入')
+              raise SystemExit(2)
           anchor = src.find('case EPERM:')
           idx = src.find('return STATUS_ACCESS_DENIED;', anchor)
           if anchor < 0 or idx < 0:
@@ -1121,10 +1136,21 @@ jobs:
                  '                }\n')
           io.open(p, 'w', encoding='utf-8', errors='surrogateescape').write(src[:idx] + ins + src[idx:])
           print('  noexec fallback: 已注入（旧实现）')
+          raise SystemExit(0)
           PYEOF
-            if ! grep -q 'noexec exec map relaxed' dlls/ntdll/unix/virtual.c; then
-              echo "FATAL: noexec 兜底未能注入"
-              exit 1
+            then
+              if ! grep -q 'noexec exec map relaxed' dlls/ntdll/unix/virtual.c; then
+                echo "FATAL: noexec 兜底注入后校验失败"
+                exit 1
+              fi
+            else
+              RC=$?
+              if [ "$RC" = "2" ]; then
+                echo "  noexec fallback: 无需改动（上游已支持）"
+              else
+                echo "FATAL: noexec 注入脚本出错 rc=$RC"
+                exit 1
+              fi
             fi
           else
             echo "  skip noexec fallback (enable_noexec_fallback=false)"
