@@ -8,6 +8,11 @@ name: Build FEX for Termux glibc
 #   libwow64fex.dll     i386   模拟（HODLL）
 # 安装位置：<wine 根>/lib/wine/aarch64-windows/
 #
+# 仓库选择：
+#   use_official_fex = true  → FEX-Emu/FEX  + main    （官方）
+#   use_official_fex = false → AndreRH/FEX  + arm64ec （Hangover fork）
+#   手动填 fex_repo / fex_ref 可覆盖上面的默认组合。
+#
 # 关于路径：FEX 内置默认路径是
 #   /usr/lib/wine/aarch64-windows/fex-emu/HostThunks
 #   /usr/share/fex-emu/GuestThunks
@@ -17,7 +22,6 @@ name: Build FEX for Termux glibc
 # ============================================================
 
 on:
-  # 只在改动本文件时自动跑一次（方便在分支上验证；手动输入版本仍走 workflow_dispatch）
   push:
     paths:
       - '.github/workflows/fex.yml'
@@ -25,20 +29,26 @@ on:
 
   workflow_dispatch:
     inputs:
-      fex_repo:
-        description: 'FEX 仓库（默认官方 FEX-Emu/FEX）'
+      use_official_fex:
+        description: '使用官方 FEX-Emu/FEX（关闭则用 Hangover 的 AndreRH/FEX）'
         required: false
-        default: 'FEX-Emu/FEX'
+        default: true
+        type: boolean
+
+      fex_repo:
+        description: 'FEX 仓库（留空则由上面的开关决定）'
+        required: false
+        default: ''
         type: string
 
       fex_ref:
-        description: 'FEX 版本：分支 / tag / commit（例：arm64ec、FEX-2507、b2c3d4e）'
+        description: 'FEX 版本：分支 / tag / commit（留空则由上面的开关决定）'
         required: false
-        default: 'arm64ec'
+        default: ''
         type: string
 
       llvm_mingw_distro:
-        description: 'llvm-mingw 发行方（bylaws 的 ARM64EC 支持完整，Hangover 官方推荐）'
+        description: 'llvm-mingw 发行方（bylaws 的 ARM64EC 支持完整）'
         required: false
         default: 'bylaws'
         type: choice
@@ -196,18 +206,39 @@ jobs:
           done
 
       # ============================================================
-      # 3. 获取 FEX 源码（按手动输入的版本）
+      # 3. 获取 FEX 源码（开关决定仓库/ref，手动填可覆盖）
       # ============================================================
       - name: 获取 FEX 源码
         shell: bash
         env:
-          FEX_REPO: ${{ inputs.fex_repo || 'FEX-Emu/FEX' }}
-          FEX_REF: ${{ inputs.fex_ref || 'arm64ec' }}
+          INPUT_REPO: ${{ inputs.fex_repo || '' }}
+          INPUT_REF: ${{ inputs.fex_ref || '' }}
+          USE_OFFICIAL: ${{ github.event_name != 'workflow_dispatch' && 'true' || inputs.use_official_fex }}
         run: |
           set -eux
 
+          # ---- 开关解析 ----
+          if [ -n "${INPUT_REPO}" ]; then
+            FEX_REPO="${INPUT_REPO}"
+          elif [ "${USE_OFFICIAL}" = "true" ]; then
+            FEX_REPO="FEX-Emu/FEX"
+          else
+            FEX_REPO="AndreRH/FEX"
+          fi
+
+          if [ -n "${INPUT_REF}" ]; then
+            FEX_REF="${INPUT_REF}"
+          elif [ "${FEX_REPO}" = "FEX-Emu/FEX" ]; then
+            FEX_REF="main"
+          else
+            FEX_REF="arm64ec"
+          fi
+
           echo "FEX repo : ${FEX_REPO}"
           echo "FEX ref  : ${FEX_REF}"
+
+          echo "FEX_REPO=${FEX_REPO}" >> "$GITHUB_ENV"
+          echo "FEX_REF=${FEX_REF}" >> "$GITHUB_ENV"
 
           rm -rf /opt/fex-src
           mkdir -p /opt/fex-src
@@ -217,21 +248,16 @@ jobs:
           git remote add origin "https://github.com/${FEX_REPO}.git"
           git config advice.detachedHead false
 
-          # 支持 分支 / tag / commit：先浅取，失败再完整取
-          # 取完整历史 + 全部 tags：
-          # 只有历史完整，git describe 才能跨到上游的 FEX-* 版本标签
-          # （否则只会命中压在 HEAD 上的 hangover-* 标签）
-          # ---- 防呆 ①：先确认 fex_ref 在远端存在，避免 fetch 失败后静默落到默认分支 tip ----
+          # ---- 防呆 ①：先确认 fex_ref 在远端存在 ----
           if ! git ls-remote --exit-code origin "${FEX_REF}" "refs/tags/${FEX_REF}" >/dev/null 2>&1; then
             echo "FATAL: 远端 ${FEX_REPO} 里找不到 ref/tag: ${FEX_REF}"
-            echo "       可选示例：分支 arm64ec / tag FEX-2605 / 具体 commit sha"
+            echo "       可选示例：分支 main / arm64ec / tag FEX-2605 / 具体 commit sha"
             echo "       （可用如下命令自查：git ls-remote --tags https://github.com/${FEX_REPO}.git | tail -20）"
             exit 1
           fi
 
           # 注意：不要把 --tags 和 ref 放在同一条 fetch 里，
           # 否则 FETCH_HEAD 会被 tag 覆盖，git checkout FETCH_HEAD 会切到别的 commit
-          # （曾因此切到 FEX-2301 附近的老提交，导致 cmake 找不到 toolchain 文件）
           if ! git fetch origin "${FEX_REF}"; then
             echo "完整 fetch ${FEX_REF} 失败，退回 depth=250"
 
@@ -247,9 +273,7 @@ jobs:
           # tags 单独补（对工作区无影响，仅供 git describe 用）
           git fetch --tags origin >/dev/null 2>&1 || true
 
-          # ---- 防呆 ②：确认 checkout 真的落在 FEX 源码上（而不是别的 commit/空树）----
-          # 注意：不要在这里要求 toolchain_mingw.cmake —— 它在新旧版本里位置不同
-          # （新版 Data/CMake/，FEX-2505 在 CMakeToolchains/），交给下面的自动定位处理
+          # ---- 防呆 ②：确认 checkout 真的落在 FEX 源码上 ----
           for MUST in CMakeLists.txt Source; do
             if [ ! -e "${MUST}" ]; then
               echo "FATAL: checkout 结果里缺少 ${MUST} —— 说明落到的不是预期的 FEX 源码"
@@ -273,8 +297,6 @@ jobs:
           FEX_COMMIT_FULL="$(git rev-parse HEAD)"
 
           # ---- 旧版本源码兼容补丁 ----
-          # 老 FEX（如 FEX-2505）自带的 fmt 里用了 malloc/free 但没有 include <cstdlib>，
-          # 在较新的 clang（LLVM 20/21）下会直接报 "use of undeclared identifier 'malloc'"。
           for H in \
             External/fmt/include/fmt/base.h \
             External/fmt/include/fmt/format.h \
@@ -286,8 +308,7 @@ jobs:
             fi
           done
 
-          # ---- 自动定位 mingw 工具链文件（不同 FEX 版本目录结构不一样）----
-          # 例：FEX-2605 有 Data/CMake/toolchain_mingw.cmake，而 FEX-2505 没有
+          # ---- 自动定位 mingw 工具链文件 ----
           TOOLCHAIN_FILE="$(find /opt/fex-src -path '*/Data/CMake/toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
           if [ -z "${TOOLCHAIN_FILE}" ]; then
             TOOLCHAIN_FILE="$(find /opt/fex-src -name 'toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
@@ -297,7 +318,7 @@ jobs:
             echo "FATAL: 这个版本（${FEX_REF}）里找不到 toolchain_mingw.cmake"
             echo "该版本里和 toolchain/mingw 相关的文件："
             find /opt/fex-src \( -iname '*toolchain*' -o -iname '*mingw*.cmake' \) 2>/dev/null | head -20 || true
-            echo "提示：老版本可能尚未支持 ARM64EC PE 交叉构建；建议改用 FEX-2605 / arm64ec 分支"
+            echo "提示：老版本可能尚未支持 ARM64EC PE 交叉构建；建议改用较新的 tag 或 main 分支"
             exit 1
           fi
 
@@ -307,15 +328,6 @@ jobs:
 
           # ------------------------------------------------------------
           # 版本号（进入包名 / Release tag / artifact 名）
-          # 优先级：
-          #   1) 手动输入 version_label（最高优先，想叫什么叫什么）
-          #   2) git describe --match 'FEX-*'  → 上游 FEX 版本，形如 FEX-2605-654-gfa55616
-          #   3) fex_ref 本身是 tag 且指向本次 commit
-          #   4) git describe --match 'hangover-*'（Hangover 版本）
-          #   5) 任意 tag 的 git describe
-          #   6) 兜底 <日期>-g<commit>
-          # 说明：describe 只有在历史完整时才可能命中 FEX-*（上游版本可能已经
-          #       离 HEAD 有几百个 commit），所以上面用的是完整 fetch。
           # ------------------------------------------------------------
           FEX_TAG=""
           FEX_VERSION_SOURCE=""
@@ -366,7 +378,6 @@ jobs:
             FEX_VERSION_SOURCE="兜底：日期+commit（未找到可用 tag）"
           fi
 
-          # 所有 tag 一览（便于排查）
           echo "=== 可用 tag（FEX-* 最后 5 个）==="
           git tag | grep -E '^FEX-' | sort -V | tail -5 || true
 
@@ -401,9 +412,6 @@ jobs:
           JOBS="${{ inputs.jobs || '8' }}"
 
           # ---- 兼容老版本 FEX：它硬编码 -lclang_rt.builtins-arm64ec ----
-          # LLVM 工具链里这个库名为 libclang_rt.builtins-aarch64.a（ARM64EC 的 builtins
-          # 就是 AArch64 代码），老 FEX（如 FEX-2505）会因为找不到 arm64ec 名字而链接失败：
-          #   lld: error: unable to find library -lclang_rt.builtins-arm64ec
           BUILTINS_DIR=""
           for CAND in \
             "$(find "${LLVMMINGW_DIR}" -type d -path '*lib/clang*' -name windows -print -quit 2>/dev/null || true)" \
@@ -573,8 +581,8 @@ jobs:
           cat > "${PKG}/fex/BUILD_INFO.txt" <<EOS
           FEX for Termux glibc
           ====================
-          fex_repo    : ${{ inputs.fex_repo || 'FEX-Emu/FEX' }}
-          fex_ref     : ${{ inputs.fex_ref || 'arm64ec' }}
+          fex_repo    : ${FEX_REPO}
+          fex_ref     : ${FEX_REF}
           fex_commit  : ${FEX_COMMIT}
           fex_describe: ${FEX_DESC}
           version_src : ${FEX_VERSION_SOURCE}
