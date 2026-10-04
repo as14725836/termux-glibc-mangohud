@@ -39,6 +39,16 @@ on:
         default: ''
         type: string
 
+      enable_39bit_va:
+        description: '39-bit VA 适配（ARM64 设备地址空间仅 39 位时必需：降低地址上限 + 收窄高地址区）'
+        required: false
+        default: true
+        type: boolean
+      enable_noexec_fallback:
+        description: 'noexec 分区兜底（游戏放 /sdcard 时允许只读可执行映射回退 read()；wine>=11 上游已支持）'
+        required: false
+        default: true
+        type: boolean
       enable_wayland:
         description: '启用 Wayland'
         required: false
@@ -1050,6 +1060,76 @@ jobs:
       #   1) 兜底：wg_task_pool_new() 失败时退回 GStreamer 自带 gst_task_pool_new()
       #   2) 打点：把 wg_task_pool 的 GType 与宿主 gst/glib 版本打到 stderr
       # ============================================================
+      - name: ARM64 39-bit VA + noexec 兼容适配
+        run: |
+          echo "============================================"
+          echo "ARM64 39-bit VA / noexec compatibility"
+          echo "============================================"
+          ENABLE_39BIT="${{ inputs.enable_39bit_va || 'true' }}"
+          ENABLE_NOEXEC="${{ inputs.enable_noexec_fallback || 'true' }}"
+          echo "  enable_39bit_va        = ${ENABLE_39BIT}"
+          echo "  enable_noexec_fallback = ${ENABLE_NOEXEC}"
+
+          # ---------- 1) 39-bit VA 适配 ----------
+          if [ "${ENABLE_39BIT}" = "true" ]; then
+            for F in dlls/ntdll/unix/virtual.c loader/preloader.c; do
+              if [ -f "$F" ]; then
+                perl -pi -e 's/0x7ffffe000000/0x7ffe000000/g' "$F"
+                perl -pi -e 's/0x7fffffff0000/0x7fffff0000/g' "$F"
+                echo "  39-bit: rewrote $F"
+              fi
+            done
+            VMA=$(grep -c '0x7fffff0000' dlls/ntdll/unix/virtual.c || true)
+            HIA=$(grep -c '0x7ffe000000' dlls/ntdll/unix/virtual.c || true)
+            PLA=$(grep -c '0x7ffe000000' loader/preloader.c || true)
+            echo "  39-bit check: virtual_limit=${VMA} virtual_hiarea=${HIA} preloader=${PLA}"
+            if [ "${VMA}" = "0" ] || [ "${HIA}" = "0" ] || [ "${PLA}" = "0" ]; then
+              echo "FATAL: 39-bit VA 适配未生效 (${VMA}/${HIA}/${PLA})"
+              exit 1
+            fi
+            # 全树扫残留（只报不拦：其它版本可能合法保留）
+            LEFT=$( { grep -rln '0x7ffffe000000\|0x7fffffff0000' --include='*.c' --include='*.h' . 2>/dev/null || true; } | head -10 )
+            if [ -n "${LEFT}" ]; then
+              echo "  39-bit: 以下文件仍含旧值（核对是否为无关版本）："
+              echo "${LEFT}" | sed 's/^/    /'
+            else
+              echo "  39-bit: 全树无旧值残留"
+            fi
+          else
+            echo "  skip 39-bit VA (enable_39bit_va=false)"
+          fi
+
+          # ---------- 2) noexec 分区兜底 ----------
+          if [ "${ENABLE_NOEXEC}" = "true" ]; then
+            python3 - <<'PYEOF'
+          import io, sys
+          p = 'dlls/ntdll/unix/virtual.c'
+          src = io.open(p, encoding='utf-8', errors='surrogateescape').read()
+          if 'failed to set PROT_EXEC on file map, noexec filesystem?' not in src:
+              print('  noexec fallback: 上游已支持（只读映射自动回退 read()），无需改动')
+              raise SystemExit(0)
+          anchor = src.find('case EPERM:')
+          idx = src.find('return STATUS_ACCESS_DENIED;', anchor)
+          if anchor < 0 or idx < 0:
+              print('FATAL: 找不到 noexec 分支的 STATUS_ACCESS_DENIED')
+              raise SystemExit(1)
+          ins = ('                if ((prot & PROT_EXEC) && !(vprot & VPROT_WRITE))\n'
+                 '                {\n'
+                 '                    /* noexec compat: read-only exec map falls back to read() */\n'
+                 '                    WARN( "noexec exec map relaxed, falling back to read\\n" );\n'
+                 '                    break;\n'
+                 '                }\n')
+          io.open(p, 'w', encoding='utf-8', errors='surrogateescape').write(src[:idx] + ins + src[idx:])
+          print('  noexec fallback: 已注入（旧实现）')
+          PYEOF
+            if ! grep -q 'noexec exec map relaxed' dlls/ntdll/unix/virtual.c; then
+              echo "FATAL: noexec 兜底未能注入"
+              exit 1
+            fi
+          else
+            echo "  skip noexec fallback (enable_noexec_fallback=false)"
+          fi
+
       - name: winegstreamer task pool 兜底 + 诊断打点
         shell: bash
         run: |
