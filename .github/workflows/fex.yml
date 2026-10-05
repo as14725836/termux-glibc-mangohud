@@ -244,7 +244,7 @@ jobs:
           if [ -n "${INPUT_REF}" ]; then
             FEX_REF="${INPUT_REF}"
           elif [ "${FEX_REPO}" = "FEX-Emu/FEX" ]; then
-            FEX_REF="main"
+            FEX_REF="e869aa644a16e4332cdc15c1ea0b4d13d482385d"   # Hangover(arm64ec) 的合并基：官方 main 过新，32 位 wow64 会崩；要最新改回 "main"
           else
             FEX_REF="arm64ec"
           fi
