@@ -1157,8 +1157,14 @@ jobs:
           import io
           p = 'dlls/ntdll/unix/virtual.c'
           src = io.open(p, encoding='utf-8', errors='surrogateescape').read()
-          if 'failed to set PROT_EXEC on file map, noexec filesystem?' not in src:
-              print('  noexec fallback: 上游已支持（只读映射自动回退 read()），跳过注入')
+          # 检测该树是否已内置 read() 兜底（map_file_into_view / map_pe_header 的 noexec 分支）
+          ev = [ (i + 1, l.strip()) for i, l in enumerate(src.split('\n'))
+                 if 'falling back to read' in l or 'fall back to read()' in l ]
+          if ev or 'failed to set PROT_EXEC on file map, noexec filesystem?' not in src:
+              print('  noexec fallback: 该树已内置 noexec read() 兜底，跳过注入')
+              for ln, txt in ev:
+                  print('    virtual.c:%d  %s' % (ln, txt[:110]))
+              print('    判定依据: EACCES/EPERM -> break -> anon_mmap_fixed + pread（现有代码即可回退）')
               raise SystemExit(2)
           anchor = src.find('case EPERM:')
           idx = src.find('return STATUS_ACCESS_DENIED;', anchor)
