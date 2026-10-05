@@ -63,22 +63,6 @@ on:
         options:
           - 'true'
           - 'false'
-      apply_brunodev_patches:
-        description: '应用 brunodev85/wine-10.10-custom 的通用优化补丁（已剔除 Winlator 路径专属）'
-        required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      brunodev_patch_mode:
-        description: '补丁模式：strict=有补丁无法应用就终止构建；auto=跳过不适用的'
-        required: false
-        default: 'strict'
-        type: choice
-        options:
-          - strict
-          - auto
       enable_termux_env_tweaks:
         description: 'Termux 环境优化（D:->/sdcard、Z:->Termux 前缀、preloader 判定）'
         required: false
@@ -96,7 +80,6 @@ on:
           - WinNative-Emu/proton-wine
           - Pipetto-crypto/wine
           - GameNative/proton-wine
-          - brunodev85/wine-10.10-custom
 
 env:
   USE_CCACHE: true
@@ -304,13 +287,6 @@ jobs:
           git checkout "$PROTON_BRANCH"
 
           git submodule update --init --recursive
-          # ---------------- brunodev85/wine-10.10-custom 通用优化补丁 ----------------
-          if [ "${{ github.event.inputs.apply_brunodev_patches || 'true' }}" = "true" ]; then
-            echo "=== 应用 brunodev85 通用优化补丁（非 Winlator 路径专属）==="
-            PY=python3
-            command -v python3 >/dev/null 2>&1 || PY=python
-            "${PY}" "$GITHUB_WORKSPACE/patches/brunodev/apply.py" "$PWD" "${{ github.event.inputs.brunodev_patch_mode || 'strict' }}"
-          fi
           # ---------------- Termux 环境优化（幂等，不冲突）----------------
           if [ "${{ github.event.inputs.enable_termux_env_tweaks || 'true' }}" = "true" ]; then
             echo "=== Termux 环境优化 ==="
