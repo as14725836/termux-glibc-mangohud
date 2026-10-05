@@ -409,6 +409,9 @@ jobs:
 
           git log -1 --oneline || true
 
+          # ---- [Termux patch] FEX stats 文件改到 /data/data/com.termux/files/usr/tmp（不再用 /dev/shm）----
+          python3 "${GITHUB_WORKSPACE}/patches/fex/termux-shm-dir.py" /opt/fex-src
+
           JOBS="${{ inputs.jobs || 8 }}"
 
           # ---------- 3) x86_64 模拟：libarm64ecfex.dll ----------

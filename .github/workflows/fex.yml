@@ -376,6 +376,9 @@ jobs:
             fi
           done
 
+          # ---- [Termux patch] FEX stats 文件改到 /data/data/com.termux/files/usr/tmp（不再用 /dev/shm）----
+          python3 "${GITHUB_WORKSPACE}/patches/fex/termux-shm-dir.py" /opt/fex-src
+
           # ---- 自动定位 mingw 工具链文件 ----
           TOOLCHAIN_FILE="$(find /opt/fex-src -path '*/Data/CMake/toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
           if [ -z "${TOOLCHAIN_FILE}" ]; then
