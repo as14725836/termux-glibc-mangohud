@@ -14,6 +14,7 @@ on:
           - winearm64ec
           - pipetto-proton9-arm64ec
           - proton-10.34-GE
+          - proton-gamenative
 
       wine_version:
         description: 'Wine 版本，例如 10.20；latest 表示使用源码默认版本'
@@ -31,6 +32,11 @@ on:
         description: 'Proton commit，可留空'
         required: false
         default: ''
+        type: string
+      gamenative_branch:
+        description: 'GameNative proton-wine 分支（wine_branch=proton-gamenative 时生效）'
+        required: false
+        default: 'proton_11.0-2'
         type: string
 
       staging_version:
@@ -466,6 +472,7 @@ jobs:
           INPUT_WINE_BRANCH: ${{ inputs.wine_branch }}
           INPUT_WINE_VERSION: ${{ inputs.wine_version }}
           INPUT_PROTON_BRANCH: ${{ inputs.proton_branch }}
+          INPUT_GN_BRANCH: ${{ inputs.gamenative_branch }}
           INPUT_PROTON_COMMIT: ${{ inputs.proton_commit }}
           INPUT_STAGING_VERSION: ${{ inputs.staging_version }}
         run: |
@@ -626,6 +633,30 @@ jobs:
               fi
 
               echo "proton-wine(${GE_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
+              ;;
+            proton-gamenative)
+              echo "=== GameNative/proton-wine ==="
+              # 想换分支/上游，改下面两个变量即可
+              GN_REPO="https://github.com/GameNative/proton-wine.git"
+              GN_BRANCH="${INPUT_GN_BRANCH:-proton_11.0-2}"
+              git clone \
+                --branch "${GN_BRANCH}" \
+                --single-branch \
+                "${GN_REPO}" \
+                source
+              cd source
+
+              git config advice.detachedHead false
+              if [ -n "${INPUT_PROTON_COMMIT}" ]; then
+                echo "Checking out commit ${INPUT_PROTON_COMMIT}"
+                git fetch \
+                  --depth=1 \
+                  origin \
+                  "${INPUT_PROTON_COMMIT}" || true
+
+                git checkout "${INPUT_PROTON_COMMIT}"
+              fi
+              echo "GameNative proton-wine(${GN_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
               ;;
 
             winearm64ec)
