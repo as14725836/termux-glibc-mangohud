@@ -1163,8 +1163,8 @@ jobs:
           anchor = src.find('case EPERM:')
           idx = src.find('return STATUS_ACCESS_DENIED;', anchor)
           if anchor < 0 or idx < 0:
-              print('FATAL: 找不到 noexec 分支的 STATUS_ACCESS_DENIED')
-              raise SystemExit(1)
+              print('  noexec fallback: 该树结构不同（无 EPERM/STATUS_ACCESS_DENIED 锚点），跳过注入')
+              raise SystemExit(2)
           ins = ('                if ((prot & PROT_EXEC) && !(vprot & VPROT_WRITE))\n'
                  '                {\n'
                  '                    /* noexec compat: read-only exec map falls back to read() */\n'
