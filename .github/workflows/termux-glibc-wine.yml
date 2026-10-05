@@ -71,6 +71,14 @@ on:
         options:
           - 'true'
           - 'false'
+      brunodev_patch_mode:
+        description: '补丁模式：strict=有补丁无法应用就终止构建；auto=跳过不适用的'
+        required: false
+        default: 'strict'
+        type: choice
+        options:
+          - strict
+          - auto
       proton_repo:
         description: 'Proton 源码仓库（proton_branch 必须存在于该仓库）'
         required: false
@@ -293,7 +301,7 @@ jobs:
             echo "=== 应用 brunodev85 通用优化补丁（非 Winlator 路径专属）==="
             PY=python3
             command -v python3 >/dev/null 2>&1 || PY=python
-            "${PY}" "$GITHUB_WORKSPACE/patches/brunodev/apply.py" "$PWD" || true
+            "${PY}" "$GITHUB_WORKSPACE/patches/brunodev/apply.py" "$PWD" "${{ github.event.inputs.brunodev_patch_mode || 'strict' }}"
           fi
 
 
