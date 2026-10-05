@@ -1,0 +1,3 @@
+# 存在此文件 = 本次构建跳过 stats 补丁（termux-shm-dir.py），只保留 Hangover delta。
+# 用途：A/B 对照「32 位跑不起来」是不是 stats 补丁引起的。
+# 验证完把这个文件删掉即可恢复默认带补丁。

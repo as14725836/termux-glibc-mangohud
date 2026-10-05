@@ -429,7 +429,11 @@ jobs:
           done
 
           # ---- [Termux patch] FEX stats 文件改到 /data/data/com.termux/files/usr/tmp（不再用 /dev/shm）----
-          python3 "${GITHUB_WORKSPACE}/patches/fex/termux-shm-dir.py" /opt/fex-src
+          if [ -f "${GITHUB_WORKSPACE}/patches/fex/skip-stats-patch" ]; then
+            echo "=== [skip] patches/fex/skip-stats-patch 存在：本次不打 stats 路径 / 默认开启补丁（纯上游行为）==="
+          else
+            python3 "${GITHUB_WORKSPACE}/patches/fex/termux-shm-dir.py" /opt/fex-src
+          fi
 
           # ---- 自动定位 mingw 工具链文件 ----
           TOOLCHAIN_FILE="$(find /opt/fex-src -path '*/Data/CMake/toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
