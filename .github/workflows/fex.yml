@@ -800,8 +800,8 @@ jobs:
             EXP="$("${OBJDUMP}" -p "${D}" 2>/dev/null | grep -c 'BTCpu' || true)"
             echo "  ${N}: Machine=${MACH:-未知} BTCpu*导出=${EXP}"
             case "${MACH}" in
-              *ARM64EC*) : ;;
-              *) echo "  ::error::${N} 不是 ARM64EC（Machine=${MACH:-未知}）——Wine 的 wow64.dll 无法加载"; FAIL=1 ;;
+              *ARM64EC*|*x86-64*|*Aarch64*|*ARM64*) : ;;
+              *) echo "  ::error::${N} Machine=${MACH:-未知}（非 ARM64EC/x86-64/Aarch64，疑似 32 位 PE）——Wine 的 wow64.dll 无法加载"; FAIL=1 ;;
             esac
             if [ "${EXP}" = "0" ]; then echo "  ::warning::${N} 无 BTCpu* 导出（Wine 需要这些入口）"; fi
           done < <(find "${GITHUB_WORKSPACE}" -name 'libarm64ecfex.dll' -o -name 'libwow64fex.dll' 2>/dev/null)
@@ -827,8 +827,8 @@ jobs:
             EXP="$("${OBJDUMP}" -p "${D}" 2>/dev/null | grep -c 'BTCpu' || true)"
             echo "  ${N}: Machine=${MACH:-未知} BTCpu*导出=${EXP}"
             case "${MACH}" in
-              *ARM64EC*) : ;;
-              *) echo "  ::error::${N} 不是 ARM64EC（Machine=${MACH:-未知}）——Wine 的 wow64.dll 无法加载"; FAIL=1 ;;
+              *ARM64EC*|*x86-64*|*Aarch64*|*ARM64*) : ;;
+              *) echo "  ::error::${N} Machine=${MACH:-未知}（非 ARM64EC/x86-64/Aarch64，疑似 32 位 PE）——Wine 的 wow64.dll 无法加载"; FAIL=1 ;;
             esac
             if [ "${EXP}" = "0" ]; then echo "  ::warning::${N} 无 BTCpu* 导出（Wine 需要这些入口）"; fi
           done < <(find "${GITHUB_WORKSPACE}" -name 'libarm64ecfex.dll' -o -name 'libwow64fex.dll' 2>/dev/null)
