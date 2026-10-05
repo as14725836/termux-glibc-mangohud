@@ -61,6 +61,24 @@ on:
         options:
           - 'true'
           - 'false'
+      apply_brunodev_patches:
+        description: '应用 brunodev85/wine-10.10-custom 的通用优化补丁（已剔除 Winlator 路径专属）'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      proton_repo:
+        description: 'Proton 源码仓库（proton_branch 必须存在于该仓库）'
+        required: false
+        default: 'WinNative-Emu/proton-wine'
+        type: choice
+        options:
+          - WinNative-Emu/proton-wine
+          - Pipetto-crypto/wine
+          - GameNative/proton-wine
+          - brunodev85/wine-10.10-custom
 
 env:
   USE_CCACHE: true
@@ -253,8 +271,10 @@ jobs:
           # Clone
           # ----------------------------------------------------
 
+          PROTON_REPO="${{ github.event.inputs.proton_repo || 'WinNative-Emu/proton-wine' }}"
+          echo "Proton 源码仓库: ${PROTON_REPO}"
           git clone \
-            https://github.com/Pipetto-crypto/wine.git \
+            "https://github.com/${PROTON_REPO}.git" \
             wine
 
           cd wine
@@ -266,6 +286,13 @@ jobs:
           git checkout "$PROTON_BRANCH"
 
           git submodule update --init --recursive
+          # ---------------- brunodev85/wine-10.10-custom 通用优化补丁 ----------------
+          if [ "${{ github.event.inputs.apply_brunodev_patches || 'true' }}" = "true" ]; then
+            echo "=== 应用 brunodev85 通用优化补丁（非 Winlator 路径专属）==="
+            PY=python3
+            command -v python3 >/dev/null 2>&1 || PY=python
+            "${PY}" "$GITHUB_WORKSPACE/patches/brunodev/apply.py" "$PWD" || true
+          fi
 
 
           # ----------------------------------------------------
