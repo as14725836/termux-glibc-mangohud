@@ -79,6 +79,14 @@ on:
         options:
           - strict
           - auto
+      enable_termux_env_tweaks:
+        description: 'Termux 环境优化（D:->/sdcard、Z:->Termux 前缀、preloader 判定）'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
       proton_repo:
         description: 'Proton 源码仓库（proton_branch 必须存在于该仓库）'
         required: false
@@ -302,6 +310,13 @@ jobs:
             PY=python3
             command -v python3 >/dev/null 2>&1 || PY=python
             "${PY}" "$GITHUB_WORKSPACE/patches/brunodev/apply.py" "$PWD" "${{ github.event.inputs.brunodev_patch_mode || 'strict' }}"
+          fi
+          # ---------------- Termux 环境优化（幂等，不冲突）----------------
+          if [ "${{ github.event.inputs.enable_termux_env_tweaks || 'true' }}" = "true" ]; then
+            echo "=== Termux 环境优化 ==="
+            PY=python3
+            command -v python3 >/dev/null 2>&1 || PY=python
+            "${PY}" "$GITHUB_WORKSPACE/patches/termux-env/termux_env_tweaks.py" "$PWD" || true
           fi
 
 
