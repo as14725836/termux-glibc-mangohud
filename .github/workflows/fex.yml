@@ -244,7 +244,8 @@ jobs:
           if [ -n "${INPUT_REF}" ]; then
             FEX_REF="${INPUT_REF}"
           elif [ "${FEX_REPO}" = "FEX-Emu/FEX" ]; then
-            FEX_REF="e869aa644a16e4332cdc15c1ea0b4d13d482385d"   # Hangover(arm64ec) 的合并基：官方 main 过新，32 位 wow64 会崩；要最新改回 "main"
+            FEX_REF="main"
+            FEX_PIN="e869aa644a16e4332cdc15c1ea0b4d13d482385d"   # Hangover(arm64ec) 的合并基：官方 main 过新，32 位 wow64 会崩
           else
             FEX_REF="arm64ec"
           fi
@@ -288,6 +289,8 @@ jobs:
 
           # tags 单独补（对工作区无影响，仅供 git describe 用）
           git fetch --tags origin >/dev/null 2>&1 || true
+          # 官方模式：把工作区锁到 Hangover 的合并基（等价 Hangover 源码树）
+          [ -z "${FEX_PIN:-}" ] || { echo "锁定 FEX commit: ${FEX_PIN}"; git fetch --depth=1 origin "${FEX_PIN}" && git checkout -q FETCH_HEAD; }
           # ---- 应用 Hangover 的必要 delta：结构感知 + 幂等 + 严格校验 ----
           # 不用 patch 文件：patch 的上下文/文件头格式会随上游漂移（此前 --- 注释行被 git apply 误判为文件头）
           echo "=== 应用 Hangover delta（官方 FEX 源必需：IMAGE_LOAD_CONFIG_DIRECTORY32 布局）==="
