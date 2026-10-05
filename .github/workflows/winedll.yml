@@ -1,0 +1,176 @@
+name: wine DLLs
+
+on:
+  workflow_dispatch:
+    inputs:
+      dll_names:
+        description: '要提取的 DLL 名称（多个用逗号分隔，例如: mf.dll, mfplat.dll, mfreadwrite.dll）'
+        required: true
+        default: ''
+        type: string
+      arch:
+        description: '架构（x86, x64, both）'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - x86
+          - x64
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install tools
+        run: sudo apt-get install -y cabextract p7zip-full
+
+      - name: Download x86 SP1 (~538 MB)
+        if: ${{ github.event.inputs.arch == 'both' || github.event.inputs.arch == 'x86' }}
+        run: |
+          curl -L --retry 3 -o win7sp1_x86.exe \
+            "http://download.windowsupdate.com/msdownload/update/software/svpk/2011/02/windows6.1-kb976932-x86_c3516bc5c9e69fee6d9ac4f981f5b95977a8a2fa.exe"
+      - name: Verify x86 checksum
+        if: ${{ github.event.inputs.arch == 'both' || github.event.inputs.arch == 'x86' }}
+        run: |
+          echo "4bf28fc00d86c936c89e2d91ef46758b  win7sp1_x86.exe" | md5sum -c -
+      - name: Download x64 SP1 (~903 MB)
+        if: ${{ github.event.inputs.arch == 'both' || github.event.inputs.arch == 'x64' }}
+        run: |
+          curl -L --retry 3 -o win7sp1_x64.exe \
+            "http://download.windowsupdate.com/msdownload/update/software/svpk/2011/02/windows6.1-kb976932-x64_74865ef2562006e51d7f9333b4a8d45b7a749dab.exe"
+      - name: Verify x64 checksum
+        if: ${{ github.event.inputs.arch == 'both' || github.event.inputs.arch == 'x64' }}
+        run: |
+          echo "28d3932f714bf71d78e75d36aa2e0fb8  win7sp1_x64.exe" | md5sum -c -
+
+      - name: Extract x86 DLLs
+        if: ${{ github.event.inputs.arch == 'both' || github.event.inputs.arch == 'x86' }}
+        run: |
+          mkdir -p syswow64
+          cabextract -d ./x86_tmp win7sp1_x86.exe
+          find ./x86_tmp -name "*.cab" -exec cabextract -d ./x86_extract {} \;
+          
+          # 分割输入的 DLL 名称
+          IFS=',' read -ra DLLS <<< "${{ github.event.inputs.dll_names }}"
+          for dll in "${DLLS[@]}"; do
+            dll=$(echo "$dll" | xargs)  # 去除空格
+            echo "Searching for: $dll"
+            find ./x86_extract -iname "$dll" 2>/dev/null | head -1 | xargs -I {} cp {} syswow64/ 2>/dev/null || true
+            if [ ! -f "syswow64/$dll" ]; then
+              find ./x86_tmp -iname "$dll" -exec cp {} syswow64/ \; 2>/dev/null || true
+            fi
+            if [ -f "syswow64/$dll" ]; then
+              echo "✓ Extracted: $dll"
+              ls -lh "syswow64/$dll"
+            else
+              echo "✗ Not found: $dll"
+            fi
+          done
+
+      - name: Extract x64 DLLs
+        if: ${{ github.event.inputs.arch == 'both' || github.event.inputs.arch == 'x64' }}
+        run: |
+          mkdir -p system32
+          cabextract -d ./x64_tmp win7sp1_x64.exe
+          find ./x64_tmp -name "*.cab" -exec cabextract -d ./x64_extract {} \;
+          
+          # 分割输入的 DLL 名称
+          IFS=',' read -ra DLLS <<< "${{ github.event.inputs.dll_names }}"
+          for dll in "${DLLS[@]}"; do
+            dll=$(echo "$dll" | xargs)  # 去除空格
+            echo "Searching for: $dll"
+            find ./x64_extract -iname "$dll" 2>/dev/null | head -1 | xargs -I {} cp {} system32/ 2>/dev/null || true
+            if [ ! -f "system32/$dll" ]; then
+              find ./x64_tmp -iname "$dll" -exec cp {} system32/ \; 2>/dev/null || true
+            fi
+            if [ -f "system32/$dll" ]; then
+              echo "✓ Extracted: $dll"
+              ls -lh "system32/$dll"
+            else
+              echo "✗ Not found: $dll"
+            fi
+          done
+
+      - name: Debug - list extracted files (if failed)
+        if: ${{ failure() }}
+        run: |
+          if [ -d ./x86_tmp ]; then
+            echo "=== x86 extracted files (first 20 DLLs) ==="
+            find ./x86_tmp -name "*.dll" 2>/dev/null | head -20
+          fi
+          if [ -d ./x64_tmp ]; then
+            echo "=== x64 extracted files (first 20 DLLs) ==="
+            find ./x64_tmp -name "*.dll" 2>/dev/null | head -20
+          fi
+
+      - name: Write install info
+        run: |
+          cat > README.txt <<'EOF'
+          Windows DLLs — extracted from Windows 7 SP1 (KB976932)
+          Provider: Microsoft
+          License: Microsoft EULA
+          
+          Extracted DLLs: ${{ github.event.inputs.dll_names }}
+          Architecture: ${{ github.event.inputs.arch }}
+          
+          Files location:
+            syswow64/*.dll    — 32-bit DLLs for Wine syswow64 prefix
+            system32/*.dll    — 64-bit DLLs for Wine system32 prefix
+          
+          Wine DLL override (example):
+            mf = native,builtin
+            mfplat = native,builtin
+          
+          To use: copy files to your Wine prefix (usually ~/.wine/drive_c/windows/)
+          EOF
+
+      - name: List extracted files
+        run: |
+          echo "=== Extracted files ==="
+          if [ -d syswow64 ]; then
+            echo "32-bit (syswow64):"
+            ls -lh syswow64/
+          fi
+          if [ -d system32 ]; then
+            echo "64-bit (system32):"
+            ls -lh system32/
+          fi
+
+      - name: Generate archive name
+        id: archive_name
+        run: |
+          # 清理 DLL 名称，替换逗号和空格为下划线
+          DLLS_CLEAN="${{ github.event.inputs.dll_names }}"
+          DLLS_CLEAN=$(echo "$DLLS_CLEAN" | tr ',' '_' | tr ' ' '_' | sed 's/__*/_/g' | sed 's/\.dll//g')
+          ARCH="${{ github.event.inputs.arch }}"
+          if [ "$ARCH" = "both" ]; then
+            ARCH_SUFFIX="x86_x64"
+          elif [ "$ARCH" = "x86" ]; then
+            ARCH_SUFFIX="x86"
+          else
+            ARCH_SUFFIX="x64"
+          fi
+          echo "ARCHIVE_NAME=${DLLS_CLEAN}_${ARCH_SUFFIX}" >> $GITHUB_OUTPUT
+          echo "Archive name will be: ${DLLS_CLEAN}_${ARCH_SUFFIX}"
+
+      - name: Zip files
+        run: |
+          if [ -d syswow64 ] && [ -d system32 ]; then
+            zip -r ${{ steps.archive_name.outputs.ARCHIVE_NAME }}.zip syswow64 system32 README.txt
+          elif [ -d syswow64 ]; then
+            zip -r ${{ steps.archive_name.outputs.ARCHIVE_NAME }}.zip syswow64 README.txt
+          elif [ -d system32 ]; then
+            zip -r ${{ steps.archive_name.outputs.ARCHIVE_NAME }}.zip system32 README.txt
+          else
+            echo "No files extracted!"
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.archive_name.outputs.ARCHIVE_NAME }}
+          path: ${{ steps.archive_name.outputs.ARCHIVE_NAME }}.zip
+          retention-days: 7
