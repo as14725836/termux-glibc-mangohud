@@ -35,6 +35,8 @@ on:
           - proton_10.0
           - ge-proton11-bionic
           - bleeding-edge
+          - main
+          - master
 
       wine_branch:
         description: 'Wine 分支 (仅 Wine 构建)'
