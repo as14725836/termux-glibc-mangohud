@@ -360,6 +360,19 @@ jobs:
           # Autogen
           # ----------------------------------------------------
 
+          # ---------------- 冲突标记守卫（任何补丁冲突都不许带进编译）----------------
+          MARKERS=$(grep -rl -E '^<<<<<<< ' --include=*.c --include=*.h --include=*.in --include=*.ac . 2>/dev/null | head -60)
+          if [ -n "${MARKERS}" ]; then
+            echo "⚠ 检测到冲突标记，回滚以下文件（保持源码可编译）："
+            echo "${MARKERS}"
+            for f in ${MARKERS}; do
+              git checkout -- "$f" 2>/dev/null || true
+              git clean -f -- "$f" 2>/dev/null || true
+            done
+          else
+            echo "✔ 无冲突标记"
+          fi
+
           if [ -x ./autogen.sh ]; then
             echo "使用仓库自带 autogen.sh"
             ./autogen.sh
