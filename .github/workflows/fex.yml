@@ -253,6 +253,30 @@ jobs:
           echo "FEX ref  : ${FEX_REF}"
 
           echo "FEX_REPO=${FEX_REPO}" >> "$GITHUB_ENV"
+
+          # ---- 把 Hangover 的必要 delta 应用到所选源码（官方源同样需要，幂等+严格）----
+          HF_PATCH="${GITHUB_WORKSPACE}/patches/fex/hangover-delta.patch"
+          if [ -f "${HF_PATCH}" ]; then
+            echo "=== 应用 Hangover delta（官方 FEX 源必需：IMAGE_LOAD_CONFIG 布局 + 调试输出）==="
+            if git apply -R --check "${HF_PATCH}" 2>/dev/null; then
+              echo "  delta 已在树中（跳过）"
+            elif git apply --check "${HF_PATCH}" 2>/dev/null; then
+              git apply "${HF_PATCH}" && echo "  delta 已应用"
+            else
+              echo "  WARN: delta 无法干净应用（上游可能已变），尝试 3way"
+              if ! git apply --3way "${HF_PATCH}" 2>/dev/null; then
+                echo "::error::Hangover delta 应用失败：官方源产物将与 Wine 结构不匹配"
+                exit 1
+              fi
+            fi
+            if grep -q '__IMAGE_LOAD_CONFIG_CODE_INTEGRITY' Source/Windows/include/winnt.h; then
+              echo "  校验通过: winnt.h 布局修正已就位"
+            else
+              echo "::error::winnt.h 布局修正未生效"; exit 1
+            fi
+          else
+            echo "::warning::未找到 patches/fex/hangover-delta.patch，官方源产物可能不可用"
+          fi
           echo "FEX_REF=${FEX_REF}" >> "$GITHUB_ENV"
 
           rm -rf /opt/fex-src
