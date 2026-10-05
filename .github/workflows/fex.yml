@@ -303,14 +303,14 @@ jobs:
             PIN_OK=0
             # ① 按 ref / tag / 分支直接取
             if git fetch --depth=1 origin "${FEX_PIN}" >/dev/null 2>&1; then
-              git checkout -q FETCH_HEAD && PIN_OK=1
+              git checkout -q FETCH_HEAD && PIN_OK=1 && PIN_SHA="$(git rev-parse HEAD)"
             fi
             # ② 裸 sha：ls-remote 找出指向它的 tag，改按 tag 取
             if [ "${PIN_OK}" = 0 ] && [ "${#FEX_PIN}" -ge 12 ]; then
               T="$(git ls-remote --tags origin 2>/dev/null | awk -v s="${FEX_PIN}" '$1 ~ "^"s {print $2}' | sed 's#refs/tags/##; s#\^{}##' | head -1)"
               if [ -n "${T}" ]; then
                 echo "该 sha 对应 tag: ${T} -> 按 tag 取"
-                git fetch --depth=1 origin "refs/tags/${T}" >/dev/null 2>&1 && git checkout -q FETCH_HEAD && PIN_OK=1
+                git fetch --depth=1 origin "refs/tags/${T}" >/dev/null 2>&1 && git checkout -q FETCH_HEAD && PIN_OK=1 && PIN_SHA="$(git rev-parse HEAD)"
               fi
             fi
             # ③ 兜底：blobless 抓全历史，再 checkout 该 commit
@@ -319,19 +319,26 @@ jobs:
               git fetch --filter=blob:none --no-tags --unshallow origin main >/dev/null 2>&1 \
                 || git fetch --filter=blob:none --no-tags origin main >/dev/null 2>&1 || true
               if git cat-file -e "${FEX_PIN}^{commit}" >/dev/null 2>&1; then
-                git checkout -q "${FEX_PIN}" && PIN_OK=1
+                git checkout -q "${FEX_PIN}" && PIN_OK=1 && PIN_SHA="$(git rev-parse HEAD)"
               fi
             fi
             if [ "${PIN_OK}" = 0 ]; then
               echo "::error::锁定 FEX 候选点失败：${FEX_PIN}（远端取不到；已放弃，避免误把 main 当成候选点）"
               exit 1
             fi
-            # 硬校验：HEAD 必须真的落在候选点上
+            # 硬校验：HEAD 必须真的落在候选点上（tag/分支名不能拿字符串前缀比）
             H="$(git rev-parse HEAD)"
-            case "${H}" in
-              "${FEX_PIN}"*) echo "      HEAD = ${H}" ;;
-              *) echo "::error::HEAD=${H} 不在候选点 ${FEX_PIN} 上"; exit 1 ;;
-            esac
+            if [ -z "${PIN_SHA:-}" ] || [ "${H}" != "${PIN_SHA}" ]; then
+              echo "::error::HEAD=${H} 与解析到的候选点 ${PIN_SHA:-空} 不一致"
+              exit 1
+            fi
+            if echo "${FEX_PIN}" | grep -qE "^[0-9a-f]{7,40}$"; then
+              case "${H}" in
+                "${FEX_PIN}"*) : ;;
+                *) echo "::error::HEAD=${H} 不在候选点 ${FEX_PIN} 上"; exit 1 ;;
+              esac
+            fi
+            echo "      HEAD = ${H}（候选点 ${FEX_PIN} 已生效）"
           fi
           # ---- 应用 Hangover 的必要 delta：结构感知 + 幂等 + 严格校验 ----
           # 不用 patch 文件：patch 的上下文/文件头格式会随上游漂移（此前 --- 注释行被 git apply 误判为文件头）
