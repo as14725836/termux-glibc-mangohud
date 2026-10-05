@@ -26,6 +26,9 @@ on:
     paths:
       - '.github/workflows/fex.yml'
       - '.github/workflows/fex.yaml'
+      # 候选点改动也要能触发（以前只改 pin 文件不会触发，容易误以为“没反应”）
+      - 'patches/fex/fex-pin.txt'
+      - 'patches/fex/**'
 
   workflow_dispatch:
     inputs:
