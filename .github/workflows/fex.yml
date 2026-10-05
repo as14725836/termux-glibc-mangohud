@@ -301,12 +301,16 @@ jobs:
           if [ -n "${FEX_PIN:-}" ]; then
             echo "锁定 FEX commit: ${FEX_PIN}"
             PIN_OK=0
+            # ⓪ 本地已有该 commit（CI 是完整 fetch main，绝大多数情况走这条）→ 直接切
+            if git cat-file -e "${FEX_PIN}^{commit}" >/dev/null 2>&1; then
+              git checkout -q "$(git rev-parse "${FEX_PIN}^{commit}")" && PIN_OK=1 && PIN_SHA="$(git rev-parse HEAD)"
+            fi
             # ① 按 ref / tag / 分支直接取
-            if git fetch --depth=1 origin "${FEX_PIN}" >/dev/null 2>&1; then
+            if [ "${PIN_OK}" = 0 ] && git fetch --depth=1 origin "${FEX_PIN}" >/dev/null 2>&1; then
               git checkout -q FETCH_HEAD && PIN_OK=1 && PIN_SHA="$(git rev-parse HEAD)"
             fi
             # ② 裸 sha：ls-remote 找出指向它的 tag，改按 tag 取
-            if [ "${PIN_OK}" = 0 ] && [ "${#FEX_PIN}" -ge 12 ]; then
+            if [ "${PIN_OK}" = 0 ] && [ "${#FEX_PIN}" -ge 7 ]; then
               T="$(git ls-remote --tags origin 2>/dev/null | awk -v s="${FEX_PIN}" '$1 ~ "^"s {print $2}' | sed 's#refs/tags/##; s#\^{}##' | head -1)"
               if [ -n "${T}" ]; then
                 echo "该 sha 对应 tag: ${T} -> 按 tag 取"
@@ -314,12 +318,13 @@ jobs:
               fi
             fi
             # ③ 兜底：blobless 抓全历史，再 checkout 该 commit
-            if [ "${PIN_OK}" = 0 ] && [ "${#FEX_PIN}" -ge 12 ]; then
+            if [ "${PIN_OK}" = 0 ] && [ "${#FEX_PIN}" -ge 7 ]; then
               echo "退化为 blobless 全历史抓取（定位 ${FEX_PIN}）"
               git fetch --filter=blob:none --no-tags --unshallow origin main >/dev/null 2>&1 \
                 || git fetch --filter=blob:none --no-tags origin main >/dev/null 2>&1 || true
-              if git cat-file -e "${FEX_PIN}^{commit}" >/dev/null 2>&1; then
-                git checkout -q "${FEX_PIN}" && PIN_OK=1 && PIN_SHA="$(git rev-parse HEAD)"
+              R_SHA="$(git rev-parse --verify -q "${FEX_PIN}^{commit}" 2>/dev/null || true)"
+              if [ -n "${R_SHA}" ]; then
+                git checkout -q "${R_SHA}" && PIN_OK=1 && PIN_SHA="$(git rev-parse HEAD)"
               fi
             fi
             if [ "${PIN_OK}" = 0 ]; then
