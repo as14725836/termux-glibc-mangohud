@@ -360,7 +360,16 @@ jobs:
           # Autogen
           # ----------------------------------------------------
 
-          ./autogen.sh
+          if [ -x ./autogen.sh ]; then
+            echo "使用仓库自带 autogen.sh"
+            ./autogen.sh
+          elif [ -f ./configure ]; then
+            echo "仓库无 autogen.sh，使用自带的 configure（如 brunodev85/wine-10.10-custom）"
+            chmod +x ./configure || true
+          else
+            echo "既无 autogen.sh 也无 configure，尝试 autoreconf -fiv"
+            autoreconf -fiv || true
+          fi
 
 
           # ----------------------------------------------------
