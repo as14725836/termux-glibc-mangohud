@@ -245,7 +245,7 @@ jobs:
             FEX_REF="${INPUT_REF}"
           elif [ "${FEX_REPO}" = "FEX-Emu/FEX" ]; then
             FEX_REF="main"
-            FEX_PIN="e869aa644a16e4332cdc15c1ea0b4d13d482385d"   # Hangover(arm64ec) 的合并基：官方 main 过新，32 位 wow64 会崩
+            FEX_PIN="$(sed -n '1{s/#.*//;s/[[:space:]]//g;p;q}' "${GITHUB_WORKSPACE}/patches/fex/fex-pin.txt" 2>/dev/null || true)"   # 候选点由 patches/fex/fex-pin.txt 控制（空格/注释自动忽略；空则不固定，用 main）
           else
             FEX_REF="arm64ec"
           fi
