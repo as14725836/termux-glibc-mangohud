@@ -1,10 +1,10 @@
---- 固化 Hangover(FEX) 相对上游 FEX-Emu/FEX main 的必要差异 ---
-   上游: FEX-Emu/FEX main
-   来源: FEX-Emu/FEX/compare/main...AndreRH:arm64ec  (2 commits)
-     fa556167 Windows: _IMAGE_LOAD_CONFIG_DIRECTORY32
-     7cc5ab20 WOW64: State which emulator is in use
-   说明: winnt.h 那处决定 IMAGE_LOAD_CONFIG_DIRECTORY32 的字段布局，官方源码不补会与 Wine/Windows 结构不匹配。
-
+# --- 固化 Hangover(FEX) 相对上游 FEX-Emu/FEX main 的必要差异 ---
+#    上游: FEX-Emu/FEX main
+#    来源: FEX-Emu/FEX/compare/main...AndreRH:arm64ec  (2 commits)
+#      fa556167 Windows: _IMAGE_LOAD_CONFIG_DIRECTORY32
+#      7cc5ab20 WOW64: State which emulator is in use
+#    说明: winnt.h 那处决定 IMAGE_LOAD_CONFIG_DIRECTORY32 的字段布局，官方源码不补会与 Wine/Windows 结构不匹配。
+#
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
