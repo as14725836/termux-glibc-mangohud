@@ -785,59 +785,34 @@ jobs:
       # ============================================================
       # 8. 上传 artifact
       # ============================================================
-      - name: 校验 FEX DLL ABI（Machine=ARM64EC / 导出含 BTCpu*）
-        shell: bash
-        run: |
-          set -u
-          echo "FEX repo : ${FEX_REPO:-未知}"
-          OBJDUMP="$(command -v llvm-objdump || echo /opt/${LLVMMINGW_NAME}/bin/llvm-objdump)"
-          FOUND=0
-          FAIL=0
-          while IFS= read -r D; do
-            FOUND=$((FOUND+1))
-            N="$(basename "${D}")"
-            MACH="$("${OBJDUMP}" -p "${D}" 2>/dev/null | awk -F: '/Machine/{print $2}' | head -1 | xargs || true)"
-            EXP="$("${OBJDUMP}" -p "${D}" 2>/dev/null | grep -c 'BTCpu' || true)"
-            echo "  ${N}: Machine=${MACH:-未知} BTCpu*导出=${EXP}"
-            case "${MACH}" in
-              *ARM64EC*|*x86-64*|*Aarch64*|*ARM64*) : ;;
-              *) echo "  ::error::${N} Machine=${MACH:-未知}（非 ARM64EC/x86-64/Aarch64，疑似 32 位 PE）——Wine 的 wow64.dll 无法加载"; FAIL=1 ;;
-            esac
-            if [ "${EXP}" = "0" ]; then echo "  ::warning::${N} 无 BTCpu* 导出（Wine 需要这些入口）"; fi
-          done < <(find "${GITHUB_WORKSPACE}" -name 'libarm64ecfex.dll' -o -name 'libwow64fex.dll' 2>/dev/null)
-          if [ "${FOUND}" = "0" ]; then echo "::error::未找到任何 FEX DLL 产物，无法校验"; exit 1; fi
-          if [ "${FAIL}" != "0" ]; then
-            echo "!! ABI 不符。官方 FEX-Emu 主线产物预期就不符 —— Wine 必须用 Hangover(AndreRH/FEX @ arm64ec) 分支"
-            exit 1
-          fi
-          echo "ABI 校验通过：全部为 ARM64EC"
-
-      - name: 校验 FEX DLL ABI（Machine=ARM64EC / 导出含 BTCpu*）
-        shell: bash
-        run: |
-          set -u
-          echo "FEX repo : ${FEX_REPO:-未知}"
-          OBJDUMP="$(command -v llvm-objdump || echo /opt/${LLVMMINGW_NAME}/bin/llvm-objdump)"
-          FOUND=0
-          FAIL=0
-          while IFS= read -r D; do
-            FOUND=$((FOUND+1))
-            N="$(basename "${D}")"
-            MACH="$("${OBJDUMP}" -p "${D}" 2>/dev/null | awk -F: '/Machine/{print $2}' | head -1 | xargs || true)"
-            EXP="$("${OBJDUMP}" -p "${D}" 2>/dev/null | grep -c 'BTCpu' || true)"
-            echo "  ${N}: Machine=${MACH:-未知} BTCpu*导出=${EXP}"
-            case "${MACH}" in
-              *ARM64EC*|*x86-64*|*Aarch64*|*ARM64*) : ;;
-              *) echo "  ::error::${N} Machine=${MACH:-未知}（非 ARM64EC/x86-64/Aarch64，疑似 32 位 PE）——Wine 的 wow64.dll 无法加载"; FAIL=1 ;;
-            esac
-            if [ "${EXP}" = "0" ]; then echo "  ::warning::${N} 无 BTCpu* 导出（Wine 需要这些入口）"; fi
-          done < <(find "${GITHUB_WORKSPACE}" -name 'libarm64ecfex.dll' -o -name 'libwow64fex.dll' 2>/dev/null)
-          if [ "${FOUND}" = "0" ]; then echo "::error::未找到任何 FEX DLL 产物，无法校验"; exit 1; fi
-          if [ "${FAIL}" != "0" ]; then
-            echo "!! ABI 不符。官方 FEX-Emu 主线产物预期就不符 —— Wine 必须用 Hangover(AndreRH/FEX @ arm64ec) 分支"
-            exit 1
-          fi
-          echo "ABI 校验通过：全部为 ARM64EC"
+      - name: 校验 FEX DLL ABI（Machine / BTCpu* 导出）
+      shell: bash
+      run: |
+        set -u
+        echo "FEX repo : ${FEX_REPO:-未知}"
+        OBJDUMP="$(command -v llvm-objdump || echo /opt/${LLVMMINGW_NAME}/bin/llvm-objdump)"
+        ROOTS="${PKG_DIR:-/tmp/fex-pkg} /tmp/fex-verify /opt/fex-src ${GITHUB_WORKSPACE}"
+        MAP="$(find ${ROOTS} -maxdepth 6 \( -name libarm64ecfex.dll -o -name libwow64fex.dll \) -print 2>/dev/null | sort -u || true)"
+        echo "=== 待校验的 FEX DLL 产物 ==="
+        echo "${MAP}"
+        FOUND=0
+        FAIL=0
+        while IFS= read -r D; do
+          [ -n "${D}" ] || continue
+          FOUND=$((FOUND+1))
+          N="$(basename "${D}")"
+          MACH="$("${OBJDUMP}" -p "${D}" 2>/dev/null | awk -F: '/Machine/{print $2}' | head -1 | xargs || true)"
+          EXP="$("${OBJDUMP}" -p "${D}" 2>/dev/null | grep -c BTCpu || true)"
+          echo "  ${N}: Machine=${MACH:-未知} BTCpu*导出=${EXP}"
+          case "${MACH}" in
+            *ARM64EC*|*x86-64*|*Aarch64*|*ARM64*) : ;;
+            *) echo "  ::error::${N} Machine=${MACH:-未知}（非 ARM64EC/x86-64/Aarch64，疑似 32 位 PE）——Wine 的 wow64.dll 无法加载"; FAIL=1 ;;
+          esac
+          if [ "${EXP}" = "0" ]; then echo "  ::warning::${N} 无 BTCpu* 导出（Wine 需要这些入口）"; fi
+        done <<< "${MAP}"
+        if [ "${FOUND}" = "0" ]; then echo "::error::未找到任何 FEX DLL 产物，无法校验"; exit 1; fi
+        if [ "${FAIL}" != "0" ]; then echo "!! ABI 不符（见上）"; exit 1; fi
+        echo "ABI 校验通过"
 
       - name: Upload FEX artifact
         uses: actions/upload-artifact@v4
