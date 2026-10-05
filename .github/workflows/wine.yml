@@ -2003,6 +2003,82 @@ jobs:
 
           chmod 0755 "${TARGET}/share/fex-emu/fex-env.sh"
 
+          # ---------- FEX/WoW64 模拟器 DLL：就位 + 32 位侧安装脚本 + ABI 校验 ----------
+          FEXX="${TARGET}/lib/wine/aarch64-windows"
+          mkdir -p "${FEXX}" "${TARGET}/wow64-dlls"
+          for D in libarm64ecfex.dll libwow64fex.dll wowbox64.dll; do
+            if [ -f "${FEXX}/${D}" ]; then
+              cp -f "${FEXX}/${D}" "${TARGET}/wow64-dlls/${D}"
+              echo "  [wow64] 已就位: lib/wine/aarch64-windows/${D}"
+            elif [ -f "/opt/fex-src/build_ec/Bin/${D}" ]; then
+              cp -f "/opt/fex-src/build_ec/Bin/${D}" "${FEXX}/${D}"
+              cp -f "${FEXX}/${D}" "${TARGET}/wow64-dlls/${D}"
+              echo "  [wow64] 从构建目录补齐: ${D}"
+            else
+              echo "  [wow64] 未找到 ${D}（若走 Hangover 路线，x86_64/i386 模拟会缺件）"
+            fi
+          done
+
+          # 前端(Prefix)安装脚本：把一个前缀的 32/64 位目录都铺好
+          cat > "${TARGET}/wow64-dlls/install-wow64-sim.sh" <<'EOI'
+          #!/bin/bash
+          # 用法: install-wow64-sim.sh <WINE_PREFIX>   (默认 $WINEPREFIX 或 ~/.wine)
+          set -u
+          HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+          WINE_ROOT="$(cd "${HERE}/.." && pwd)"
+          PREFIX="${1:-${WINEPREFIX:-$HOME/.wine}}"
+          echo "wine 根目录 : ${WINE_ROOT}"
+          echo "prefix      : ${PREFIX}"
+          [ -d "${PREFIX}/drive_c/windows/system32" ] || { echo "FATAL: ${PREFIX} 不是有效的 wine 前缀"; exit 1; }
+
+          # 1) 安装前缀级（全局，删 .wine 也不丢；不受 WoW64 重定向影响）
+          mkdir -p "${WINE_ROOT}/lib/wine/aarch64-windows"
+          cp -fv "${HERE}"/*.dll "${WINE_ROOT}/lib/wine/aarch64-windows/"
+
+          # 2) 前缀内 64 位侧
+          cp -fv "${HERE}"/libarm64ecfex.dll "${HERE}"/wowbox64.dll \
+                 "${PREFIX}/drive_c/windows/system32/" 2>/dev/null || true
+
+          # 3) 前缀内 32 位侧（关键！32 位进程访问 system32 会被重定向到 syswow64）
+          mkdir -p "${PREFIX}/drive_c/windows/syswow64"
+          cp -fv "${HERE}"/libwow64fex.dll "${HERE}"/wowbox64.dll \
+                 "${PREFIX}/drive_c/windows/syswow64/" 2>/dev/null || true
+          echo "安装完成。重建前缀以确保生效: rm -rf \"${PREFIX}\" && wineboot -u"
+          EOI
+          chmod 0755 "${TARGET}/wow64-dlls/install-wow64-sim.sh"
+
+          cat > "${TARGET}/wow64-dlls/README.txt" <<'EOT'
+          FEX / WoW64 模拟器 DLL 放置说明
+          ---------------------------------
+          libarm64ecfex.dll  x86_64 模拟（HODLL64） → 64 位侧
+          libwow64fex.dll    i386   模拟（HODLL）   → 32 位侧(syswow64)
+          wowbox64.dll       box64 的 WOW64 CPU DLL（两者都可用）
+
+          最稳位置：<wine 根>/lib/wine/aarch64-windows/   （全局、不受重定向影响）
+          前缀内：  drive_c/windows/system32/  与  drive_c/windows/syswow64/
+          ⚠ 只放 system32 时，32 位进程看不到（WoW64 会把 system32 重定向到 syswow64）
+          运行 install-wow64-sim.sh <prefix> 可一次铺好；环境变量用 share/fex-emu/fex-env.sh
+          EOT
+
+          # ABI 硬校验：Machine 必须是 ARM64EC，导出必须含 BTCpu*
+          echo "=== FEX DLL ABI 校验 ==="
+          OBJDUMP="$(command -v llvm-objdump || echo /opt/${LLVMMINGW_NAME}/bin/llvm-objdump)"
+          for D in "${TARGET}/wow64-dlls"/*.dll; do
+            [ -f "${D}" ] || continue
+            N="$(basename "${D}")"
+            MACH="$("${OBJDUMP}" -p "${D}" 2>/dev/null | awk -F: '/Machine/{print $2}' | head -1 | xargs || true)"
+            EXP="$("${OBJDUMP}" -p "${D}" 2>/dev/null | grep -c 'BTCpu' || true)"
+            echo "  ${N}: Machine=${MACH:-未知} BTCpu*导出=${EXP}"
+            case "${MACH}" in
+              *ARM64EC*) : ;;
+              *AArch64*) echo "    WARN: ${N} 是纯 ARM64（非 ARM64EC），Wine 的 wow64.dll 可能无法加载" ;;
+              *) echo "    WARN: ${N} 的 Machine 不是 ARM64EC（${MACH:-未知}）" ;;
+            esac
+            if [ "${EXP}" = "0" ]; then
+              echo "    WARN: ${N} 未见 BTCpu* 导出（Wine wow64.dll 需要的入口）"
+            fi
+          done
+
           # 把 FEX 构建时生成的 thunk 数据（如果有）一并带上
           if [ -d /opt/fex-src/build_ec/Bin/Thunks ]; then
             cp -a /opt/fex-src/build_ec/Bin/Thunks/. "${DEST}/fex-emu/HostThunks/" || true
