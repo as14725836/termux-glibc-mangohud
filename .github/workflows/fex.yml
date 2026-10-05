@@ -254,6 +254,40 @@ jobs:
 
           echo "FEX_REPO=${FEX_REPO}" >> "$GITHUB_ENV"
 
+          echo "FEX_REF=${FEX_REF}" >> "$GITHUB_ENV"
+
+          rm -rf /opt/fex-src
+          mkdir -p /opt/fex-src
+          cd /opt/fex-src
+
+          git init -q
+          git remote add origin "https://github.com/${FEX_REPO}.git"
+          git config advice.detachedHead false
+
+          # ---- 防呆 ①：先确认 fex_ref 在远端存在 ----
+          if ! git ls-remote --exit-code origin "${FEX_REF}" "refs/tags/${FEX_REF}" >/dev/null 2>&1; then
+            echo "FATAL: 远端 ${FEX_REPO} 里找不到 ref/tag: ${FEX_REF}"
+            echo "       可选示例：分支 main / arm64ec / tag FEX-2605 / 具体 commit sha"
+            echo "       （可用如下命令自查：git ls-remote --tags https://github.com/${FEX_REPO}.git | tail -20）"
+            exit 1
+          fi
+
+          # 注意：不要把 --tags 和 ref 放在同一条 fetch 里，
+          # 否则 FETCH_HEAD 会被 tag 覆盖，git checkout FETCH_HEAD 会切到别的 commit
+          if ! git fetch origin "${FEX_REF}"; then
+            echo "完整 fetch ${FEX_REF} 失败，退回 depth=250"
+
+            if ! git fetch --depth=250 origin "${FEX_REF}"; then
+              echo "退回 depth=1"
+
+              git fetch --depth=1 origin "${FEX_REF}"
+            fi
+          fi
+
+          git checkout -q FETCH_HEAD
+
+          # tags 单独补（对工作区无影响，仅供 git describe 用）
+          git fetch --tags origin >/dev/null 2>&1 || true
           # ---- 应用 Hangover 的必要 delta：结构感知 + 幂等 + 严格校验 ----
           # 不用 patch 文件：patch 的上下文/文件头格式会随上游漂移（此前 --- 注释行被 git apply 误判为文件头）
           echo "=== 应用 Hangover delta（官方 FEX 源必需：IMAGE_LOAD_CONFIG_DIRECTORY32 布局）==="
@@ -296,45 +330,11 @@ jobs:
                   k = next(i for i, l in enumerate(L) if "FEXCore::Profiler::Init(" in l)
               except StopIteration:
                   print("  WARN: %s 找不到 Profiler::Init 锚点，跳过" % p); continue
-              tag = "  __wine_dbg_output(" + chr(34) + "starting FEX based " + nm + ".dll\n" + chr(34) + ");"
+              tag = "  __wine_dbg_output(" + chr(34) + "starting FEX based " + nm + ".dll" + chr(92) + "n" + chr(34) + ");"
               L[k:k] = [tag, ""]
               io.open(p, "w", encoding="utf-8", newline="").write(chr(10).join(L))
               print("  %s 已加调试输出" % p)
           PYX
-          echo "FEX_REF=${FEX_REF}" >> "$GITHUB_ENV"
-
-          rm -rf /opt/fex-src
-          mkdir -p /opt/fex-src
-          cd /opt/fex-src
-
-          git init -q
-          git remote add origin "https://github.com/${FEX_REPO}.git"
-          git config advice.detachedHead false
-
-          # ---- 防呆 ①：先确认 fex_ref 在远端存在 ----
-          if ! git ls-remote --exit-code origin "${FEX_REF}" "refs/tags/${FEX_REF}" >/dev/null 2>&1; then
-            echo "FATAL: 远端 ${FEX_REPO} 里找不到 ref/tag: ${FEX_REF}"
-            echo "       可选示例：分支 main / arm64ec / tag FEX-2605 / 具体 commit sha"
-            echo "       （可用如下命令自查：git ls-remote --tags https://github.com/${FEX_REPO}.git | tail -20）"
-            exit 1
-          fi
-
-          # 注意：不要把 --tags 和 ref 放在同一条 fetch 里，
-          # 否则 FETCH_HEAD 会被 tag 覆盖，git checkout FETCH_HEAD 会切到别的 commit
-          if ! git fetch origin "${FEX_REF}"; then
-            echo "完整 fetch ${FEX_REF} 失败，退回 depth=250"
-
-            if ! git fetch --depth=250 origin "${FEX_REF}"; then
-              echo "退回 depth=1"
-
-              git fetch --depth=1 origin "${FEX_REF}"
-            fi
-          fi
-
-          git checkout -q FETCH_HEAD
-
-          # tags 单独补（对工作区无影响，仅供 git describe 用）
-          git fetch --tags origin >/dev/null 2>&1 || true
 
           # ---- 防呆 ②：确认 checkout 真的落在 FEX 源码上 ----
           for MUST in CMakeLists.txt Source; do
