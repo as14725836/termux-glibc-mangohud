@@ -266,7 +266,9 @@ jobs:
           git config advice.detachedHead false
 
           # ---- 防呆 ①：先确认 fex_ref 在远端存在 ----
-          if ! git ls-remote --exit-code origin "${FEX_REF}" "refs/tags/${FEX_REF}" >/dev/null 2>&1; then
+          IS_SHA=0
+          case "${FEX_REF}" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) IS_SHA=1 ;; esac
+          if [ "${IS_SHA}" = "0" ] && ! git ls-remote --exit-code origin "${FEX_REF}" "refs/tags/${FEX_REF}" >/dev/null 2>&1; then
             echo "FATAL: 远端 ${FEX_REPO} 里找不到 ref/tag: ${FEX_REF}"
             echo "       可选示例：分支 main / arm64ec / tag FEX-2605 / 具体 commit sha"
             echo "       （可用如下命令自查：git ls-remote --tags https://github.com/${FEX_REPO}.git | tail -20）"
