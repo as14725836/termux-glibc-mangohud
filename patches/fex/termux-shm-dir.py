@@ -73,8 +73,39 @@ def add_includes(text):
             return text.replace(anchor, anchor + "\n" + "\n".join(add), 1), add
     raise SystemExit("ERROR: 找不到可用的 #include 锚点")
 
+def patch_profile_stats(root):
+    """把 FEX 的 ProfileStats 默认值改成 true —— 也就是"默认就生成 fex-<pid>-stats"。
+    仍然可以用 FEX_PROFILESTATS=0 / Config.json 关掉。"""
+    rel = "FEXCore/Source/Interface/Config/Config.json.in"
+    path = os.path.join(root, rel)
+    if not os.path.isfile(path):
+        raise SystemExit("ERROR: 找不到 %s" % path)
+    with open(path, encoding="utf-8", errors="surrogateescape") as fp:
+        text = fp.read()
+    key = '"ProfileStats"'
+    if text.count(key) != 1:
+        raise SystemExit("ERROR: %s 里 %s 出现 %d 次" % (rel, key, text.count(key)))
+    i = text.index(key)
+    j = text.find('"Default"', i)
+    if j == -1 or j - i > 300:
+        raise SystemExit("ERROR: ProfileStats 后面找不到 Default")
+    k = text.find('"', j + len('"Default"') + 1)
+    e = text.find('"', k + 1)
+    cur = text[k + 1:e]
+    if cur == "true":
+        print("跳过（本来就默认开启）: %s ProfileStats Default=true" % rel)
+        return False
+    if cur != "false":
+        raise SystemExit("ERROR: ProfileStats Default 既不是 false 也不是 true，而是 %r" % cur)
+    text = text[:k + 1] + "true" + text[e:]
+    with open(path, "w", encoding="utf-8", errors="surrogateescape") as fp:
+        fp.write(text)
+    print("已改写: %s -> ProfileStats Default=true（默认生成 stats）" % rel)
+    return True
+
 
 def main():
+
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
     root = sys.argv[1].rstrip("/")
@@ -124,7 +155,11 @@ def main():
         total += 1
         print("已改写: %s（补头文件: %s）" % (rel, ", ".join(a.split()[1] for a in added) or "无"))
 
-    print("FEX stats 目录 = %s；改写文件数 = %d" % (target_dir, total))
+    # ---- 默认开启 stats（不依赖 FEX_PROFILESTATS 环境变量）----
+    ps = patch_profile_stats(root)
+
+    print("FEX stats 目录 = %s；改写文件数 = %d；ProfileStats 默认开启改动 = %s"
+          % (target_dir, total, "有" if ps else "无（本来就是 true）"))
 
 
 if __name__ == "__main__":
