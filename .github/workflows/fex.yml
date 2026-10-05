@@ -796,7 +796,7 @@ jobs:
           while IFS= read -r D; do
             FOUND=$((FOUND+1))
             N="$(basename "${D}")"
-            MACH="$("${OBJDUMP}" -p "${D}" 2>/dev/null | awk -F: '/Machine/{print $2}' | head -1 | xargs || true)"
+            MACH="$(python3 -c "import struct;d=open('${D}','rb').read();o=struct.unpack_from('<I',d,0x3c)[0];m=struct.unpack_from('<H',d,o+4)[0];print({0x14c:'i386',0x8664:'x86-64',0xaa64:'Aarch64',0xa641:'ARM64EC'}.get(m,'0x%04x'%m))" 2>/dev/null || true)"
             EXP="$("${OBJDUMP}" -p "${D}" 2>/dev/null | grep -c 'BTCpu' || true)"
             echo "  ${N}: Machine=${MACH:-未知} BTCpu*导出=${EXP}"
             case "${MACH}" in
@@ -823,7 +823,7 @@ jobs:
           while IFS= read -r D; do
             FOUND=$((FOUND+1))
             N="$(basename "${D}")"
-            MACH="$("${OBJDUMP}" -p "${D}" 2>/dev/null | awk -F: '/Machine/{print $2}' | head -1 | xargs || true)"
+            MACH="$(python3 -c "import struct;d=open('${D}','rb').read();o=struct.unpack_from('<I',d,0x3c)[0];m=struct.unpack_from('<H',d,o+4)[0];print({0x14c:'i386',0x8664:'x86-64',0xaa64:'Aarch64',0xa641:'ARM64EC'}.get(m,'0x%04x'%m))" 2>/dev/null || true)"
             EXP="$("${OBJDUMP}" -p "${D}" 2>/dev/null | grep -c 'BTCpu' || true)"
             echo "  ${N}: Machine=${MACH:-未知} BTCpu*导出=${EXP}"
             case "${MACH}" in
