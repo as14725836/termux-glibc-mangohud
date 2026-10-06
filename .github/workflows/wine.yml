@@ -299,24 +299,30 @@ jobs:
         shell: bash
         run: |
           set -x
-          # The412Banner/proton-wine 的 lsteamclient/Makefile.in 写死：
+          # 背景：The412Banner/proton-wine 的 lsteamclient/Makefile.in 写死
           #   UNIX_CFLAGS = -nostdinc++ -I=/usr/include/c++/v1   （Android NDK 的 libc++ 布局）
-          # 容器默认只有 libstdc++，该目录不存在 -> 'array' file not found。
+          # 容器默认只有 libstdc++ -> 'array' file not found。
+          #
+          # 注意：只装“头文件”包。不要装 libc++1:arm64 / libc++abi1:arm64 这类
+          # 跨架构运行库——它们的依赖（libc++1-14:arm64）在本容器装不上，
+          # 会把 apt 依赖状态搞成 broken，导致后面 `apt-get install locales`
+          # 直接以 100 退出（run290 的教训）。
           if [ -f /usr/include/c++/v1/array ]; then
-            echo "libc++ 头文件已就绪"
+            echo "libc++ 头文件已就绪，跳过安装"
             exit 0
           fi
 
-          apt-get install -y --no-install-recommends libc++-dev libc++abi-dev || \
-            apt-get install -y --no-install-recommends libc++-14-dev libc++abi-14-dev || true
-          # aarch64 侧的 libc++ 运行库（用于链接 unix .so）
-          apt-get install -y --no-install-recommends libc++1:arm64 libc++abi1:arm64 || \
-            apt-get install -y --no-install-recommends libc++1-14:arm64 libc++abi1-14:arm64 || true
+          apt-get install -y --no-install-recommends libc++-14-dev libc++abi-14-dev || \
+            apt-get install -y --no-install-recommends libc++-dev libc++abi-dev || true
+
+          # 兜底：万一依赖状态被破坏，先修好，别影响后续步骤
+          apt-get -f install -y || true
+          dpkg --configure -a || true
 
           echo "--- /usr/include/c++/v1 ---"
-          ls /usr/include/c++/v1 2>/dev/null | head -5 || echo "  (仍缺失，后面步骤会退回 libstdc++)"
-          echo "--- libc++ 运行库 ---"
-          ls /usr/lib/*/libc++* /usr/lib/*/libc++abi* 2>/dev/null | head -8 || true
+          ls /usr/include/c++/v1 2>/dev/null | head -5 || echo "  (头文件仍缺失，下一步会退回 libstdc++)"
+          echo "--- apt 健康检查 ---"
+          apt-get check 2>&1 | tail -3 || true
 
       - name: 配置 Locale
         shell: bash
