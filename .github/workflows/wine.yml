@@ -1645,6 +1645,28 @@ jobs:
           echo "=== 改后 ==="
           grep -n 'UNIX_CFLAGS\|UNIX_LIBS' lsteamclient/Makefile.in || true
 
+          # ---- (2.5) 把 C++ 标准库 include 前置（规避 winbase.h poison）----
+          for f in lsteamclient/*.cpp; do
+            [ -f "$f" ] || continue
+            if awk '/\[CI\] C\+\+ 标准库前置/{ f = 1; exit } END { exit !f }' "$f"; then
+              continue
+            fi
+            awk 'BEGIN {
+                   print "/* [CI] C++ 标准库前置（规避 winbase.h poison 宏打烂 wchar.h） */";
+                   print "#include <array>";
+                   print "#include <memory>";
+                   print "#include <string>";
+                   print "#include <mutex>";
+                   print "#include <thread>";
+                   print "#include <atomic>";
+                   print "#include <vector>";
+                   print "#include <deque>";
+                   print "#include <functional>";
+                 }
+                 { print }' "$f" > "$f.ci" && mv "$f.ci" "$f"
+            echo "已前置 C++ 头: $f"
+          done
+
           # ---- (3) 自检 ----
           printf '#include <array>\n#include <cstdlib>\n#include <string>\n#include <memory>\nint main(){std::array<int,1> a{};std::string s;return a[0]+(int)s.size();}\n' > /tmp/_probe.cpp
           set +e
