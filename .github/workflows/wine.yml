@@ -295,61 +295,27 @@ jobs:
       # ============================================================
       # 3. locales
       # ============================================================
-      - name: 提供 libc++（lsteamclient 的 C++ 标准库，不碰 apt 状态）
+      - name: 提供 C++ 运行库链接名（aarch64：libatomic / libc++ 兜底）
         shell: bash
         run: |
           set -x
-          # 背景：The412Banner/proton-wine 的 lsteamclient/Makefile.in 写死
-          #   UNIX_CFLAGS = -nostdinc++ -I=/usr/include/c++/v1
-          # 容器默认只有 libstdc++ -> 'array' file not found。
-          #
-          # 教训（run291）：不能用 apt-get install libc++-14-dev —— 会因跨架构冲突删掉
-          #   libgstreamer*-dev:arm64 / libunwind-dev:arm64，导致 configure 失败。
-          # 教训（run292）：Debian 的 /usr/include/c++/v1 是“符号链接”（指向
-          #   /usr/lib/llvm-14/include/c++/v1），cp -a 会复制成断链 -> array 仍缺失。
-          #   必须 cp -aL 或者直接找 /usr/lib/llvm-*/include/c++/v1。
-          if [ -f /usr/include/c++/v1/array ]; then
-            echo "libc++ 头文件已就绪，跳过"
-            exit 0
+          cd /tmp
+          # lsteamclient 的 unix 侧是 C++（libstdc++ ABI 已由 g++-aarch64-linux-gnu 提供），
+          # 但 C++ 头里的 16 字节原子会用到 __atomic_store -> 需要 libatomic。
+          # 这里只保证存在“可被 -l 找到的链接名”，不动 dpkg 状态。
+          A=/usr/lib/aarch64-linux-gnu
+          if [ ! -e "$A/libatomic.so" ]; then
+            if [ ! -e "$A/libatomic.so.1" ]; then
+              rm -rf /tmp/lat && mkdir -p /tmp/lat/root
+              apt-get download libatomic1:arm64 >/dev/null 2>&1 || true
+              for d in libatomic1_*.deb; do [ -e "$d" ] && dpkg-deb -x "$d" /tmp/lat/root || true; done
+              [ -d /tmp/lat/root/usr/lib/aarch64-linux-gnu ] && \
+                cp -a /tmp/lat/root/usr/lib/aarch64-linux-gnu/. "$A/" 2>/dev/null || true
+            fi
+            [ -e "$A/libatomic.so.1" ] && ln -sf libatomic.so.1 "$A/libatomic.so" || true
           fi
-
-          mkdir -p /tmp/lcx && cd /tmp/lcx
-          rm -f *.deb || true
-          apt-get download libc++-14-dev libc++abi-14-dev >/dev/null 2>&1 || true
-          apt-get download libc++1-14:arm64 libc++abi1-14:arm64 >/dev/null 2>&1 || true
-
-          mkdir -p /tmp/lcx/root
-          for d in /tmp/lcx/*.deb; do
-            [ -e "$d" ] || continue
-            echo "解包 $d"
-            dpkg-deb -x "$d" /tmp/lcx/root || true
-          done
-
-          SRCD=""
-          for cand in /tmp/lcx/root/usr/lib/llvm-*/include/c++/v1 /tmp/lcx/root/usr/include/c++/v1; do
-            if [ -d "$cand" ]; then SRCD="$cand"; break; fi
-          done
-          echo "头文件源目录: ${SRCD:-（未找到）}"
-          if [ -n "$SRCD" ]; then
-            rm -rf /usr/include/c++/v1
-            mkdir -p /usr/include/c++
-            cp -aL "$SRCD" /usr/include/c++/v1
-          fi
-
-          if [ -d /tmp/lcx/root/usr/lib/aarch64-linux-gnu ]; then
-            cp -a /tmp/lcx/root/usr/lib/aarch64-linux-gnu/. /usr/lib/aarch64-linux-gnu/ 2>/dev/null || true
-          fi
-          if [ -d /tmp/lcx/root/usr/lib/llvm-14/lib ]; then
-            mkdir -p /usr/lib/llvm-14/lib
-            cp -a /tmp/lcx/root/usr/lib/llvm-14/lib/. /usr/lib/llvm-14/lib/ 2>/dev/null || true
-          fi
-
-          echo "--- /usr/include/c++/v1/array ---"
-          ls -l /usr/include/c++/v1/array 2>/dev/null || echo "  仍缺失（下一步会退回 libstdc++）"
-          echo "--- aarch64 侧 libc++ 库 ---"
-          ls -l /usr/lib/aarch64-linux-gnu/libc++* 2>/dev/null | head -4 || true
-          echo "--- 确认 :arm64 dev 包仍在 ---"
-          ls -d /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-1.0.pc 2>/dev/null || echo "  缺 gstreamer-1.0.pc"
+          ls -l "$A/libatomic.so" "$A/libatomic.so.1" 2>/dev/null || echo "  libatomic 链接名仍缺失"
+          ls -l "$A/libstdc++.so" "$A/libstdc++.so.6" 2>/dev/null | head -2 || echo "  libstdc++ 链接名缺失"
 
       - name: 配置 Locale
         shell: bash
@@ -1611,50 +1577,49 @@ jobs:
             exit 0
           fi
 
-          echo "=== 原 UNIX_CFLAGS ==="
+          echo "=== 原 UNIX_CFLAGS / UNIX_LIBS ==="
           grep -n 'UNIX_CFLAGS' lsteamclient/Makefile.in || true
+          grep -n 'UNIX_LIBS' lsteamclient/Makefile.in || true
 
-          LIBCXX_DIR=/usr/include/c++/v1
+          # ---- (1) C++ 头路径 ----
+          # 这棵树给 lsteamclient 写死了 Android NDK 的 libc++ 路径：
+          #   UNIX_CFLAGS = -nostdinc++ -I=/usr/include/c++/v1
+          # 两个问题：(a) 容器默认只有 libstdc++；(b) clang 未设 --sysroot 时不解析 '-I=' 前缀。
+          # 统一改用 libstdc++（容器自带、aarch64 multiarch 也有、Termux glibc 侧基本都有），
+          # 用可解析的 '-I' 形式。
+          INCS=""
+          for d in /usr/aarch64-linux-gnu/include/c++/12 \
+                   /usr/include/aarch64-linux-gnu/c++/12 \
+                   /usr/include/c++/12 \
+                   /usr/aarch64-linux-gnu/include/c++/13 \
+                   /usr/include/aarch64-linux-gnu/c++/13 \
+                   /usr/include/c++/13; do
+            [ -d "$d" ] && INCS="$INCS -I$d"
+          done
+          if [ -z "$INCS" ]; then
+            echo "ERROR: 找不到 any C++ 头目录"; exit 1
+          fi
+          echo "C++ 头: ${INCS}"
+          sed -i "s|-nostdinc++ -I=/usr/include/c++/v1|${INCS# }|g" lsteamclient/Makefile.in
 
-          printf '#include <array>\n#include <cstdlib>\n#include <string>\n#include <memory>\nint main(){std::array<int,1> a{};std::string s;return a[0]+(int)s.size();}\n' > /tmp/_probe.cpp
-
-          probe() {
-            set +e
-            clang++ --target=aarch64-linux-gnu "$@" -fsyntax-only /tmp/_probe.cpp > /tmp/_probe.log 2>&1
-            local rc=$?
-            set -e
-            if [ $rc -eq 0 ]; then echo "  自检 OK: $*"; else echo "  自检 FAIL: $*"; head -3 /tmp/_probe.log; fi
-            return $rc
-          }
-
-          # 关键：clang 未设置 --sysroot 时不解析 '-I=' 这种前缀，等于该目录根本没进搜索路径
-          # （run292 实测：/usr/include/c++/v1/array 明明存在，仍报 'array' file not found）
-          if [ -f "$LIBCXX_DIR/array" ] && probe -nostdinc++ -I"$LIBCXX_DIR"; then
-            echo "libc++ 可用 -> 把 '-I=/usr/include/c++/v1' 规整为可解析形式"
-            if ! grep -q -- '-I/usr/include/c++/v1' lsteamclient/Makefile.in; then
-              sed -i 's|-I=/usr/include/c++/v1|-I=/usr/include/c++/v1 -I/usr/include/c++/v1|g' lsteamclient/Makefile.in
-            fi
-          elif probe -nostdinc++ -I"$LIBCXX_DIR" || [ ! -f "$LIBCXX_DIR/array" ]; then
-            echo "libc++ 头不可用 -> 退回 libstdc++（multiarch 头路径，用可解析的 -I）"
-            INCS=""
-            for d in /usr/include/c++/14 /usr/include/c++/13 /usr/include/c++/12 \
-                     /usr/aarch64-linux-gnu/include/c++/14 \
-                     /usr/aarch64-linux-gnu/include/c++/13 \
-                     /usr/aarch64-linux-gnu/include/c++/12 \
-                     /usr/include/aarch64-linux-gnu/c++/14 \
-                     /usr/include/aarch64-linux-gnu/c++/13 \
-                     /usr/include/aarch64-linux-gnu/c++/12; do
-              [ -d "$d" ] && INCS="$INCS -I$d"
-            done
-            echo "将使用:${INCS}"
-            if [ -z "${INCS}" ]; then
-              echo "ERROR: 找不到任何 C++ 头目录，无法继续"; exit 1
-            fi
-            sed -i "s|-nostdinc++ -I=/usr/include/c++/v1|${INCS# }|g" lsteamclient/Makefile.in
+          # ---- (2) C++ 运行时链接 ----
+          # Wine 的 unix-lib 链接规则不会自动加 C++ 运行时，缺了就报
+          #   undefined reference to `std::__1::...'
+          # UNIX_LIBS 是 Wine 给 unix 侧模块的标准变量（见 dlls/winealsa.drv/Makefile.in）。
+          if ! grep -q '^UNIX_LIBS' lsteamclient/Makefile.in; then
+            sed -i '/^UNIX_CFLAGS/a UNIX_LIBS    = -lstdc++ -latomic' lsteamclient/Makefile.in
           fi
 
-          echo "=== 改后 UNIX_CFLAGS ==="
-          grep -n 'UNIX_CFLAGS' lsteamclient/Makefile.in || true
+          echo "=== 改后 ==="
+          grep -n 'UNIX_CFLAGS\|UNIX_LIBS' lsteamclient/Makefile.in || true
+
+          # ---- (3) 自检 ----
+          printf '#include <array>\n#include <cstdlib>\n#include <string>\n#include <memory>\nint main(){std::array<int,1> a{};std::string s;return a[0]+(int)s.size();}\n' > /tmp/_probe.cpp
+          set +e
+          clang++ --target=aarch64-linux-gnu ${INCS} -fsyntax-only /tmp/_probe.cpp && echo "C++ 头自检: OK" || echo "C++ 头自检: FAIL"
+          set -e
+
+          # AACC_UPDATED_V1
 
       - name: Regenerate Wine configure
         shell: bash
