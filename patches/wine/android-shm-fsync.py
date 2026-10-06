@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Termux/Android 适配补丁（对这些 Proton 派生的 wine 树通用、幂等）
+"""Termux/Android 适配补丁（针对 Proton 派生的 wine 树，幂等）
 
 1) server/fsync.c
-   a. 默认关闭 fsync（与 Valve 树一致：需 WINEFSYNC=1 才启用）。
-      原因：glibc 的 shm_open() 走 /dev/shm，而 Android 没有 /dev/shm。
+   a. 保留该树"fsync 默认开启"的设计（Proton 的 inproc_sync 层假设 fsync/ntsync
+      至少有一个可用；关掉 fsync 会落进它没设计的"两者都没有"状态 -> 崩）。
+      只把没有 /dev/shm 的问题用 b. 的兜底解决。
    b. 即便启用，shm_open 失败时退到 socket 目录（Termux tmp）里的普通文件；
       再失败就干净地放弃 fsync —— 关键是不再"假装初始化成功"，
       避免后续 mmap(-1) 失败后把 -1 塞进 shm_addrs，写它 => wineserver SIGSEGV。
@@ -46,12 +47,6 @@ def patch_file(path, pairs, optional=False):
 
 
 # ---------------------------------------------------------------- 1) server/fsync.c
-FSYNC_CHECK_OLD = ('    syscall( __NR_futex_waitv, 0, 0, 0, 0, 0 );\n'
-                   '    return !(getenv( "WINEFSYNC" ) && !atoi(getenv( "WINEFSYNC" ))) && errno != ENOSYS && errno != EPERM;\n')
-FSYNC_CHECK_NEW = ('    syscall( __NR_futex_waitv, 0, 0, 0, 0, 0 );\n'
-                   '    /* [CI] Android 没有 /dev/shm -> 默认关闭 fsync，需要时显式 WINEFSYNC=1 */\n'
-                   '    return getenv( "WINEFSYNC" ) && atoi(getenv( "WINEFSYNC" )) && errno != ENOSYS && errno != EPERM;\n')
-
 FSYNC_OPEN_OLD = ('    shm_fd = shm_open( shm_name, O_RDWR | O_CREAT | O_EXCL, 0644 );\n'
                   '    if (shm_fd == -1)\n'
                   '        perror( "shm_open" );\n')
@@ -77,7 +72,6 @@ FSYNC_UNLINK_NEW = ('    if (shm_fd >= 0) close( shm_fd );\n'
                     '    unlink( "wine-fsync-shm" );  /* [CI] 兜底路径的清理 */\n')
 
 patch_file("server/fsync.c", [
-    ("默认关闭 fsync", FSYNC_CHECK_OLD, FSYNC_CHECK_NEW),
     ("shm_open 兜底到 Termux tmp", FSYNC_OPEN_OLD, FSYNC_OPEN_NEW),
     ("清理兜底 shm 文件", FSYNC_UNLINK_OLD, FSYNC_UNLINK_NEW),
 ])
