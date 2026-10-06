@@ -1,0 +1,9 @@
+本文件存在时，FEX 构建跳过全部 stats 相关改动（纯上游行为）：
+  1) termux-shm-dir.py        —— 不改 stats 文件路径、不把 ProfileStats 默认改成 true
+  2) legacy-stats-size.py     —— 不把 legacy 路径的 stats 文件撑到 MAX_STATS_SIZE
+  3) stats-header-fallback.py —— 不往 stats 文件里手写 64 字节 header
+
+即：FEX 回到原版行为，不再生成/维护 stats 文件，也就不再有
+"每进程约 1 MiB + 每线程 ThreadStats" 的额外开销。
+
+想恢复这些改动：删除本文件即可。
