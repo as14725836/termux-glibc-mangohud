@@ -126,6 +126,42 @@ CLIENT_PAIRS = [
 ]
 patch_file("dlls/ntdll/unix/fsync.c", CLIENT_PAIRS, optional=True)
 
+
+# ------------------------------------------------- 4) 中性化 inproc/ntsync 层
+# 这棵树（Proton 的 inproc_sync）假设"fsync 或 ntsync 至少有一个可用"；
+# Android 上 /dev/ntsync 不存在，某些组合会落进它没设计的路径。
+# 这里把它变成"从不使用 in-process device"，与 Valve 树（根本没有这层）行为一致。
+INPROC_PAIRS = [
+    ("inproc_sync.c: 永不使用 /dev/ntsync",
+     '            fd = open( "/dev/ntsync", O_CLOEXEC | O_RDONLY );\n',
+     '            fd = -1;  /* [CI] Android: never use ntsync (no /dev/ntsync); fall back cleanly */\n'),
+]
+patch_file("server/inproc_sync.c", INPROC_PAIRS, optional=True)
+
+THREAD_PAIRS = [
+    ("thread.c: init_thread 显式声明没有 inproc device",
+     '    if (do_fsync())\n'
+     '    {\n'
+     '        reply->inproc_device = FSYNC_USED_BY_SERVER;\n'
+     '    }\n'
+     '    else if ((fd = get_inproc_device_fd()) >= 0)\n',
+     '    reply->inproc_device = 0;  /* [CI] 默认：没有 in-process device */\n'
+     '    if (do_fsync())\n'
+     '    {\n'
+     '        reply->inproc_device = FSYNC_USED_BY_SERVER;\n'
+     '    }\n'
+     '    else if ((fd = get_inproc_device_fd()) >= 0)\n'),
+    ("thread.c: 没有 inproc 对象时不要报错",
+     '    if ((fd = get_inproc_sync_fd( current->alert_sync )) < 0) set_error( STATUS_INVALID_PARAMETER );\n',
+     '    if ((fd = get_inproc_sync_fd( current->alert_sync )) < 0)\n'
+     '    {\n'
+     '        /* [CI] 没有 in-process sync 对象：明确返回"没有"，不要报错打断客户端初始化 */\n'
+     '        reply->fsync_shm_idx = -1;\n'
+     '        reply->handle = 0;\n'
+     '    }\n'),
+]
+patch_file("server/thread.c", THREAD_PAIRS, optional=True)
+
 print("----")
 print("共应用 %d 处；未匹配 %d 处" % (applied, len(missed)))
 if missed:
