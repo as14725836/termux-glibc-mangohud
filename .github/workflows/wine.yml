@@ -300,16 +300,14 @@ jobs:
         run: |
           set -x
           # 背景：The412Banner/proton-wine 的 lsteamclient/Makefile.in 写死
-          #   UNIX_CFLAGS = -nostdinc++ -I=/usr/include/c++/v1   （Android NDK 的 libc++ 布局）
+          #   UNIX_CFLAGS = -nostdinc++ -I=/usr/include/c++/v1
           # 容器默认只有 libstdc++ -> 'array' file not found。
           #
-          # 关键教训（run291 实测）：不要用 `apt-get install libc++-14-dev`！
-          # 它会因为跨架构依赖冲突顺手删掉 :arm64 的 dev 包：
-          #   Removing libgstreamer-plugins-base1.0-dev:arm64 ...
-          #   Removing libgstreamer1.0-dev:arm64 ...
-          #   Removing libunwind-dev:arm64 ...
-          # 于是 configure 报 "gstreamer-1.0 base plugins 64-bit development files not found"
-          # 而直接失败。这里改用 apt-get download + dpkg-deb 解包取文件，完全不动 dpkg 状态。
+          # 教训（run291）：不能用 apt-get install libc++-14-dev —— 会因跨架构冲突删掉
+          #   libgstreamer*-dev:arm64 / libunwind-dev:arm64，导致 configure 失败。
+          # 教训（run292）：Debian 的 /usr/include/c++/v1 是“符号链接”（指向
+          #   /usr/lib/llvm-14/include/c++/v1），cp -a 会复制成断链 -> array 仍缺失。
+          #   必须 cp -aL 或者直接找 /usr/lib/llvm-*/include/c++/v1。
           if [ -f /usr/include/c++/v1/array ]; then
             echo "libc++ 头文件已就绪，跳过"
             exit 0
@@ -318,7 +316,6 @@ jobs:
           mkdir -p /tmp/lcx && cd /tmp/lcx
           rm -f *.deb || true
           apt-get download libc++-14-dev libc++abi-14-dev >/dev/null 2>&1 || true
-          # aarch64 侧运行库（链接 unix .so 用），同样只解包不安装
           apt-get download libc++1-14:arm64 libc++abi1-14:arm64 >/dev/null 2>&1 || true
 
           mkdir -p /tmp/lcx/root
@@ -328,22 +325,30 @@ jobs:
             dpkg-deb -x "$d" /tmp/lcx/root || true
           done
 
-          if [ -d /tmp/lcx/root/usr/include/c++/v1 ]; then
+          SRCD=""
+          for cand in /tmp/lcx/root/usr/lib/llvm-*/include/c++/v1 /tmp/lcx/root/usr/include/c++/v1; do
+            if [ -d "$cand" ]; then SRCD="$cand"; break; fi
+          done
+          echo "头文件源目录: ${SRCD:-（未找到）}"
+          if [ -n "$SRCD" ]; then
+            rm -rf /usr/include/c++/v1
             mkdir -p /usr/include/c++
-            if [ ! -e /usr/include/c++/v1 ]; then
-              cp -a /tmp/lcx/root/usr/include/c++/v1 /usr/include/c++/v1
-            fi
+            cp -aL "$SRCD" /usr/include/c++/v1
           fi
 
           if [ -d /tmp/lcx/root/usr/lib/aarch64-linux-gnu ]; then
             cp -a /tmp/lcx/root/usr/lib/aarch64-linux-gnu/. /usr/lib/aarch64-linux-gnu/ 2>/dev/null || true
           fi
+          if [ -d /tmp/lcx/root/usr/lib/llvm-14/lib ]; then
+            mkdir -p /usr/lib/llvm-14/lib
+            cp -a /tmp/lcx/root/usr/lib/llvm-14/lib/. /usr/lib/llvm-14/lib/ 2>/dev/null || true
+          fi
 
           echo "--- /usr/include/c++/v1/array ---"
           ls -l /usr/include/c++/v1/array 2>/dev/null || echo "  仍缺失（下一步会退回 libstdc++）"
           echo "--- aarch64 侧 libc++ 库 ---"
-          ls -l /usr/lib/aarch64-linux-gnu/libc++* 2>/dev/null | head -5 || true
-          echo "--- 确认 :arm64 dev 包仍在（不能被删）---"
+          ls -l /usr/lib/aarch64-linux-gnu/libc++* 2>/dev/null | head -4 || true
+          echo "--- 确认 :arm64 dev 包仍在 ---"
           ls -d /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-1.0.pc 2>/dev/null || echo "  缺 gstreamer-1.0.pc"
 
       - name: 配置 Locale
@@ -1556,6 +1561,44 @@ jobs:
       # ============================================================
       # 9. Generate configure
       # ============================================================
+      - name: 修复 winbase.h 禁用宏 (WINE_UNIX_LIB 下不再 poison wcsncpy 等)
+        shell: bash
+        run: |
+          set -eux
+
+          cd "${WINE_SOURCE_DIR}/source"
+
+          F=include/winbase.h
+          if [ ! -f "$F" ]; then
+            echo "没有 $F，跳过"
+            exit 0
+          fi
+
+          echo "=== 原始守卫 ==="
+          grep -n 'WINE_NO_INLINE_STRING' "$F" | head -5 || true
+
+          # 背景：该树 lsteamclient/unix_bl_server_browser.cpp 先 include unix_private.h
+          # （-> windef.h/winbase.h，带 __WINESRC__ + WINE_NO_INLINE_STRING），
+          # 再 include <memory>/<string> 等 C++ 头 -> <cwchar> -> <wchar.h>，
+          # 而 winbase.h 里
+          #   #define wcsncpy(d,s,n) error do_not_use_wcsncpy_use_lstrcpynW_or_memcpy_instead
+          # 把 wchar.h 的函数声明打烂：
+          #   wchar.h:92: error: expected ';' after top level declarator
+          # unix 侧代码本来就不该用这些 Windows 内联字符串函数，所以在 WINE_UNIX_LIB 下关掉。
+          n="$(grep -n '^#if !defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)$' "$F" | sed -n '1p' | cut -d: -f1 || true)"
+          if [ -z "$n" ]; then
+            echo "未找到预期守卫行（可能已打过），当前内容："
+            grep -n 'defined(WINE_NO_INLINE_STRING)' "$F" | head -5 || true
+          else
+            sed -i "${n}s/.*/#if (!defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)) \&\& !defined(WINE_UNIX_LIB)/" "$F"
+            echo "已改写第 ${n} 行"
+          fi
+
+          echo "=== 改后 ==="
+          grep -n 'WINE_NO_INLINE_STRING' "$F" | head -5 || true
+          echo "=== 确认 poison 仍在（Windows 侧不受影响）==="
+          grep -n 'do_not_use_wcsncpy' "$F" | head -3 || true
+
       - name: lsteamclient C++ 标准库适配 (libc++)
         shell: bash
         run: |
