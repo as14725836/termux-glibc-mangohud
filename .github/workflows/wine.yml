@@ -1527,7 +1527,7 @@ jobs:
       # ============================================================
       # 9. Generate configure
       # ============================================================
-      - name: 修复 winbase.h 禁用宏 (WINE_UNIX_LIB 下不再 poison wcsncpy 等)
+      - name: 修复 winbase.h poison 分支 (WINE_UNIX_LIB 下不定义 wcsncpy/strncpy 禁用宏)
         shell: bash
         run: |
           set -eux
@@ -1540,30 +1540,33 @@ jobs:
             exit 0
           fi
 
-          echo "=== 原始守卫 ==="
-          grep -n 'WINE_NO_INLINE_STRING' "$F" | head -5 || true
-
-          # 背景：该树 lsteamclient/unix_bl_server_browser.cpp 先 include unix_private.h
-          # （-> windef.h/winbase.h，带 __WINESRC__ + WINE_NO_INLINE_STRING），
-          # 再 include <memory>/<string> 等 C++ 头 -> <cwchar> -> <wchar.h>，
-          # 而 winbase.h 里
-          #   #define wcsncpy(d,s,n) error do_not_use_wcsncpy_use_lstrcpynW_or_memcpy_instead
-          # 把 wchar.h 的函数声明打烂：
-          #   wchar.h:92: error: expected ';' after top level declarator
-          # unix 侧代码本来就不该用这些 Windows 内联字符串函数，所以在 WINE_UNIX_LIB 下关掉。
-          n="$(grep -n '^#if !defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)$' "$F" | sed -n '1p' | cut -d: -f1 || true)"
-          if [ -z "$n" ]; then
-            echo "未找到预期守卫行（可能已打过），当前内容："
-            grep -n 'defined(WINE_NO_INLINE_STRING)' "$F" | head -5 || true
-          else
-            sed -i "${n}s/.*/#if (!defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)) \&\& !defined(WINE_UNIX_LIB)/" "$F"
-            echo "已改写第 ${n} 行"
+          # 该树的 winbase.h 结构：
+          #   #if !defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)
+          #       ...内联 lstr* 帮助函数...
+          #   #else
+          #       #define strncpy(d,s,n) error do_not_use_strncpy_...
+          #       #define wcsncpy(d,s,n) error do_not_use_wcsncpy_...
+          #   #endif
+          # unix 侧 C++ TU（lsteamclient/unix_bl_server_browser.cpp）先 include unix_private.h
+          # （-> winbase.h）再 include <memory>/<string> -> <cwchar> -> <wchar.h>，
+          # poison 宏会把 wchar.h 的函数声明打烂（expected ';' / 'wcscpy' in the global namespace）。
+          # 正确做法：把 poison 分支的 #else 改成 #elif !defined(WINE_UNIX_LIB)。
+          L1="$(grep -n '^#if.*WINE_NO_INLINE_STRING' "$F" | head -1 | cut -d: -f1 || true)"
+          if [ -z "$L1" ]; then
+            echo "!! 找不到守卫 #if，跳过"; exit 0
           fi
+          echo "守卫行: ${L1}"
+          sed -i "${L1}s|.*|#if !defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)|" "$F"
 
-          echo "=== 改后 ==="
-          grep -n 'WINE_NO_INLINE_STRING' "$F" | head -5 || true
-          echo "=== 确认 poison 仍在（Windows 侧不受影响）==="
-          grep -n 'do_not_use_wcsncpy' "$F" | head -3 || true
+          L2="$(awk -v s="$L1" 'NR > s && /^#else$/ { print NR; exit }' "$F")"
+          if [ -z "$L2" ]; then
+            echo "!! 守卫之后找不到 #else，跳过"; exit 0
+          fi
+          echo "poison 分支行: ${L2}"
+          sed -i "${L2}s|.*|#elif !defined(WINE_UNIX_LIB)|" "$F"
+
+          echo "=== 改后结构 ==="
+          grep -n 'WINE_NO_INLINE_STRING\|elif !defined(WINE_UNIX_LIB)\|do_not_use_wcsncpy' "$F" | head -8 || true
 
       - name: lsteamclient C++ 标准库适配 (libc++)
         shell: bash
