@@ -454,6 +454,7 @@ jobs:
           # ---- [Termux patch] FEX stats 文件改到 /data/data/com.termux/files/usr/tmp（不再用 /dev/shm）----
           if [ -f "${GITHUB_WORKSPACE}/patches/fex/skip-stats-patch" ]; then
             echo "=== [skip] patches/fex/skip-stats-patch 存在：本次不打 stats 路径 / 默认开启补丁（纯上游行为）==="
+          # 同一开关也挡掉了 legacy-stats-size.py 与 stats-header-fallback.py
           else
             python3 "${GITHUB_WORKSPACE}/patches/fex/termux-shm-dir.py" /opt/fex-src
           fi
@@ -467,7 +468,8 @@ jobs:
           # ---- [Termux patch] FEX-2608 那代的 legacy 路径：给 stats 文件补上真实大小 ----
           # Wine 下 CreateFileA() 建出来的是 0 字节文件，NtCreateSection 只在内存里映射，
           # 文件大小永远是 0 -> MangoHud 读到“空文件”。新版（>=2609）已无此路径，会自动跳过。
-          if [ -f "${GITHUB_WORKSPACE}/patches/fex/legacy-stats-size.py" ]; then
+          # 已被 patches/fex/skip-stats-patch 统一关闭（纯上游行为）
+          if [ ! -f "${GITHUB_WORKSPACE}/patches/fex/skip-stats-patch" && -f "${GITHUB_WORKSPACE}/patches/fex/legacy-stats-size.py" ]; then
             python3 "${GITHUB_WORKSPACE}/patches/fex/legacy-stats-size.py" /opt/fex-src
           fi
 
@@ -475,7 +477,7 @@ jobs:
           # Wine 下 NtCreateSection 常失败 -> AllocateSHMSlots 返回空 ->
           # StatAlloc 里的 SaveHeader(AppType) 被跳过 -> 文件 1 MiB 但内容全 0
           # -> MangoHud 报 version mismatch (header=0)。这里直接手写 header 兜底。
-          if [ -f "${GITHUB_WORKSPACE}/patches/fex/stats-header-fallback.py" ]; then
+          if [ ! -f "${GITHUB_WORKSPACE}/patches/fex/skip-stats-patch" && -f "${GITHUB_WORKSPACE}/patches/fex/stats-header-fallback.py" ]; then
             export FEX_VERSION_STRING="$(git -C /opt/fex-src describe --tags 2>/dev/null || git -C /opt/fex-src rev-parse --short HEAD 2>/dev/null || echo FEX)"
             echo "header 版本串 = ${FEX_VERSION_STRING}"
             python3 "${GITHUB_WORKSPACE}/patches/fex/stats-header-fallback.py" /opt/fex-src
