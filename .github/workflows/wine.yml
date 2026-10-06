@@ -1694,12 +1694,13 @@ jobs:
           # 表现为：wineserver crashed / wine client error recvmsg Connection reset。
           python3 "${GITHUB_WORKSPACE}/patches/wine/android-shm-fsync.py" "." || true
 
-          # 精确校验：只有"默认开启 fsync"这个坏模式还在时才算失败
-          if grep -q 'return !(getenv( "WINEFSYNC" )' server/fsync.c; then
-            echo "FATAL: fsync 默认开启的代码仍在，补丁未生效"; exit 1
+          # 精确校验：shm 兜底必须已经进入源码
+          if ! grep -q 'wine-fsync-shm' server/fsync.c; then
+            echo "FATAL: fsync shm 兜底未生效"; exit 1
           fi
-          echo "=== 校验通过：fsync 默认关闭 ==="
-          grep -n 'CI\] Android' server/fsync.c server/token.c | head -6 || true
+          echo "=== 校验通过：fsync 走 Termux tmp 兜底 ==="
+          grep -n 'wine-fsync-shm' server/fsync.c dlls/ntdll/unix/fsync.c | head -6 || true
+          grep -n 'have_machine_id' server/token.c | head -2 || true
 
       - name: Regenerate Wine configure
         shell: bash
