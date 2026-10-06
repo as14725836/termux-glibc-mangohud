@@ -1527,7 +1527,7 @@ jobs:
       # ============================================================
       # 9. Generate configure
       # ============================================================
-      - name: 修复 winbase.h poison 分支 (WINE_UNIX_LIB 下不定义 wcsncpy/strncpy 禁用宏)
+      - name: 修复 winbase.h poison 对 unix 侧 C++ TU 的破坏 (WINE_UNIX_LIB 下 undef)
         shell: bash
         run: |
           set -eux
@@ -1540,39 +1540,62 @@ jobs:
             exit 0
           fi
 
-          # 该树的 winbase.h 结构：
-          #   #if !defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)
-          #       ...内联 lstr* 帮助函数...
-          #   #else
-          #       #define strncpy(d,s,n) error do_not_use_strncpy_...
-          #       #define wcsncpy(d,s,n) error do_not_use_wcsncpy_...
-          #   #endif
-          # unix 侧 C++ TU（lsteamclient/unix_bl_server_browser.cpp）先 include unix_private.h
-          # （-> winbase.h）再 include <memory>/<string> -> <cwchar> -> <wchar.h>，
-          # poison 宏会把 wchar.h 的函数声明打烂（expected ';' / 'wcscpy' in the global namespace）。
-          # 正确做法：把 poison 分支的 #else 改成 #elif !defined(WINE_UNIX_LIB)。
+          # 该树 lsteamclient 的 unix 侧 C++ TU（unix_bl_server_browser.cpp）先 include
+          # unix_private.h（-> winbase.h），再 include <memory>/<string> -> <cwchar> -> <wchar.h>。
+          # 而 winbase.h 的 poison 块（__WINESRC__ 构建时生效）里
+          #     #define wcsncpy(d,s,n) error do_not_use_wcsncpy_use_lstrcpynW_or_memcpy_instead
+          # 会把 wchar.h 的函数声明打烂：expected ';' / 'wcscpy' in the global namespace。
           #
-          # 注意：这里只用 awk（自己 exit，不产生 SIGPIPE）—— 用 grep|head 会被
-          # bash -o pipefail 判为失败，把整个步骤弄挂（run295 的教训）。
+          # 做法：不动 winbase.h 原有结构，只在 poison 块的 #endif 之后补一段 undef，
+          # 且仅在 WINE_UNIX_LIB（unix 侧）时生效。PE 侧行为与上游完全一致。
+          # 纯 awk + sed（, 分隔符），不用 grep|head（pipefail 下会 SIGPIPE）。
+
           L1="$(awk '/^#if.*WINE_NO_INLINE_STRING/ { print NR; exit }' "$F" || true)"
-          if [ -z "${L1}" ]; then
-            echo "!! 找不到守卫 #if，跳过"
-            exit 0
+          if [ -n "${L1}" ]; then
+            sed -i "${L1}s,.*,#if !defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)," "$F"
+            echo "守卫行归一化: ${L1}"
           fi
-          echo "守卫行: ${L1}"
-          sed -i "${L1}s,.*,#if !defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)," "$F"
 
-          L2="$(awk -v s="${L1}" 'NR > s && /^#else$/ { print NR; exit }' "$F" || true)"
+          # 若上一版补丁把 #else 改成了 #elif，恢复回来
+          L2="$(awk -v s="${L1:-0}" 'NR > s && /^#else$/ { print NR; exit }' "$F" || true)"
           if [ -z "${L2}" ]; then
-            echo "!! 守卫之后找不到 #else，跳过"
-            exit 0
+            L2="$(awk '/^#elif !defined\(WINE_UNIX_LIB\)$/ { print NR; exit }' "$F" || true)"
+            if [ -n "${L2}" ]; then
+              sed -i "${L2}s,.*,#else," "$F"
+              echo "已把 ${L2} 行恢复为 #else"
+            fi
           fi
-          echo "poison 分支行: ${L2}"
-          sed -i "${L2}s,.*,#elif !defined(WINE_UNIX_LIB)," "$F"
 
-          echo "=== 改后结构 ==="
-          awk 'NR >= '"${L1}"' && NR <= '"${L2}"' && /^#(if|elif|else|endif)/ { print NR": "$0 }' "$F" || true
-          awk '/do_not_use_wcsncpy/ { print NR": "$0; exit }' "$F" || true
+          # poison 位置 + 其后的第一个 #endif
+          P="$(awk '/^#define wcsncpy\(d,s,n\) error do_not_use_wcsncpy/ { print NR; exit }' "$F" || true)"
+          if [ -z "${P}" ]; then
+            echo "!! 找不到 wcsncpy poison 行，跳过"; exit 0
+          fi
+          E="$(awk -v s="${P}" 'NR > s && /^#endif/ { print NR; exit }' "$F" || true)"
+          echo "poison 行: ${P}, 块尾 #endif: ${E}"
+
+          if [ -n "${E}" ]; then
+            if awk -v n="$((E + 1))" 'NR == n && /^#ifdef WINE_UNIX_LIB/ { found = 1 } END { exit !found }' "$F"; then
+              echo "已存在 undef 段，跳过插入"
+            else
+              awk -v n="${E}" 'NR == n {
+                  print;
+                  print "#ifdef WINE_UNIX_LIB";
+                  print "#undef strncpy";
+                  print "#undef wcsncpy";
+                  print "#endif";
+                  next
+                }
+                { print }' "$F" > "${F}.ci" && mv "${F}.ci" "$F"
+              echo "已在 ${E} 行后插入 WINE_UNIX_LIB undef 段"
+            fi
+          fi
+
+          echo "=== 结果检查 ==="
+          awk '/^#if.*WINE_NO_INLINE_STRING/ { print NR": "$0 }' "$F" || true
+          awk '/^#else$/ { print NR": "$0 }' "$F" || true
+          awk '/do_not_use_wcsncpy/ { print NR": "$0 }' "$F" || true
+          awk '/#ifdef WINE_UNIX_LIB/ { print NR": "$0 }' "$F" || true
 
       - name: lsteamclient C++ 标准库适配 (libc++)
         shell: bash
