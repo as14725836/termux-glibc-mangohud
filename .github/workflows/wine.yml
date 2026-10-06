@@ -15,7 +15,6 @@ on:
           - pipetto-proton9-arm64ec
           - proton-10.34-GE
           - proton-gamenative
-          - proton-11.0-cachyos
           - valve-wine
 
       wine_version:
@@ -39,18 +38,6 @@ on:
         description: 'GameNative proton-wine 分支（wine_branch=proton-gamenative 时生效）'
         required: false
         default: 'proton_11.0-2'
-        type: string
-
-      cachyos_repo:
-        description: 'CachyOS Proton 源码仓库（wine_branch=proton-11.0-cachyos 时生效，可换 fork）'
-        required: false
-        default: 'https://github.com/The412Banner/proton-wine.git'
-        type: string
-
-      cachyos_branch:
-        description: 'CachyOS Proton 源码分支（The412Banner/proton-wine，默认 CachyOS 11.0-20261005）'
-        required: false
-        default: 'proton_11.0-cachyos-20261005'
         type: string
 
       valve_repo:
@@ -295,28 +282,6 @@ jobs:
       # ============================================================
       # 3. locales
       # ============================================================
-      - name: 提供 C++ 运行库链接名（aarch64：libatomic / libc++ 兜底）
-        shell: bash
-        run: |
-          set -x
-          cd /tmp
-          # lsteamclient 的 unix 侧是 C++（libstdc++ ABI 已由 g++-aarch64-linux-gnu 提供），
-          # 但 C++ 头里的 16 字节原子会用到 __atomic_store -> 需要 libatomic。
-          # 这里只保证存在“可被 -l 找到的链接名”，不动 dpkg 状态。
-          A=/usr/lib/aarch64-linux-gnu
-          if [ ! -e "$A/libatomic.so" ]; then
-            if [ ! -e "$A/libatomic.so.1" ]; then
-              rm -rf /tmp/lat && mkdir -p /tmp/lat/root
-              apt-get download libatomic1:arm64 >/dev/null 2>&1 || true
-              for d in libatomic1_*.deb; do [ -e "$d" ] && dpkg-deb -x "$d" /tmp/lat/root || true; done
-              [ -d /tmp/lat/root/usr/lib/aarch64-linux-gnu ] && \
-                cp -a /tmp/lat/root/usr/lib/aarch64-linux-gnu/. "$A/" 2>/dev/null || true
-            fi
-            [ -e "$A/libatomic.so.1" ] && ln -sf libatomic.so.1 "$A/libatomic.so" || true
-          fi
-          ls -l "$A/libatomic.so" "$A/libatomic.so.1" 2>/dev/null || echo "  libatomic 链接名仍缺失"
-          ls -l "$A/libstdc++.so" "$A/libstdc++.so.6" 2>/dev/null | head -2 || echo "  libstdc++ 链接名缺失"
-
       - name: 配置 Locale
         shell: bash
         run: |
@@ -524,8 +489,6 @@ jobs:
           INPUT_WINE_VERSION: ${{ inputs.wine_version }}
           INPUT_PROTON_BRANCH: ${{ inputs.proton_branch }}
           INPUT_GN_BRANCH: ${{ inputs.gamenative_branch }}
-          INPUT_CACHYOS_REPO: ${{ inputs.cachyos_repo }}
-          INPUT_CACHYOS_BRANCH: ${{ inputs.cachyos_branch }}
           INPUT_VALVE_REPO: ${{ inputs.valve_repo }}
           INPUT_VALVE_BRANCH: ${{ inputs.valve_branch }}
           INPUT_PROTON_COMMIT: ${{ inputs.proton_commit }}
@@ -723,42 +686,6 @@ jobs:
               echo "Valve wine(${VALVE_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
               echo "WINE_SRC_REPO=${VALVE_REPO}" >> "$GITHUB_ENV"
               echo "WINE_SRC_BRANCH=${VALVE_BRANCH}" >> "$GITHUB_ENV"
-              ;;
-            proton-11.0-cachyos)
-              echo "=== The412Banner proton-wine (CachyOS, proton_11.0 系列) ==="
-              echo "NOTE: 该树带 dlls/winedirectaudio.drv 子模块，由后面「初始化子模块」步骤兜底"
-
-              # 想换分支/上游，改下面两个变量即可（也可用 inputs 覆盖）
-              CACHYOS_REPO="${INPUT_CACHYOS_REPO:-https://github.com/The412Banner/proton-wine.git}"
-              CACHYOS_BRANCH="${INPUT_CACHYOS_BRANCH:-proton_11.0-cachyos-20261005}"
-
-              echo "CachyOS repo   : ${CACHYOS_REPO}"
-              echo "CachyOS branch : ${CACHYOS_BRANCH}"
-
-              git clone \
-                --branch "${CACHYOS_BRANCH}" \
-                --single-branch \
-                "${CACHYOS_REPO}" \
-                source
-
-              cd source
-
-              git config advice.detachedHead false
-
-              if [ -n "${INPUT_PROTON_COMMIT}" ]; then
-                echo "Checking out commit ${INPUT_PROTON_COMMIT}"
-
-                git fetch \
-                  --depth=1 \
-                  origin \
-                  "${INPUT_PROTON_COMMIT}" || true
-
-                git checkout "${INPUT_PROTON_COMMIT}"
-              fi
-
-              echo "proton-wine(${CACHYOS_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
-              echo "WINE_SRC_REPO=${CACHYOS_REPO}" >> "$GITHUB_ENV"
-              echo "WINE_SRC_BRANCH=${CACHYOS_BRANCH}" >> "$GITHUB_ENV"
               ;;
             proton-gamenative)
               echo "=== GameNative/proton-wine ==="
@@ -1527,181 +1454,6 @@ jobs:
       # ============================================================
       # 9. Generate configure
       # ============================================================
-      - name: 修复 winbase.h poison 对 unix 侧 C++ TU 的破坏 (WINE_UNIX_LIB 下 undef)
-        shell: bash
-        run: |
-          set -eux
-
-          cd "${WINE_SOURCE_DIR}/source"
-
-          F=include/winbase.h
-          if [ ! -f "$F" ]; then
-            echo "没有 $F，跳过"
-            exit 0
-          fi
-
-          # 该树 lsteamclient 的 unix 侧 C++ TU（unix_bl_server_browser.cpp）先 include
-          # unix_private.h（-> winbase.h），再 include <memory>/<string> -> <cwchar> -> <wchar.h>。
-          # 而 winbase.h 的 poison 块（__WINESRC__ 构建时生效）里
-          #     #define wcsncpy(d,s,n) error do_not_use_wcsncpy_use_lstrcpynW_or_memcpy_instead
-          # 会把 wchar.h 的函数声明打烂：expected ';' / 'wcscpy' in the global namespace。
-          #
-          # 做法：不动 winbase.h 原有结构，只在 poison 块的 #endif 之后补一段 undef，
-          # 且仅在 WINE_UNIX_LIB（unix 侧）时生效。PE 侧行为与上游完全一致。
-          # 纯 awk + sed（, 分隔符），不用 grep|head（pipefail 下会 SIGPIPE）。
-
-          L1="$(awk '/^#if.*WINE_NO_INLINE_STRING/ { print NR; exit }' "$F" || true)"
-          if [ -n "${L1}" ]; then
-            sed -i "${L1}s,.*,#if !defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)," "$F"
-            echo "守卫行归一化: ${L1}"
-          fi
-
-          # 若上一版补丁把 #else 改成了 #elif，恢复回来
-          L2="$(awk -v s="${L1:-0}" 'NR > s && /^#else$/ { print NR; exit }' "$F" || true)"
-          if [ -z "${L2}" ]; then
-            L2="$(awk '/^#elif !defined\(WINE_UNIX_LIB\)$/ { print NR; exit }' "$F" || true)"
-            if [ -n "${L2}" ]; then
-              sed -i "${L2}s,.*,#else," "$F"
-              echo "已把 ${L2} 行恢复为 #else"
-            fi
-          fi
-
-          # poison 位置 + 其后的第一个 #endif
-          P="$(awk '/^#define wcsncpy\(d,s,n\) error do_not_use_wcsncpy/ { print NR; exit }' "$F" || true)"
-          if [ -z "${P}" ]; then
-            echo "!! 找不到 wcsncpy poison 行，跳过"; exit 0
-          fi
-          E="$(awk -v s="${P}" 'NR > s && /^#endif/ { print NR; exit }' "$F" || true)"
-          echo "poison 行: ${P}, 块尾 #endif: ${E}"
-
-          if [ -n "${E}" ]; then
-            if awk -v n="$((E + 1))" 'NR == n && /^#ifdef WINE_UNIX_LIB/ { found = 1 } END { exit !found }' "$F"; then
-              echo "已存在 undef 段，跳过插入"
-            else
-              awk -v n="${E}" 'NR == n {
-                  print;
-                  print "#ifdef WINE_UNIX_LIB";
-                  print "#undef strncpy";
-                  print "#undef wcsncpy";
-                  print "#endif";
-                  next
-                }
-                { print }' "$F" > "${F}.ci" && mv "${F}.ci" "$F"
-              echo "已在 ${E} 行后插入 WINE_UNIX_LIB undef 段"
-            fi
-          fi
-
-          echo "=== 结果检查 ==="
-          awk '/^#if.*WINE_NO_INLINE_STRING/ { print NR": "$0 }' "$F" || true
-          awk '/^#else$/ { print NR": "$0 }' "$F" || true
-          awk '/do_not_use_wcsncpy/ { print NR": "$0 }' "$F" || true
-          awk '/#ifdef WINE_UNIX_LIB/ { print NR": "$0 }' "$F" || true
-
-      - name: lsteamclient C++ 标准库适配 (libc++)
-        shell: bash
-        run: |
-          set -eux
-
-          cd "${WINE_SOURCE_DIR}/source"
-
-          if [ ! -f lsteamclient/Makefile.in ]; then
-            echo "该树没有 lsteamclient/Makefile.in，跳过"
-            exit 0
-          fi
-
-          echo "=== 原 UNIX_CFLAGS / UNIX_LIBS ==="
-          grep -n 'UNIX_CFLAGS' lsteamclient/Makefile.in || true
-          grep -n 'UNIX_LIBS' lsteamclient/Makefile.in || true
-
-          # ---- (1) C++ 头路径 ----
-          # 这棵树给 lsteamclient 写死了 Android NDK 的 libc++ 路径：
-          #   UNIX_CFLAGS = -nostdinc++ -I=/usr/include/c++/v1
-          # 两个问题：(a) 容器默认只有 libstdc++；(b) clang 未设 --sysroot 时不解析 '-I=' 前缀。
-          # 统一改用 libstdc++（容器自带、aarch64 multiarch 也有、Termux glibc 侧基本都有），
-          # 用可解析的 '-I' 形式。
-          INCS=""
-          for d in /usr/aarch64-linux-gnu/include/c++/12 \
-                   /usr/include/aarch64-linux-gnu/c++/12 \
-                   /usr/include/c++/12 \
-                   /usr/aarch64-linux-gnu/include/c++/13 \
-                   /usr/include/aarch64-linux-gnu/c++/13 \
-                   /usr/include/c++/13; do
-            [ -d "$d" ] && INCS="$INCS -I$d"
-          done
-          if [ -z "$INCS" ]; then
-            echo "ERROR: 找不到 any C++ 头目录"; exit 1
-          fi
-          echo "C++ 头: ${INCS}"
-          sed -i "s|-nostdinc++ -I=/usr/include/c++/v1|${INCS# }|g" lsteamclient/Makefile.in
-
-          # ---- (2) C++ 运行时链接 ----
-          # Wine 的 unix-lib 链接规则不会自动加 C++ 运行时，缺了就报
-          #   undefined reference to `std::__1::...'
-          # UNIX_LIBS 是 Wine 给 unix 侧模块的标准变量（见 dlls/winealsa.drv/Makefile.in）。
-          if ! grep -q '^UNIX_LIBS' lsteamclient/Makefile.in; then
-            sed -i '/^UNIX_CFLAGS/a UNIX_LIBS    = -lstdc++ -latomic' lsteamclient/Makefile.in
-          fi
-
-          echo "=== 改后 ==="
-          grep -n 'UNIX_CFLAGS\|UNIX_LIBS' lsteamclient/Makefile.in || true
-
-          # ---- (2.5) 把 C++ 标准库 include 前置（规避 winbase.h poison）----
-          for f in lsteamclient/*.cpp; do
-            [ -f "$f" ] || continue
-            if awk '/\[CI\] C\+\+ 标准库前置/{ f = 1; exit } END { exit !f }' "$f"; then
-              continue
-            fi
-            awk 'BEGIN {
-                   print "/* [CI] C++ 标准库前置（规避 winbase.h poison 宏打烂 wchar.h） */";
-                   print "#include <array>";
-                   print "#include <memory>";
-                   print "#include <string>";
-                   print "#include <mutex>";
-                   print "#include <thread>";
-                   print "#include <atomic>";
-                   print "#include <vector>";
-                   print "#include <deque>";
-                   print "#include <functional>";
-                 }
-                 { print }' "$f" > "$f.ci" && mv "$f.ci" "$f"
-            echo "已前置 C++ 头: $f"
-          done
-
-          # ---- (3) 自检 ----
-          printf '#include <array>\n#include <cstdlib>\n#include <string>\n#include <memory>\nint main(){std::array<int,1> a{};std::string s;return a[0]+(int)s.size();}\n' > /tmp/_probe.cpp
-          set +e
-          clang++ --target=aarch64-linux-gnu ${INCS} -fsyntax-only /tmp/_probe.cpp && echo "C++ 头自检: OK" || echo "C++ 头自检: FAIL"
-          set -e
-
-          # AACC_UPDATED_V1
-
-      - name: Android/Termux 适配 (fsync 无 /dev/shm 兜底 + machine-id 派生)
-        shell: bash
-        run: |
-          set -eux
-
-          cd "${WINE_SOURCE_DIR}/source"
-
-          if [ ! -f server/fsync.c ]; then
-            echo "没有 server/fsync.c，跳过"
-            exit 0
-          fi
-
-          # 背景：glibc 的 shm_open() 走 /dev/shm，而 Android 没有 /dev/shm。
-          # Proton 派生树里 server/fsync.c 的 fsync_check_support() 默认开启 fsync
-          # （Valve 树是 opt-in），于是 fsync_init() 里 shm_open 失败 -> shm_fd=-1
-          # -> ftruncate/mmap 失败 -> shm_addrs 被填 -1 -> 写它 => wineserver SIGSEGV
-          # 表现为：wineserver crashed / wine client error recvmsg Connection reset。
-          python3 "${GITHUB_WORKSPACE}/patches/wine/android-shm-fsync.py" "." || true
-
-          # 精确校验：shm 兜底必须已经进入源码
-          if ! grep -q 'wine-fsync-shm' server/fsync.c; then
-            echo "FATAL: fsync shm 兜底未生效"; exit 1
-          fi
-          echo "=== 校验通过：fsync 走 Termux tmp 兜底 ==="
-          grep -n 'wine-fsync-shm' server/fsync.c dlls/ntdll/unix/fsync.c | head -6 || true
-          grep -n 'have_machine_id' server/token.c | head -2 || true
-
       - name: Regenerate Wine configure
         shell: bash
         run: |
@@ -2817,12 +2569,6 @@ jobs:
 
           Proton commit:
           ${{ inputs.proton_commit }}
-
-          CachyOS repo:
-          ${{ inputs.cachyos_repo }}
-
-          CachyOS branch:
-          ${{ inputs.cachyos_branch }}
 
           Valve repo:
           ${{ inputs.valve_repo }}
