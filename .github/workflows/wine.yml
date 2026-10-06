@@ -295,7 +295,7 @@ jobs:
       # ============================================================
       # 3. locales
       # ============================================================
-      - name: 安装 libc++（lsteamclient 的 C++ 标准库）
+      - name: 提供 libc++（lsteamclient 的 C++ 标准库，不碰 apt 状态）
         shell: bash
         run: |
           set -x
@@ -303,26 +303,48 @@ jobs:
           #   UNIX_CFLAGS = -nostdinc++ -I=/usr/include/c++/v1   （Android NDK 的 libc++ 布局）
           # 容器默认只有 libstdc++ -> 'array' file not found。
           #
-          # 注意：只装“头文件”包。不要装 libc++1:arm64 / libc++abi1:arm64 这类
-          # 跨架构运行库——它们的依赖（libc++1-14:arm64）在本容器装不上，
-          # 会把 apt 依赖状态搞成 broken，导致后面 `apt-get install locales`
-          # 直接以 100 退出（run290 的教训）。
+          # 关键教训（run291 实测）：不要用 `apt-get install libc++-14-dev`！
+          # 它会因为跨架构依赖冲突顺手删掉 :arm64 的 dev 包：
+          #   Removing libgstreamer-plugins-base1.0-dev:arm64 ...
+          #   Removing libgstreamer1.0-dev:arm64 ...
+          #   Removing libunwind-dev:arm64 ...
+          # 于是 configure 报 "gstreamer-1.0 base plugins 64-bit development files not found"
+          # 而直接失败。这里改用 apt-get download + dpkg-deb 解包取文件，完全不动 dpkg 状态。
           if [ -f /usr/include/c++/v1/array ]; then
-            echo "libc++ 头文件已就绪，跳过安装"
+            echo "libc++ 头文件已就绪，跳过"
             exit 0
           fi
 
-          apt-get install -y --no-install-recommends libc++-14-dev libc++abi-14-dev || \
-            apt-get install -y --no-install-recommends libc++-dev libc++abi-dev || true
+          mkdir -p /tmp/lcx && cd /tmp/lcx
+          rm -f *.deb || true
+          apt-get download libc++-14-dev libc++abi-14-dev >/dev/null 2>&1 || true
+          # aarch64 侧运行库（链接 unix .so 用），同样只解包不安装
+          apt-get download libc++1-14:arm64 libc++abi1-14:arm64 >/dev/null 2>&1 || true
 
-          # 兜底：万一依赖状态被破坏，先修好，别影响后续步骤
-          apt-get -f install -y || true
-          dpkg --configure -a || true
+          mkdir -p /tmp/lcx/root
+          for d in /tmp/lcx/*.deb; do
+            [ -e "$d" ] || continue
+            echo "解包 $d"
+            dpkg-deb -x "$d" /tmp/lcx/root || true
+          done
 
-          echo "--- /usr/include/c++/v1 ---"
-          ls /usr/include/c++/v1 2>/dev/null | head -5 || echo "  (头文件仍缺失，下一步会退回 libstdc++)"
-          echo "--- apt 健康检查 ---"
-          apt-get check 2>&1 | tail -3 || true
+          if [ -d /tmp/lcx/root/usr/include/c++/v1 ]; then
+            mkdir -p /usr/include/c++
+            if [ ! -e /usr/include/c++/v1 ]; then
+              cp -a /tmp/lcx/root/usr/include/c++/v1 /usr/include/c++/v1
+            fi
+          fi
+
+          if [ -d /tmp/lcx/root/usr/lib/aarch64-linux-gnu ]; then
+            cp -a /tmp/lcx/root/usr/lib/aarch64-linux-gnu/. /usr/lib/aarch64-linux-gnu/ 2>/dev/null || true
+          fi
+
+          echo "--- /usr/include/c++/v1/array ---"
+          ls -l /usr/include/c++/v1/array 2>/dev/null || echo "  仍缺失（下一步会退回 libstdc++）"
+          echo "--- aarch64 侧 libc++ 库 ---"
+          ls -l /usr/lib/aarch64-linux-gnu/libc++* 2>/dev/null | head -5 || true
+          echo "--- 确认 :arm64 dev 包仍在（不能被删）---"
+          ls -d /usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-1.0.pc 2>/dev/null || echo "  缺 gstreamer-1.0.pc"
 
       - name: 配置 Locale
         shell: bash
