@@ -1551,22 +1551,28 @@ jobs:
           # （-> winbase.h）再 include <memory>/<string> -> <cwchar> -> <wchar.h>，
           # poison 宏会把 wchar.h 的函数声明打烂（expected ';' / 'wcscpy' in the global namespace）。
           # 正确做法：把 poison 分支的 #else 改成 #elif !defined(WINE_UNIX_LIB)。
-          L1="$(grep -n '^#if.*WINE_NO_INLINE_STRING' "$F" | head -1 | cut -d: -f1 || true)"
-          if [ -z "$L1" ]; then
-            echo "!! 找不到守卫 #if，跳过"; exit 0
+          #
+          # 注意：这里只用 awk（自己 exit，不产生 SIGPIPE）—— 用 grep|head 会被
+          # bash -o pipefail 判为失败，把整个步骤弄挂（run295 的教训）。
+          L1="$(awk '/^#if.*WINE_NO_INLINE_STRING/ { print NR; exit }' "$F" || true)"
+          if [ -z "${L1}" ]; then
+            echo "!! 找不到守卫 #if，跳过"
+            exit 0
           fi
           echo "守卫行: ${L1}"
           sed -i "${L1}s|.*|#if !defined(__WINESRC__) || defined(WINE_NO_INLINE_STRING)|" "$F"
 
-          L2="$(awk -v s="$L1" 'NR > s && /^#else$/ { print NR; exit }' "$F")"
-          if [ -z "$L2" ]; then
-            echo "!! 守卫之后找不到 #else，跳过"; exit 0
+          L2="$(awk -v s="${L1}" 'NR > s && /^#else$/ { print NR; exit }' "$F" || true)"
+          if [ -z "${L2}" ]; then
+            echo "!! 守卫之后找不到 #else，跳过"
+            exit 0
           fi
           echo "poison 分支行: ${L2}"
           sed -i "${L2}s|.*|#elif !defined(WINE_UNIX_LIB)|" "$F"
 
           echo "=== 改后结构 ==="
-          grep -n 'WINE_NO_INLINE_STRING\|elif !defined(WINE_UNIX_LIB)\|do_not_use_wcsncpy' "$F" | head -8 || true
+          awk 'NR >= '"${L1}"' && NR <= '"${L2}"' && /^#(if|elif|else|endif)/ { print NR": "$0 }' "$F" || true
+          awk '/do_not_use_wcsncpy/ { print NR": "$0; exit }' "$F" || true
 
       - name: lsteamclient C++ 标准库适配 (libc++)
         shell: bash
