@@ -1,4 +1,4 @@
-bc69693b6f
+c038bb5794e7cf48ec01a4182bb372a7f960c5d0
 # ---- FEX 候选点（官方 FEX-Emu/FEX 仓库的 ref / tag / commit sha）----
 # 第 1 行 = 生效值（fex.yml 用 sed 只读第 1 行，注释必须在第 1 行之后）。
 # 改这一个文件 + push，就会自动出一个候选包（workflow_dispatch 会被平台取消，别用）。
