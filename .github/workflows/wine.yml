@@ -1614,41 +1614,47 @@ jobs:
           echo "=== 原 UNIX_CFLAGS ==="
           grep -n 'UNIX_CFLAGS' lsteamclient/Makefile.in || true
 
-          if [ -f /usr/include/c++/v1/array ]; then
-            echo "OK: libc++ 已就绪（/usr/include/c++/v1 存在），保持树的原意"
-            exit 0
-          fi
+          LIBCXX_DIR=/usr/include/c++/v1
 
-          echo "WARN: libc++ 头不可用，退回 libstdc++（multiarch 头路径）"
-          INCS=""
-          for d in /usr/include/c++/14 /usr/include/c++/13 /usr/include/c++/12 \
-                   /usr/aarch64-linux-gnu/include/c++/14 \
-                   /usr/aarch64-linux-gnu/include/c++/13 \
-                   /usr/aarch64-linux-gnu/include/c++/12 \
-                   /usr/include/aarch64-linux-gnu/c++/14 \
-                   /usr/include/aarch64-linux-gnu/c++/13 \
-                   /usr/include/aarch64-linux-gnu/c++/12; do
-            [ -d "$d" ] && INCS="$INCS -I=$d"
-          done
-          echo "将使用:${INCS}"
-          if [ -z "${INCS}" ]; then
-            echo "ERROR: 找不到任何 C++ 头目录，无法继续"; exit 1
+          printf '#include <array>\n#include <cstdlib>\n#include <string>\n#include <memory>\nint main(){std::array<int,1> a{};std::string s;return a[0]+(int)s.size();}\n' > /tmp/_probe.cpp
+
+          probe() {
+            set +e
+            clang++ --target=aarch64-linux-gnu "$@" -fsyntax-only /tmp/_probe.cpp > /tmp/_probe.log 2>&1
+            local rc=$?
+            set -e
+            if [ $rc -eq 0 ]; then echo "  自检 OK: $*"; else echo "  自检 FAIL: $*"; head -3 /tmp/_probe.log; fi
+            return $rc
+          }
+
+          # 关键：clang 未设置 --sysroot 时不解析 '-I=' 这种前缀，等于该目录根本没进搜索路径
+          # （run292 实测：/usr/include/c++/v1/array 明明存在，仍报 'array' file not found）
+          if [ -f "$LIBCXX_DIR/array" ] && probe -nostdinc++ -I"$LIBCXX_DIR"; then
+            echo "libc++ 可用 -> 把 '-I=/usr/include/c++/v1' 规整为可解析形式"
+            if ! grep -q -- '-I/usr/include/c++/v1' lsteamclient/Makefile.in; then
+              sed -i 's|-I=/usr/include/c++/v1|-I=/usr/include/c++/v1 -I/usr/include/c++/v1|g' lsteamclient/Makefile.in
+            fi
+          elif probe -nostdinc++ -I"$LIBCXX_DIR" || [ ! -f "$LIBCXX_DIR/array" ]; then
+            echo "libc++ 头不可用 -> 退回 libstdc++（multiarch 头路径，用可解析的 -I）"
+            INCS=""
+            for d in /usr/include/c++/14 /usr/include/c++/13 /usr/include/c++/12 \
+                     /usr/aarch64-linux-gnu/include/c++/14 \
+                     /usr/aarch64-linux-gnu/include/c++/13 \
+                     /usr/aarch64-linux-gnu/include/c++/12 \
+                     /usr/include/aarch64-linux-gnu/c++/14 \
+                     /usr/include/aarch64-linux-gnu/c++/13 \
+                     /usr/include/aarch64-linux-gnu/c++/12; do
+              [ -d "$d" ] && INCS="$INCS -I$d"
+            done
+            echo "将使用:${INCS}"
+            if [ -z "${INCS}" ]; then
+              echo "ERROR: 找不到任何 C++ 头目录，无法继续"; exit 1
+            fi
+            sed -i "s|-nostdinc++ -I=/usr/include/c++/v1|${INCS# }|g" lsteamclient/Makefile.in
           fi
-          sed -i "s|-nostdinc++ -I=/usr/include/c++/v1|${INCS# }|g" lsteamclient/Makefile.in
 
           echo "=== 改后 UNIX_CFLAGS ==="
           grep -n 'UNIX_CFLAGS' lsteamclient/Makefile.in || true
-
-          # 头文件自检：用同款 flags 试编译一行 C++，提前暴露问题
-          cat > /tmp/_cxx_probe.cpp <<'EOF'
-          #include <array>
-          #include <cstdlib>
-          int main() { std::array<int, 1> a{}; return a[0]; }
-          EOF
-          set +e
-          clang++ --target=aarch64-linux-gnu ${INCS} -fsyntax-only /tmp/_cxx_probe.cpp \
-            && echo "C++ 头自检: OK" || echo "C++ 头自检: 失败（继续，让 make 报真实错误）"
-          set -e
 
       - name: Regenerate Wine configure
         shell: bash
