@@ -16,6 +16,7 @@ on:
           - proton-10.34-GE
           - proton-gamenative
           - proton-11.0-cachyos
+          - valve-wine
 
       wine_version:
         description: 'Wine 版本，例如 10.20；latest 表示使用源码默认版本'
@@ -50,6 +51,18 @@ on:
         description: 'CachyOS Proton 源码分支（The412Banner/proton-wine，默认 CachyOS 11.0-20261005）'
         required: false
         default: 'proton_11.0-cachyos-20261005'
+        type: string
+
+      valve_repo:
+        description: 'Valve Wine 源码仓库（wine_branch=valve-wine 时生效，可换 fork）'
+        required: false
+        default: 'https://github.com/ValveSoftware/wine.git'
+        type: string
+
+      valve_branch:
+        description: 'Valve Wine 源码分支（如 experimental_10.0 / experimental_11.0 / proton_10.0）'
+        required: false
+        default: 'experimental_10.0'
         type: string
 
       staging_version:
@@ -491,6 +504,8 @@ jobs:
           INPUT_GN_BRANCH: ${{ inputs.gamenative_branch }}
           INPUT_CACHYOS_REPO: ${{ inputs.cachyos_repo }}
           INPUT_CACHYOS_BRANCH: ${{ inputs.cachyos_branch }}
+          INPUT_VALVE_REPO: ${{ inputs.valve_repo }}
+          INPUT_VALVE_BRANCH: ${{ inputs.valve_branch }}
           INPUT_PROTON_COMMIT: ${{ inputs.proton_commit }}
           INPUT_STAGING_VERSION: ${{ inputs.staging_version }}
         run: |
@@ -651,6 +666,41 @@ jobs:
               fi
 
               echo "proton-wine(${GE_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
+              ;;
+            valve-wine)
+              echo "=== ValveSoftware/wine (Valve 官方 wine 树) ==="
+
+              # 想换分支/上游，改下面两个变量即可（也可用 inputs 覆盖）
+              VALVE_REPO="${INPUT_VALVE_REPO:-https://github.com/ValveSoftware/wine.git}"
+              VALVE_BRANCH="${INPUT_VALVE_BRANCH:-experimental_10.0}"
+
+              echo "Valve repo   : ${VALVE_REPO}"
+              echo "Valve branch : ${VALVE_BRANCH}"
+
+              git clone \
+                --branch "${VALVE_BRANCH}" \
+                --single-branch \
+                "${VALVE_REPO}" \
+                source
+
+              cd source
+
+              git config advice.detachedHead false
+
+              if [ -n "${INPUT_PROTON_COMMIT}" ]; then
+                echo "Checking out commit ${INPUT_PROTON_COMMIT}"
+
+                git fetch \
+                  --depth=1 \
+                  origin \
+                  "${INPUT_PROTON_COMMIT}" || true
+
+                git checkout "${INPUT_PROTON_COMMIT}"
+              fi
+
+              echo "Valve wine(${VALVE_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
+              echo "WINE_SRC_REPO=${VALVE_REPO}" >> "$GITHUB_ENV"
+              echo "WINE_SRC_BRANCH=${VALVE_BRANCH}" >> "$GITHUB_ENV"
               ;;
             proton-11.0-cachyos)
               echo "=== The412Banner proton-wine (CachyOS, proton_11.0 系列) ==="
@@ -2576,6 +2626,12 @@ jobs:
 
           CachyOS branch:
           ${{ inputs.cachyos_branch }}
+
+          Valve repo:
+          ${{ inputs.valve_repo }}
+
+          Valve branch:
+          ${{ inputs.valve_branch }}
 
           Staging version:
           ${{ inputs.staging_version }}
