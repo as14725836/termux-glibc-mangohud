@@ -471,6 +471,16 @@ jobs:
             python3 "${GITHUB_WORKSPACE}/patches/fex/legacy-stats-size.py" /opt/fex-src
           fi
 
+          # ---- [Termux patch] 自己写 64 字节 header ----
+          # Wine 下 NtCreateSection 常失败 -> AllocateSHMSlots 返回空 ->
+          # StatAlloc 里的 SaveHeader(AppType) 被跳过 -> 文件 1 MiB 但内容全 0
+          # -> MangoHud 报 version mismatch (header=0)。这里直接手写 header 兜底。
+          if [ -f "${GITHUB_WORKSPACE}/patches/fex/stats-header-fallback.py" ]; then
+            export FEX_VERSION_STRING="$(git -C /opt/fex-src describe --tags 2>/dev/null || git -C /opt/fex-src rev-parse --short HEAD 2>/dev/null || echo FEX)"
+            echo "header 版本串 = ${FEX_VERSION_STRING}"
+            python3 "${GITHUB_WORKSPACE}/patches/fex/stats-header-fallback.py" /opt/fex-src
+          fi
+
           # ---- 自动定位 mingw 工具链文件 ----
           TOOLCHAIN_FILE="$(find /opt/fex-src -path '*/Data/CMake/toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
           if [ -z "${TOOLCHAIN_FILE}" ]; then
