@@ -15,6 +15,7 @@ on:
           - pipetto-proton9-arm64ec
           - proton-10.34-GE
           - proton-gamenative
+          - proton-11.0-cachyos
 
       wine_version:
         description: 'Wine 版本，例如 10.20；latest 表示使用源码默认版本'
@@ -37,6 +38,18 @@ on:
         description: 'GameNative proton-wine 分支（wine_branch=proton-gamenative 时生效）'
         required: false
         default: 'proton_11.0-2'
+        type: string
+
+      cachyos_repo:
+        description: 'CachyOS Proton 源码仓库（wine_branch=proton-11.0-cachyos 时生效，可换 fork）'
+        required: false
+        default: 'https://github.com/The412Banner/proton-wine.git'
+        type: string
+
+      cachyos_branch:
+        description: 'CachyOS Proton 源码分支（The412Banner/proton-wine，默认 CachyOS 11.0-20261005）'
+        required: false
+        default: 'proton_11.0-cachyos-20261005'
         type: string
 
       staging_version:
@@ -476,6 +489,8 @@ jobs:
           INPUT_WINE_VERSION: ${{ inputs.wine_version }}
           INPUT_PROTON_BRANCH: ${{ inputs.proton_branch }}
           INPUT_GN_BRANCH: ${{ inputs.gamenative_branch }}
+          INPUT_CACHYOS_REPO: ${{ inputs.cachyos_repo }}
+          INPUT_CACHYOS_BRANCH: ${{ inputs.cachyos_branch }}
           INPUT_PROTON_COMMIT: ${{ inputs.proton_commit }}
           INPUT_STAGING_VERSION: ${{ inputs.staging_version }}
         run: |
@@ -636,6 +651,42 @@ jobs:
               fi
 
               echo "proton-wine(${GE_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
+              ;;
+            proton-11.0-cachyos)
+              echo "=== The412Banner proton-wine (CachyOS, proton_11.0 系列) ==="
+              echo "NOTE: 该树带 dlls/winedirectaudio.drv 子模块，由后面「初始化子模块」步骤兜底"
+
+              # 想换分支/上游，改下面两个变量即可（也可用 inputs 覆盖）
+              CACHYOS_REPO="${INPUT_CACHYOS_REPO:-https://github.com/The412Banner/proton-wine.git}"
+              CACHYOS_BRANCH="${INPUT_CACHYOS_BRANCH:-proton_11.0-cachyos-20261005}"
+
+              echo "CachyOS repo   : ${CACHYOS_REPO}"
+              echo "CachyOS branch : ${CACHYOS_BRANCH}"
+
+              git clone \
+                --branch "${CACHYOS_BRANCH}" \
+                --single-branch \
+                "${CACHYOS_REPO}" \
+                source
+
+              cd source
+
+              git config advice.detachedHead false
+
+              if [ -n "${INPUT_PROTON_COMMIT}" ]; then
+                echo "Checking out commit ${INPUT_PROTON_COMMIT}"
+
+                git fetch \
+                  --depth=1 \
+                  origin \
+                  "${INPUT_PROTON_COMMIT}" || true
+
+                git checkout "${INPUT_PROTON_COMMIT}"
+              fi
+
+              echo "proton-wine(${CACHYOS_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
+              echo "WINE_SRC_REPO=${CACHYOS_REPO}" >> "$GITHUB_ENV"
+              echo "WINE_SRC_BRANCH=${CACHYOS_BRANCH}" >> "$GITHUB_ENV"
               ;;
             proton-gamenative)
               echo "=== GameNative/proton-wine ==="
@@ -2519,6 +2570,12 @@ jobs:
 
           Proton commit:
           ${{ inputs.proton_commit }}
+
+          CachyOS repo:
+          ${{ inputs.cachyos_repo }}
+
+          CachyOS branch:
+          ${{ inputs.cachyos_branch }}
 
           Staging version:
           ${{ inputs.staging_version }}
