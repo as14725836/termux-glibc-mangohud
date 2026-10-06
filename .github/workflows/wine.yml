@@ -596,7 +596,7 @@ jobs:
                 echo "=== Apply Wine-Staging patchset ==="
 
                 python3 \
-                  ../staging-source/staging/staging/patchinstall.py \
+                  ../staging/staging/patchinstall.py \
                   DESTDIR="$PWD" \
                   --all \
                   --no-autoconf
