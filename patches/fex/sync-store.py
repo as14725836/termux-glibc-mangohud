@@ -24,7 +24,8 @@ def main():
         raise SystemExit(__doc__)
     path = os.path.join(sys.argv[1].rstrip('/'), REL)
     if not os.path.isfile(path):
-        raise SystemExit("ERROR: 找不到 %s" % path)
+        print("跳过（该版本还没有 DiskCache.cpp，即 Disk Cache 特性尚未引入，无需此补丁）: %s" % REL)
+        return
     text = open(path, encoding='utf-8', errors='surrogateescape').read()
     if MARK in text:
         print("跳过（已打过补丁）: %s" % REL)
