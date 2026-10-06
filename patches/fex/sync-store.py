@@ -3,15 +3,11 @@
 """把 DiskCache::Store 从「丢给 WorkQueueThread 异步写」改回「调用线程同步写」。
 
 背景（实测二分结论）：
-  FEX-2608-58-g561c32b （能跑 32 位）
-  ...
-  e3f208f61 《DiskCache: offload Store to a WorkQueueThread》  ← 从这一刀起 32 位崩
+  FEX-2608-58-g561c32b （能跑 32 位）… e3f208f61《DiskCache: offload Store to a WorkQueueThread》起 32 位崩
   （崩线程名就是 FEX:DiskCache，guest i386 / WOW64）
 
-本补丁不碰其它逻辑，只做两件事：
-  1) 不再创建 Writer 线程（WorkQueueThread）；
-  2) Store() 里的 work item 就地 Run()，即恢复成同步写。
-幂等：已打过直接跳过；匹配不到 / 匹配数不对就报错退出（绝不静默放过）。
+只做两件事：1) 不再创建 Writer 线程；2) Store() 里 work item 就地 Run()（同步写）。
+幂等：已打过跳过；该版本还没有 WorkQueueThread（如 FEX-2608）-> 提示并跳过；锚点数不对 -> 报错。
 """
 import os
 import re
@@ -32,6 +28,9 @@ def main():
     text = open(path, encoding='utf-8', errors='surrogateescape').read()
     if MARK in text:
         print("跳过（已打过补丁）: %s" % REL)
+        return
+    if 'WorkQueueThread' not in text:
+        print("跳过（该版本还没有 DiskCache offload / WorkQueueThread，无需此补丁）: %s" % REL)
         return
 
     q = QUEUE_RE.findall(text)

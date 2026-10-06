@@ -464,6 +464,13 @@ jobs:
             python3 "${GITHUB_WORKSPACE}/patches/fex/sync-store.py" /opt/fex-src
           fi
 
+          # ---- [Termux patch] FEX-2608 那代的 legacy 路径：给 stats 文件补上真实大小 ----
+          # Wine 下 CreateFileA() 建出来的是 0 字节文件，NtCreateSection 只在内存里映射，
+          # 文件大小永远是 0 -> MangoHud 读到“空文件”。新版（>=2609）已无此路径，会自动跳过。
+          if [ -f "${GITHUB_WORKSPACE}/patches/fex/legacy-stats-size.py" ]; then
+            python3 "${GITHUB_WORKSPACE}/patches/fex/legacy-stats-size.py" /opt/fex-src
+          fi
+
           # ---- 自动定位 mingw 工具链文件 ----
           TOOLCHAIN_FILE="$(find /opt/fex-src -path '*/Data/CMake/toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
           if [ -z "${TOOLCHAIN_FILE}" ]; then
