@@ -965,6 +965,35 @@ jobs:
           fi
 
       # ============================================================
+      - name: 应用 adapted-11.18 补丁 (quartz colour / qasf asf / termux-dns)
+        shell: bash
+        run: |
+          cd "${WINE_SOURCE_DIR}/source" || { echo 'no wine source dir'; exit 0; }
+          # ---- adapted-11.18 user patches (quartz colour / qasf asf / termux-dns) ----
+          for _up in 0060-quartz-implement-colour-filter.patch \
+                     0061-qasf-deliver-compressed-asf-streams.patch \
+                     termux-dns-fix.patch; do
+            _u="${GITHUB_WORKSPACE:-$PWD}/patches/adapted-11.18/$_up"
+            [ -f "$_u" ] || _u="/tmp/wine-termux/$_up"
+            if [ ! -f "$_u" ]; then
+              mkdir -p /tmp/wine-termux
+              curl -fsSL -o "$_u" "https://raw.githubusercontent.com/as14725836/wine-termux/main/$_up" \
+                || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/wine-termux/main/$_up" \
+                || { echo "WARN: adapted 补丁下载失败，跳过 $_up"; continue; }
+            fi
+            _out="$(patch -p1 --batch --dry-run --forward --no-backup-if-mismatch < "$_u" 2>&1)" || true
+            if echo "$_out" | grep -qE 'FAILED|hunk ignored|can.t find file'; then
+              echo "SKIP: $_up 与当前源码不兼容（hunk 打不上）→ 跳过"
+              echo "$_out" | grep -E 'FAILED|hunk ignored' | head -3 || true
+            elif patch -p1 --batch --forward --no-backup-if-mismatch < "$_u" >/dev/null 2>&1; then
+              echo "OK  : $_up 已应用"
+            else
+              echo "SKIP: $_up 应用失败 → 跳过"
+            fi
+          done
+          echo "adapted-11.18 self-check: colour.c=$(ls dlls/quartz/colour.c 2>/dev/null || echo MISSING) dns=$(grep -c init_dns_config dlls/ntdll/unix/loader.c 2>/dev/null || echo 0)"
+          if find . -name '*.rej' | head -1 | grep -q .; then echo 'WARN: 存在 .rej 文件:'; find . -name '*.rej' | head -5; fi
+          # ---- adapted-11.18 end ----
       # 8. Termux compatibility patches
       #
       # 注意：外部 gstreamer01.patch 与当前 Proton 分支上下文不匹配，
