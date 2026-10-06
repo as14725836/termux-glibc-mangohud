@@ -600,6 +600,13 @@ jobs:
                   DESTDIR="$PWD" \
                   --all \
                   --no-autoconf
+
+                # 后续所有步骤都假设源码在 $WINE_SOURCE_DIR/source，
+                # 但 staging 分支把树放在 $WINE_SOURCE_DIR/staging-source/source，
+                # 这里补一个软链接把布局对齐（否则后面 cd /opt/wine-src/source 直接失败）
+                cd "$WINE_SOURCE_DIR"
+                ln -sfn staging-source/source source
+                echo "staging 源码布局对齐: $(ls -ld "$WINE_SOURCE_DIR/source") -> $(readlink -f "$WINE_SOURCE_DIR/source")"
               else
                 echo "ERROR: staging/upstream-commit not found"
                 exit 1
