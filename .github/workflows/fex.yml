@@ -666,12 +666,14 @@ jobs:
           BOX64_TAG: ${{ inputs.box64_release_tag || '' }}
         run: |
           set -eu
+          # 保险：本步骤任何一步失败都只跳过 wowbox64.dll，不阻断整个构建
+          trap 'echo "⚠ box64 取用失败，跳过 wowbox64.dll（不阻断）"; exit 0' ERR
           OUT=/opt/box64-wow64
           rm -rf "${OUT}"; mkdir -p "${OUT}"
           API="https://api.github.com/repos/${BOX64_REPO}"
           TAG="${BOX64_TAG}"
           if [ -z "${TAG}" ]; then
-            curl -sSL --max-time 60 "${API}/releases?per_page=30" -o /tmp/box64-rel.json
+            curl -sSL --retry 5 --retry-all-errors --max-time 60 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "${API}/releases?per_page=30" -o /tmp/box64-rel.json
             TAG=$(python3 -c 'import json;d=json.load(open("/tmp/box64-rel.json"));t=sorted(str(x.get("tag_name","")) for x in d if str(x.get("tag_name","")).startswith("box64-dev-"));print(t[-1] if t else "")')
           fi
           if [ -z "${TAG}" ]; then
@@ -679,7 +681,7 @@ jobs:
             exit 0
           fi
           echo "box64 开发版 tag = ${TAG}"
-          curl -sSL --max-time 60 "${API}/releases/tags/${TAG}" -o /tmp/box64-tagx.json
+          curl -sSL --retry 5 --retry-all-errors --max-time 60 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "${API}/releases/tags/${TAG}" -o /tmp/box64-tagx.json
           ASSET=$(python3 -c 'import json;d=json.load(open("/tmp/box64-tagx.json"));a=[str(x["name"]) for x in d.get("assets",[]) if str(x["name"]).endswith(".tar.gz")];print(a[0] if a else "")')
           test -n "${ASSET}" || { echo "FATAL: ${TAG} 没有 .tar.gz 资产"; exit 1; }
           echo "asset = ${ASSET}"
