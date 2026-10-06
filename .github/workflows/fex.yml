@@ -435,6 +435,12 @@ jobs:
             python3 "${GITHUB_WORKSPACE}/patches/fex/termux-shm-dir.py" /opt/fex-src
           fi
 
+          # ---- [Termux patch] DiskCache::Store 改回同步执行（不建 Writer 线程：32 位/WOW64 下会崩）----
+          # 二分结论：FEX-Emu/FEX e3f208f61《DiskCache: offload Store to a WorkQueueThread》之后 32 位必崩。
+          if [ -f "${GITHUB_WORKSPACE}/patches/fex/sync-store.py" ]; then
+            python3 "${GITHUB_WORKSPACE}/patches/fex/sync-store.py" /opt/fex-src
+          fi
+
           # ---- 自动定位 mingw 工具链文件 ----
           TOOLCHAIN_FILE="$(find /opt/fex-src -path '*/Data/CMake/toolchain_mingw.cmake' -print -quit 2>/dev/null || true)"
           if [ -z "${TOOLCHAIN_FILE}" ]; then
