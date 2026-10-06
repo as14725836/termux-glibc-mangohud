@@ -172,6 +172,7 @@ jobs:
         env:
           DISTRO: ${{ inputs.llvm_mingw_distro || 'bylaws' }}
           VER: ${{ inputs.llvm_mingw_version || 'latest' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eux
 
@@ -184,8 +185,30 @@ jobs:
           TAG="${VER}"
 
           if [ "${TAG}" = "latest" ] || [ -z "${TAG}" ]; then
-            TAG="$(curl -sSL "https://api.github.com/repos/${REPO}/releases/latest" \
-              | python3 -c "import json,sys;print(json.load(sys.stdin)['tag_name'])")"
+            # 修复：未认证调用 GitHub API 会被限流（403 / 返回体里没有 tag_name），
+            # 旧写法会 KeyError 直接挂整条构建（run 37399591057）。
+            AUTH=()
+            if [ -n "${GITHUB_TOKEN:-}" ]; then
+              AUTH=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+            fi
+            TAG=""
+            for i in 1 2 3 4 5; do
+              TAG="$(curl -sSL --retry 3 --retry-all-errors --max-time 60 "${AUTH[@]}" \
+                       "https://api.github.com/repos/${REPO}/releases/latest" \
+                     | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('tag_name') or '')" 2>/dev/null || true)"
+              if [ -n "${TAG}" ]; then break; fi
+              echo "取 ${REPO} 最新 release tag 失败（第 $i 次），5 秒后重试"
+              sleep 5
+            done
+            if [ -z "${TAG}" ]; then
+              TAG="$(curl -sSL --retry 3 --retry-all-errors --max-time 60 "${AUTH[@]}" \
+                       "https://api.github.com/repos/${REPO}/releases?per_page=5" \
+                     | python3 -c "import json,sys;d=json.load(sys.stdin);print(next((x.get('tag_name') or '' for x in d), ''))" 2>/dev/null || true)"
+            fi
+            if [ -z "${TAG}" ]; then
+              echo "FATAL: 拿不到 ${REPO} 的 release tag（GitHub API 限流？可重跑或指定 llvm_mingw_version）"
+              exit 1
+            fi
           fi
 
           DIR_NAME="llvm-mingw-${TAG}-ucrt-ubuntu-22.04-x86_64"
