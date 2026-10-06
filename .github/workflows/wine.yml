@@ -295,6 +295,29 @@ jobs:
       # ============================================================
       # 3. locales
       # ============================================================
+      - name: 安装 libc++（lsteamclient 的 C++ 标准库）
+        shell: bash
+        run: |
+          set -x
+          # The412Banner/proton-wine 的 lsteamclient/Makefile.in 写死：
+          #   UNIX_CFLAGS = -nostdinc++ -I=/usr/include/c++/v1   （Android NDK 的 libc++ 布局）
+          # 容器默认只有 libstdc++，该目录不存在 -> 'array' file not found。
+          if [ -f /usr/include/c++/v1/array ]; then
+            echo "libc++ 头文件已就绪"
+            exit 0
+          fi
+
+          apt-get install -y --no-install-recommends libc++-dev libc++abi-dev || \
+            apt-get install -y --no-install-recommends libc++-14-dev libc++abi-14-dev || true
+          # aarch64 侧的 libc++ 运行库（用于链接 unix .so）
+          apt-get install -y --no-install-recommends libc++1:arm64 libc++abi1:arm64 || \
+            apt-get install -y --no-install-recommends libc++1-14:arm64 libc++abi1-14:arm64 || true
+
+          echo "--- /usr/include/c++/v1 ---"
+          ls /usr/include/c++/v1 2>/dev/null | head -5 || echo "  (仍缺失，后面步骤会退回 libstdc++)"
+          echo "--- libc++ 运行库 ---"
+          ls /usr/lib/*/libc++* /usr/lib/*/libc++abi* 2>/dev/null | head -8 || true
+
       - name: 配置 Locale
         shell: bash
         run: |
@@ -1505,6 +1528,57 @@ jobs:
       # ============================================================
       # 9. Generate configure
       # ============================================================
+      - name: lsteamclient C++ 标准库适配 (libc++)
+        shell: bash
+        run: |
+          set -eux
+
+          cd "${WINE_SOURCE_DIR}/source"
+
+          if [ ! -f lsteamclient/Makefile.in ]; then
+            echo "该树没有 lsteamclient/Makefile.in，跳过"
+            exit 0
+          fi
+
+          echo "=== 原 UNIX_CFLAGS ==="
+          grep -n 'UNIX_CFLAGS' lsteamclient/Makefile.in || true
+
+          if [ -f /usr/include/c++/v1/array ]; then
+            echo "OK: libc++ 已就绪（/usr/include/c++/v1 存在），保持树的原意"
+            exit 0
+          fi
+
+          echo "WARN: libc++ 头不可用，退回 libstdc++（multiarch 头路径）"
+          INCS=""
+          for d in /usr/include/c++/14 /usr/include/c++/13 /usr/include/c++/12 \
+                   /usr/aarch64-linux-gnu/include/c++/14 \
+                   /usr/aarch64-linux-gnu/include/c++/13 \
+                   /usr/aarch64-linux-gnu/include/c++/12 \
+                   /usr/include/aarch64-linux-gnu/c++/14 \
+                   /usr/include/aarch64-linux-gnu/c++/13 \
+                   /usr/include/aarch64-linux-gnu/c++/12; do
+            [ -d "$d" ] && INCS="$INCS -I=$d"
+          done
+          echo "将使用:${INCS}"
+          if [ -z "${INCS}" ]; then
+            echo "ERROR: 找不到任何 C++ 头目录，无法继续"; exit 1
+          fi
+          sed -i "s|-nostdinc++ -I=/usr/include/c++/v1|${INCS# }|g" lsteamclient/Makefile.in
+
+          echo "=== 改后 UNIX_CFLAGS ==="
+          grep -n 'UNIX_CFLAGS' lsteamclient/Makefile.in || true
+
+          # 头文件自检：用同款 flags 试编译一行 C++，提前暴露问题
+          cat > /tmp/_cxx_probe.cpp <<'EOF'
+          #include <array>
+          #include <cstdlib>
+          int main() { std::array<int, 1> a{}; return a[0]; }
+          EOF
+          set +e
+          clang++ --target=aarch64-linux-gnu ${INCS} -fsyntax-only /tmp/_cxx_probe.cpp \
+            && echo "C++ 头自检: OK" || echo "C++ 头自检: 失败（继续，让 make 报真实错误）"
+          set -e
+
       - name: Regenerate Wine configure
         shell: bash
         run: |
