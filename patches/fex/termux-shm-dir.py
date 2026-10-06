@@ -141,11 +141,26 @@ def add_includes(text):
     raise SystemExit("ERROR: 找不到可用的 #include 锚点")
 
 
+CONFIG_CANDIDATES = (
+    "FEXCore/Source/Interface/Config/Config.json.in",
+    "Source/Common/Config.json.in",
+    "Source/Common/Config/Config.json.in",
+    "Config.json.in",
+    "Data/Config.json.in",
+)
+
+
 def patch_profile_stats(root):
-    rel = "FEXCore/Source/Interface/Config/Config.json.in"
-    path = os.path.join(root, rel)
-    if not os.path.isfile(path):
-        raise SystemExit("ERROR: 找不到 %s" % path)
+    rel = None
+    path = None
+    for cand in CONFIG_CANDIDATES:
+        p = os.path.join(root, cand)
+        if os.path.isfile(p):
+            rel, path = cand, p
+            break
+    if path is None:
+        print("跳过（该版本找不到 Config.json.in；老版本 FEX 的 stats 本就默认开启，无需改开关）")
+        return False
     text = open(path, encoding="utf-8", errors="surrogateescape").read()
     key = '"ProfileStats"'
     if text.count(key) != 1:
