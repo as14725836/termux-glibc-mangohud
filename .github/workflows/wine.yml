@@ -1675,6 +1675,32 @@ jobs:
 
           # AACC_UPDATED_V1
 
+      - name: Android/Termux 适配 (fsync 无 /dev/shm 兜底 + machine-id 派生)
+        shell: bash
+        run: |
+          set -eux
+
+          cd "${WINE_SOURCE_DIR}/source"
+
+          if [ ! -f server/fsync.c ]; then
+            echo "没有 server/fsync.c，跳过"
+            exit 0
+          fi
+
+          # 背景：glibc 的 shm_open() 走 /dev/shm，而 Android 没有 /dev/shm。
+          # Proton 派生树里 server/fsync.c 的 fsync_check_support() 默认开启 fsync
+          # （Valve 树是 opt-in），于是 fsync_init() 里 shm_open 失败 -> shm_fd=-1
+          # -> ftruncate/mmap 失败 -> shm_addrs 被填 -1 -> 写它 => wineserver SIGSEGV
+          # 表现为：wineserver crashed / wine client error recvmsg Connection reset。
+          python3 "${GITHUB_WORKSPACE}/patches/wine/android-shm-fsync.py" "." || true
+
+          # 精确校验：只有"默认开启 fsync"这个坏模式还在时才算失败
+          if grep -q 'return !(getenv( "WINEFSYNC" )' server/fsync.c; then
+            echo "FATAL: fsync 默认开启的代码仍在，补丁未生效"; exit 1
+          fi
+          echo "=== 校验通过：fsync 默认关闭 ==="
+          grep -n 'CI\] Android' server/fsync.c server/token.c | head -6 || true
+
       - name: Regenerate Wine configure
         shell: bash
         run: |
