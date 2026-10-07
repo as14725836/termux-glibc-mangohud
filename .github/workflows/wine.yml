@@ -1852,6 +1852,37 @@ jobs:
           done
           grep -n 'termux-arm64] disabled' "${CA}" || true
 
+          # ---- aarch64 ntdll 缺的 xstate / set_thread_teb 兜底 ----
+          # 这几个符号在 wine9 里只由 signal_i386.c / signal_x86_64.c 提供。
+          # 不启用 arm64ec（纯 aarch64,i386）时，ntdll.so 链接会缺：
+          #   set_thread_teb / xstate_supported_features_mask / xstate_features_size
+          # 这里给 aarch64 一份安全实现：扩展状态视为不支持（mask=0），TEB 指针在
+          # aarch64 上由 x18/系统寄存器维护，set_thread_teb 无需额外动作。
+          SA="${WINE_SOURCE_DIR}/source/dlls/ntdll/unix/signal_arm64.c"
+
+          if [ -f "${SA}" ] && ! grep -q 'termux-arm64 xstate/TEB fallbacks' "${SA}"; then
+            cat >> "${SA}" <<'TERMUX_ARM64_EOF'
+
+          /* termux-arm64 xstate/TEB fallbacks ------------------------------- */
+          #ifdef __aarch64__
+          BOOL xstate_compaction_enabled = FALSE;
+          UINT64 xstate_supported_features_mask = 0;
+          UINT64 xstate_features_size = 0;
+
+          void set_thread_teb( TEB *teb )
+          {
+              (void)teb;
+          }
+          #endif
+          /* ---------------------------------------------------------------- */
+          TERMUX_ARM64_EOF
+            echo "已给 signal_arm64.c 追加 xstate / set_thread_teb 兜底定义"
+            tail -14 "${SA}" || true
+          else
+            echo "signal_arm64.c 已处理或不存在，跳过"
+          fi
+
+
           # configure.ac 里的 WINE_CONFIG_MAKEFILE 列表在 autogen.sh 时已被烘焙进生成的 configure，
           # 所以改完 configure.ac 必须重新生成 configure 才生效。
           if [ -f "${CA}" ] && command -v autoconf >/dev/null 2>&1; then
