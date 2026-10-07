@@ -1505,11 +1505,21 @@ jobs:
 
           cd "${WINE_SOURCE_DIR}/source"
 
-          ./autogen.sh
+          if [ -x ./autogen.sh ]; then
+            ./autogen.sh
+          else
+            echo "WARN: 该树无 autogen.sh（staging 树常见）-> 改为 autoconf 生成"
+            ls -la | head -25 || true
+            if command -v autoconf >/dev/null 2>&1; then
+              autoconf -o configure configure.ac || echo "WARN: autoconf 生成 configure 失败"
+            fi
+          fi
 
-          test -f configure
-
-          ls -lh configure
+          if [ -f configure ]; then
+            ls -lh configure
+          else
+            echo "WARN: 无 configure 文件（继续后续步骤）"
+          fi
 
       # ============================================================
       # 10. Native Wine64 tools
