@@ -445,6 +445,18 @@ jobs:
           # ---- [Termux patch] FEX stats 文件改到 /data/data/com.termux/files/usr/tmp（不再用 /dev/shm）----
           python3 "${GITHUB_WORKSPACE}/patches/fex/termux-shm-dir.py" /opt/fex-src
 
+          # ---- [termux-align] wine <-> libwow64fex WOW64 bridge interface alignment ----
+          # FEX only recognised the bridge by address equality. When wine's 32-bit ntdll
+          # runs its own inline `int 0x2e` stub (the proton9-arm64ec tree does), the RIP
+          # never equals the bop page -> the syscall is never intercepted and FEX raises
+          # #UD at the same EIP forever (c000001d loop). The script below adds byte-based
+          # recognition of the bridge opcode (default on; FEX_WOW64_BRIDGE_BYTES=0 disables).
+          if [ -f "${GITHUB_WORKSPACE}/patches/fex/wow64-bridge-bytes.py" ]; then
+            python3 "${GITHUB_WORKSPACE}/patches/fex/wow64-bridge-bytes.py" /opt/fex-src \
+              && echo "OK: wow64 bridge interface alignment patch applied" \
+              || echo "WARN: wow64 bridge alignment patch not applied (FEX layout changed?)"
+          fi
+
           JOBS="${{ inputs.jobs || 8 }}"
 
           # ---------- 3) x86_64 模拟：libarm64ecfex.dll ----------
