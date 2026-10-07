@@ -699,8 +699,8 @@ jobs:
               echo "=== ValveSoftware/Proton（Proton 仓库：wine 源码在其 wine/ 子模块）==="
 
               # 默认 proton_9.0；分支可用 valve_branch 覆盖。
-              # 仓库必须是 Proton 仓库：valve_repo 这个 input 的默认值是 ValveSoftware/wine.git，
-              # 所以只有调用方显式传了 *Proton* 仓库才采用它，其余一律用官方 Proton 仓库。
+              # 必须是 Proton 仓库：valve_repo input 默认值是 ValveSoftware/wine.git，
+              # 所以只有调用方显式传了 *Proton* 仓库才采用它。
               VALVE_REPO="${INPUT_VALVE_REPO:-}"
               case "${VALVE_REPO}" in
                 *Proton*) : ;;
@@ -711,45 +711,53 @@ jobs:
               echo "Proton repo   : ${VALVE_REPO}"
               echo "Proton branch : ${VALVE_BRANCH}"
 
+              # 只拉 wine 子模块：不递归 dxvk/ffmpeg/gstreamer/vkd3d-proton 等（慢，且会挂在 gitlab 子模块上）
               git clone \
                 --branch "${VALVE_BRANCH}" \
                 --single-branch \
-                --recurse-submodules \
-                --shallow-submodules \
+                --depth=1 \
                 "${VALVE_REPO}" \
                 proton-repo
 
-              if [ -f proton-repo/wine/configure.ac ]; then
-                rm -rf source
-                mv proton-repo/wine source
-                echo "已使用 Proton 仓库的 wine/ 子模块作为 wine 源码树"
-              elif [ -f proton-repo/wine/configure ]; then
-                rm -rf source
-                mv proton-repo/wine source
-                echo "已使用 Proton 仓库的 wine/ 子模块作为 wine 源码树"
-              else
-                echo "⚠️ Proton 仓库里没有取到 wine/ 子模块 -> 尝试手动初始化"
-                ( cd proton-repo && git submodule update --init --recursive --depth 1 ) || true
-                if [ -f proton-repo/wine/configure.ac ]; then
-                  rm -rf source; mv proton-repo/wine source
-                else
-                  echo "❌ 仍然没有 wine/ 源码，proton-repo 内容："
-                  ls -la proton-repo | head -25 || true
-                  exit 1
-                fi
+              ( cd proton-repo && git submodule update --init --depth 1 wine )
+
+              PROTON_ROOT="$(pwd)/proton-repo"
+
+              if [ ! -f "${PROTON_ROOT}/wine/configure.ac" ] && [ ! -f "${PROTON_ROOT}/wine/configure" ]; then
+                echo "❌ Proton 仓库里没有取到 wine/ 子模块，proton-repo 内容："
+                ls -la "${PROTON_ROOT}" | head -30 || true
+                exit 1
+              fi
+
+              # 把 wine/ 子模块挪成 workflow 期望的 source/ 路径。
+              # 子模块的 .git 是指向 ../.git/modules/wine 的相对 gitdir 文件，目录一挪就失效，
+              # 所以这里改写成绝对路径，并重设 core.worktree。
+              rm -rf source
+              mv "${PROTON_ROOT}/wine" source
+
+              if [ -d "${PROTON_ROOT}/.git/modules/wine" ]; then
+                printf 'gitdir: %s\n' "${PROTON_ROOT}/.git/modules/wine" > source/.git
+                git -C source config core.worktree "$(pwd)/source" || true
+              fi
+
+              if ! git -C source rev-parse --short HEAD >/dev/null 2>&1; then
+                echo "⚠️ source/ 不是有效 git 仓库，重新 init（后续 git apply 仍可用）"
+                rm -f source/.git
+                ( cd source && git init -q && git add -A >/dev/null 2>&1 && \
+                  git -c user.email=ci@local -c user.name=ci commit -qm "wine from Proton ${VALVE_BRANCH}" ) || true
               fi
 
               cd source
 
-              git config advice.detachedHead false
+              git config advice.detachedHead false || true
 
               if [ -n "${INPUT_PROTON_COMMIT}" ]; then
                 echo "Checking out commit ${INPUT_PROTON_COMMIT}"
                 git fetch --depth=1 origin "${INPUT_PROTON_COMMIT}" || true
-                git checkout "${INPUT_PROTON_COMMIT}"
+                git checkout "${INPUT_PROTON_COMMIT}" || true
               fi
 
-              echo "Proton wine(${VALVE_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
+              echo "Proton wine(${VALVE_BRANCH}) HEAD: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
               echo "WINE_SRC_REPO=${VALVE_REPO}" >> "$GITHUB_ENV"
               echo "WINE_SRC_BRANCH=${VALVE_BRANCH}" >> "$GITHUB_ENV"
               ;;
