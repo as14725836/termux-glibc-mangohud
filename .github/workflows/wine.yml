@@ -1851,6 +1851,12 @@ jobs:
           # ARM64 构建里直接禁用该 DLL（游戏需要真 AGS 时自己带 Windows DLL）。
           CA="${WINE_SOURCE_DIR}/source/configure.ac"
 
+          # [termux-arm64-guard] 下面这段只对“非 arm64ec”（9.x 纯 aarch64+i386）路线需要：
+          # arm64ec 构建里 xstate_*/set_thread_teb 由树内 x86 侧提供，禁用 amd_ags/crtdll 也
+          # 会误伤 10.0/11.0 这类原生支持 arm64ec 的树，所以这里加守卫。
+          if printf '%s' "${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}" | grep -q 'arm64ec'; then
+            echo "[termux-arm64-guard] 已启用 arm64ec：跳过 xstate/TEB 兜底 与 amd_ags/crtdll 禁用"
+          else
           # ARM64(arm64ec) 不兼容的 DLL：
           #   amd_ags_x64 : AGS 实现只覆盖 x86/x86_64 -> 缺 DX11_*_impl 等符号
           #   crtdll      : 来自 msvcrt 老代码，含 x86 内联汇编 -> arm64ec 下汇编报错
@@ -1864,6 +1870,12 @@ jobs:
           done
           grep -n 'termux-arm64] disabled' "${CA}" || true
 
+          # [termux-arm64-guard] 下面这段只对“非 arm64ec”（9.x 纯 aarch64+i386）路线需要：
+          # arm64ec 构建里 xstate_*/set_thread_teb 由树内 x86 侧提供，禁用 amd_ags/crtdll 也
+          # 会误伤 10.0/11.0 这类原生支持 arm64ec 的树，所以这里加守卫。
+          if printf '%s' "${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}" | grep -q 'arm64ec'; then
+            echo "[termux-arm64-guard] 已启用 arm64ec：跳过 xstate/TEB 兜底 与 amd_ags/crtdll 禁用"
+          else
           # ---- aarch64 ntdll 缺的 xstate / set_thread_teb 兜底 ----
           # 这几个符号在 wine9 里只由 signal_i386.c / signal_x86_64.c 提供。
           # 不启用 arm64ec（纯 aarch64,i386）时，ntdll.so 链接会缺：
@@ -1893,6 +1905,7 @@ jobs:
           else
             echo "signal_arm64.c 已处理或不存在，跳过"
           fi
+          fi
 
 
           # configure.ac 里的 WINE_CONFIG_MAKEFILE 列表在 autogen.sh 时已被烘焙进生成的 configure，
@@ -1903,6 +1916,7 @@ jobs:
             else
               echo "⚠️ autoconf 重新生成 configure 失败（继续）"
             fi
+          fi
           fi
 
 
