@@ -1311,7 +1311,7 @@ jobs:
           apt-get install -y --no-install-recommends perl >/dev/null 2>&1 || true
 
           # ---- (1) 入口打点：确认 unix 函数体是否真的被进入 + GType 是否为 0 ----
-          perl -0pi -e 's/(static NTSTATUS wg_parser_create\(void \*args\)\n\{\n)/$1    { extern GType wg_task_pool_get_type(void); static int dbg_printed; if (!dbg_printed) { dbg_printed = 1; fprintf(stderr, "winegstreamer: unix wg_parser_create entered, wg_task_pool GType=%lu\\n", (unsigned long)wg_task_pool_get_type()); } }\n/' "${FILE_PARSER}"
+          perl -0pi -e 's/(static NTSTATUS wg_parser_create\(void \*args\)\n\{\n)/$1    { extern GType wg_task_pool_get_type(void) __attribute__((weak)); static int dbg_printed; if (!dbg_printed) { dbg_printed = 1; fprintf(stderr, "winegstreamer: unix wg_parser_create entered, wg_task_pool GType=%lu\\n", (unsigned long)(wg_task_pool_get_type ? wg_task_pool_get_type() : 0)); } }\n/' "${FILE_PARSER}"
 
           # ---- (2) 兜底：task pool 创建失败时退回默认 pool ----
           perl -0pi -e 's/if \(!\(parser->task_pool = wg_task_pool_new\(\)\)\)\n    \{\n        free\(parser\);\n        return E_OUTOFMEMORY;\n    \}/if (!(parser->task_pool = wg_task_pool_new()))\n    {\n        fprintf(stderr, "winegstreamer: wg_task_pool_new() failed, falling back to the default GstTaskPool\\n");\n        if (!(parser->task_pool = gst_task_pool_new()))\n        {\n            free(parser);\n            return E_OUTOFMEMORY;\n        }\n    }/' "${FILE_PARSER}"
