@@ -16,6 +16,7 @@ on:
           - proton-10.34-GE
           - proton-gamenative
           - valve-wine
+          - valve-proton
 
       wine_version:
         description: 'Wine 版本，例如 10.20；latest 表示使用源码默认版本'
@@ -47,7 +48,7 @@ on:
         type: string
 
       valve_branch:
-        description: 'Valve Wine 源码分支（如 experimental_10.0 / experimental_11.0 / proton_10.0）'
+        description: 'Valve 源码分支：valve-wine 用 ValveSoftware/wine 的分支（如 proton_10.0）；valve-proton 用 ValveSoftware/Proton 的分支（如 proton_9.0 / proton_10.0）'
         required: false
         default: 'experimental_10.0'
         type: string
@@ -691,6 +692,58 @@ jobs:
               fi
 
               echo "Valve wine(${VALVE_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
+              echo "WINE_SRC_REPO=${VALVE_REPO}" >> "$GITHUB_ENV"
+              echo "WINE_SRC_BRANCH=${VALVE_BRANCH}" >> "$GITHUB_ENV"
+              ;;
+            valve-proton)
+              echo "=== ValveSoftware/Proton（Proton 仓库：wine 源码在其 wine/ 子模块）==="
+
+              # 默认 proton_9.0；可用 inputs 覆盖仓库/分支
+              VALVE_REPO="${INPUT_VALVE_REPO:-https://github.com/ValveSoftware/Proton.git}"
+              VALVE_BRANCH="${INPUT_VALVE_BRANCH:-proton_9.0}"
+
+              echo "Proton repo   : ${VALVE_REPO}"
+              echo "Proton branch : ${VALVE_BRANCH}"
+
+              git clone \
+                --branch "${VALVE_BRANCH}" \
+                --single-branch \
+                --recurse-submodules \
+                --shallow-submodules \
+                "${VALVE_REPO}" \
+                proton-repo
+
+              if [ -f proton-repo/wine/configure.ac ]; then
+                rm -rf source
+                mv proton-repo/wine source
+                echo "已使用 Proton 仓库的 wine/ 子模块作为 wine 源码树"
+              elif [ -f proton-repo/wine/configure ]; then
+                rm -rf source
+                mv proton-repo/wine source
+                echo "已使用 Proton 仓库的 wine/ 子模块作为 wine 源码树"
+              else
+                echo "⚠️ Proton 仓库里没有取到 wine/ 子模块 -> 尝试手动初始化"
+                ( cd proton-repo && git submodule update --init --recursive --depth 1 ) || true
+                if [ -f proton-repo/wine/configure.ac ]; then
+                  rm -rf source; mv proton-repo/wine source
+                else
+                  echo "❌ 仍然没有 wine/ 源码，proton-repo 内容："
+                  ls -la proton-repo | head -25 || true
+                  exit 1
+                fi
+              fi
+
+              cd source
+
+              git config advice.detachedHead false
+
+              if [ -n "${INPUT_PROTON_COMMIT}" ]; then
+                echo "Checking out commit ${INPUT_PROTON_COMMIT}"
+                git fetch --depth=1 origin "${INPUT_PROTON_COMMIT}" || true
+                git checkout "${INPUT_PROTON_COMMIT}"
+              fi
+
+              echo "Proton wine(${VALVE_BRANCH}) HEAD: $(git rev-parse --short HEAD)"
               echo "WINE_SRC_REPO=${VALVE_REPO}" >> "$GITHUB_ENV"
               echo "WINE_SRC_BRANCH=${VALVE_BRANCH}" >> "$GITHUB_ENV"
               ;;
