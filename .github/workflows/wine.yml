@@ -1435,7 +1435,7 @@ jobs:
           [ "${BAD}" = "0" ] || { echo "FAIL: 存在未定义的 GstGL 类型"; exit 1; }
 
           echo "--- 垫片注入后的样子 ---"
-          grep -n -A7 'typedef struct _GstGLDisplay' dlls/winegstreamer/unixlib.c
+          grep -n -A7 'typedef struct _GstGLDisplay' dlls/winegstreamer/unixlib.c || echo "  (诊断：未见 _GstGLDisplay 定义；该树可能本就无需垫片)"
           grep -n 'GSTREAMER,\[' configure.ac || true
           grep -c 'gstreamer-gl-1.0' configure.ac || echo "OK: configure.ac 已无 gstreamer-gl-1.0"
 
