@@ -1790,6 +1790,28 @@ jobs:
             echo "无 ${M}，跳过（该树不含 media-converter）"
           fi
 
+          # ---- d3dx11_42: IMPORTS 指向的 d3dx11_43 模块，其 import lib 名其实是 d3dx11 ----
+          #   dlls/d3dx11_43/Makefile.in : IMPORTLIB = d3dx11
+          #   dlls/d3dx11_42/Makefile.in : IMPORTS = d3dcompiler d3dx11_43
+          # 本配置下 makedep 没把 d3dx11_43 解析成模块，直接给了 `-ld3dx11_43`
+          # -> lld-link: could not open 'd3dx11_43.lib'。
+          # 改成实际 import lib 名（等价、正确的链接）。
+          D42="${WINE_SOURCE_DIR}/source/dlls/d3dx11_42/Makefile.in"
+
+          if [ -f "${D42}" ]; then
+            if grep -q 'd3dx11_43' "${D42}"; then
+              echo "=== d3dx11_42/Makefile.in 修改前 ==="
+              grep -n -E '^IMPORTS|^IMPORTLIB' "${D42}" || true
+              sed -i 's/^\(IMPORTS *= *.*\)d3dx11_43/\1d3dx11/' "${D42}"
+              echo "=== 修改后 ==="
+              grep -n -E '^IMPORTS|^IMPORTLIB' "${D42}" || true
+            else
+              echo "d3dx11_42/Makefile.in 不含 d3dx11_43，跳过"
+            fi
+          else
+            echo "无 ${D42}，跳过"
+          fi
+
 
       - name: Configure ARM64 WOW64
         shell: bash
