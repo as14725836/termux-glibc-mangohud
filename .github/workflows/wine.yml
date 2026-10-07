@@ -698,8 +698,14 @@ jobs:
             valve-proton)
               echo "=== ValveSoftware/Proton（Proton 仓库：wine 源码在其 wine/ 子模块）==="
 
-              # 默认 proton_9.0；可用 inputs 覆盖仓库/分支
-              VALVE_REPO="${INPUT_VALVE_REPO:-https://github.com/ValveSoftware/Proton.git}"
+              # 默认 proton_9.0；分支可用 valve_branch 覆盖。
+              # 仓库必须是 Proton 仓库：valve_repo 这个 input 的默认值是 ValveSoftware/wine.git，
+              # 所以只有调用方显式传了 *Proton* 仓库才采用它，其余一律用官方 Proton 仓库。
+              VALVE_REPO="${INPUT_VALVE_REPO:-}"
+              case "${VALVE_REPO}" in
+                *Proton*) : ;;
+                *) VALVE_REPO="https://github.com/ValveSoftware/Proton.git" ;;
+              esac
               VALVE_BRANCH="${INPUT_VALVE_BRANCH:-proton_9.0}"
 
               echo "Proton repo   : ${VALVE_REPO}"
