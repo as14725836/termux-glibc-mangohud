@@ -1912,10 +1912,22 @@ jobs:
           WINE_ARCHS="${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}"
 
           if printf '%s' "${WINE_ARCHS}" | grep -q 'arm64ec'; then
-            if printf 'int main(void){return 0;}\n' > /tmp/arm64ec_probe.c && \
-               ${CROSSCC} -target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX \
-                 /tmp/arm64ec_probe.c -o /tmp/arm64ec_probe.exe >/dev/null 2>&1; then
-              echo "arm64ec 编译器探测: OK"
+            printf 'int main(void){return 0;}\n' > /tmp/arm64ec_probe.c
+            _ec_ok=0
+
+            # 与 wine 自己的探测完全一致（-nostdlib -nodefaultlibs，两种变体任一通过即可）
+            for _extra in "--no-default-config" ""; do
+              if ${CROSSCC} -o /tmp/arm64ec_probe.exe -O2 -pipe -nostdlib -nodefaultlibs \
+                   -target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX ${_extra} \
+                   /tmp/arm64ec_probe.c >/dev/null 2>&1; then
+                _ec_ok=1
+                echo "arm64ec 编译器探测: OK"
+                break
+              fi
+            done
+
+            if [ "${_ec_ok}" = "1" ]; then
+              : # 保留 arm64ec
             else
               WINE_ARCHS="$(printf '%s' "${WINE_ARCHS}" | sed 's/arm64ec,//g; s/,arm64ec//g; s/^arm64ec$//' )"
               [ -z "${WINE_ARCHS}" ] && WINE_ARCHS="aarch64,i386"
