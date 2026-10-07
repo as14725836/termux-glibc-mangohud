@@ -1761,13 +1761,34 @@ jobs:
           # 只在最终打包后用 patchelf 修改 ELF interpreter。
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,-O1 -Wl,--as-needed -Wl,--sort-common"
 
+          # ---- arm64ec 能力探测 ----
+          # Proton9 / GameNative 这类 9.x 树，用新版 llvm-mingw 时 wine 自带的
+          # `clang supports -target arm64ec-windows ... -Wl,-WX` 探测会返回 no，
+          # 直接 `configure: error: MinGW arm64ec compiler not found` 退出。
+          # 这里先自己探一次：不支持就把 arm64ec 从 --enable-archs 里摘掉（x86_64 交给 FEX/wow64），
+          # 避免整条构建被一个可选架构拖死。
+          WINE_ARCHS="${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}"
+
+          if printf '%s' "${WINE_ARCHS}" | grep -q 'arm64ec'; then
+            if printf 'int main(void){return 0;}\n' > /tmp/arm64ec_probe.c && \
+               ${CROSSCC} -target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX \
+                 /tmp/arm64ec_probe.c -o /tmp/arm64ec_probe.exe >/dev/null 2>&1; then
+              echo "arm64ec 编译器探测: OK"
+            else
+              WINE_ARCHS="$(printf '%s' "${WINE_ARCHS}" | sed 's/arm64ec,//g; s/,arm64ec//g; s/^arm64ec$//' )"
+              [ -z "${WINE_ARCHS}" ] && WINE_ARCHS="aarch64,i386"
+              echo "⚠️ arm64ec 编译器探测失败（该树 / 当前 llvm-mingw 不支持）"
+              echo "⚠️ 已自动从 --enable-archs 去掉 arm64ec -> ${WINE_ARCHS}（x86_64 走 FEX/wow64）"
+            fi
+          fi
+
           CONFIGURE_FLAGS=()
 
           CONFIGURE_FLAGS+=(
             --enable-win64
             --host=aarch64-linux-gnu
             --with-mingw=clang
-            --enable-archs=${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}
+            --enable-archs=${WINE_ARCHS}
             --with-wine-tools="${WINE_NATIVE_DIR}"
             --prefix=/tmp/wine-install-wow64
             --disable-win16
