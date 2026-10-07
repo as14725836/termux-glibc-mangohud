@@ -1905,45 +1905,25 @@ jobs:
           # 只在最终打包后用 patchelf 修改 ELF interpreter。
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,-O1 -Wl,--as-needed -Wl,--sort-common"
 
-          # ---- arm64ec 能力探测 ----
-          # Proton9 / GameNative 这类 9.x 树，用新版 llvm-mingw 时 wine 自带的
-          # `clang supports -target arm64ec-windows ... -Wl,-WX` 探测会返回 no，
-          # 直接 `configure: error: MinGW arm64ec compiler not found` 退出。
-          # 这里先自己探一次：不支持就把 arm64ec 从 --enable-archs 里摘掉（x86_64 交给 FEX/wow64），
-          # 避免整条构建被一个可选架构拖死。
+          # ---- arm64ec：注入 autoconf 缓存变量，跳过 wine 的编译探测 ----
+          # wine9 的探测命令是 `clang -o conftest.exe -O2 -pipe -nostdlib -nodefaultlibs
+          # -target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX conftest.c`
+          # （见 config.log），在新版 lld 上会因 EC 版 mainCRTStartup / _load_config_used
+          # / __os_arm64x_dispatch_ret 等符号缺失而误判为“没有 arm64ec 编译器”，
+          # 于是 --enable-archs 里丢掉 arm64ec，接着 ntdll.so 会缺 set_thread_teb /
+          # xstate_features_size 等（这些只由 x86/x86_64 的 signal 实现提供）。
+          # 这里直接把探测结果写成 yes；真正编译/链接仍按 arm64ec 走。
           WINE_ARCHS="${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}"
 
+          export ac_cv_arm64ec_crosscc=yes
+          export ac_cv_arm64ec_cflags__target_arm64ec_windows__fuse_ld_lld__Wl__subsystem_console__Wl__WX=yes
+          export ac_cv_arm64ec_cflags__target_arm64ec_windows__fuse_ld_lld__Wl__subsystem_console__Wl__WX___no_default_config=yes
+
           if printf '%s' "${WINE_ARCHS}" | grep -q 'arm64ec'; then
-            printf 'int main(void){return 0;}\n' > /tmp/arm64ec_probe.c
-            _ec_ok=0
-
-            # 与 wine 自己的探测完全一致（-nostdlib -nodefaultlibs，两种变体任一通过即可）
-            for _extra in "--no-default-config" ""; do
-              if ${CROSSCC} -o /tmp/arm64ec_probe.exe -O2 -pipe -nostdlib -nodefaultlibs \
-                   -target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX ${_extra} \
-                   /tmp/arm64ec_probe.c >/tmp/ec_probe.log 2>&1; then
-                _ec_ok=1
-                echo "arm64ec 编译器探测: OK"
-                break
-              fi
-            done
-
-            if [ "${_ec_ok}" != "1" ]; then
-              echo "=== arm64ec 探测原始报错（工具链: $(command -v ${CROSSCC})）==="
-              tail -8 /tmp/ec_probe.log || true
-              echo "=== 探测命令 ==="
-              echo "${CROSSCC} -o /tmp/arm64ec_probe.exe -O2 -pipe -nostdlib -nodefaultlibs -target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX <变体> /tmp/arm64ec_probe.c"
-            fi
-
-            if [ "${_ec_ok}" = "1" ]; then
-              : # 保留 arm64ec
-            else
-              WINE_ARCHS="$(printf '%s' "${WINE_ARCHS}" | sed 's/arm64ec,//g; s/,arm64ec//g; s/^arm64ec$//' )"
-              [ -z "${WINE_ARCHS}" ] && WINE_ARCHS="aarch64,i386"
-              echo "⚠️ arm64ec 编译器探测失败（该树 / 当前 llvm-mingw 不支持）"
-              echo "⚠️ 已自动从 --enable-archs 去掉 arm64ec -> ${WINE_ARCHS}（x86_64 走 FEX/wow64）"
-            fi
+            echo "arm64ec: 已注入 autoconf 缓存变量，跳过编译探测（保留 ${WINE_ARCHS}）"
+            echo "  arm64ec 交叉编译器: $(command -v arm64ec-w64-mingw32-clang 2>/dev/null || echo 未找到)"
           fi
+
 
           CONFIGURE_FLAGS=()
 
