@@ -1349,7 +1349,7 @@ jobs:
               || echo "WARN: 未注入版本打点"
           fi
 
-          grep -n 'wg_task_pool_new\|gst_task_pool_new\|GType=%lu' "${FILE_PARSER}" | head -20
+          grep -n 'wg_task_pool_new\|gst_task_pool_new\|GType=%lu' "${FILE_PARSER}" | head -20 || echo "(无 task pool 诊断命中，属正常)"
 
       # ============================================================
       # ============================================================
@@ -1485,7 +1485,7 @@ jobs:
 
           grep -n \
             '#include "esync.h"\|#include "fsync.h"' \
-            "${FILE_SERVER_ESYNC}"
+            "${FILE_SERVER_ESYNC}" || echo "(该 tree 无 esync.h/fsync.h include —— 无需修复)"
 
           # 硬校验：仅当确实存在 esync.h（即需要这个修复）时才强制要求
           if [ -f dlls/ntdll/unix/esync.h ]; then
@@ -2318,7 +2318,7 @@ jobs:
 
           readelf -h "${NTDLL}" |
             grep -E \
-              'Class:|Machine:|Type:'
+              'Class:|Machine:|Type:' || echo "(未匹配到 Class/Machine/Type 行，跳过打印)"
 
       # ============================================================
       # 21. NLS verification
