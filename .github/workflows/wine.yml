@@ -1756,6 +1756,40 @@ jobs:
 
           echo "✓ unixlib.c aarch64 分支已就绪"
 
+          # ---- media-converter.h：murmur3_128_state 的宏选择同样只认 x86 ----
+          # Proton9 的 media-converter.h 里：
+          #   #ifdef __x86_64__  -> x64 变体
+          #   #elif defined(__i386__) -> x86 变体
+          # aarch64 宿主两个都不成立 -> struct murmur3_128_state 是未定义/不完整类型。
+          # Proton11 已修成 `#if defined(__x86_64__) || defined(__aarch64__)`，这里对齐。
+          M="${WINE_SOURCE_DIR}/source/dlls/winegstreamer/media-converter/media-converter.h"
+
+          if [ -f "${M}" ]; then
+            echo "=== media-converter.h 修改前 ==="
+            grep -n -E '#if(def)? defined\(__x86_64__\)|__aarch64__|murmur3_128_state ' "${M}" | head -10 || true
+
+            if grep -q 'defined(__x86_64__) || defined(__aarch64__)' "${M}"; then
+              echo "media-converter.h 已含 aarch64 处理，跳过"
+            elif grep -q '#ifdef __x86_64__' "${M}"; then
+              perl -0pi -e 's{#ifdef __x86_64__\n(#define murmur3_128_state)}{#if defined(__x86_64__) || defined(__aarch64__)\n$1}' "${M}"
+              echo "=== media-converter.h 修改后 ==="
+              grep -n -E 'defined\(__x86_64__\).*__aarch64__|murmur3_128_state ' "${M}" | head -10 || true
+            else
+              echo "media-converter.h 无 '#ifdef __x86_64__' 锚点，跳过"
+            fi
+
+            if grep -q 'murmur3_128_state' "${M}"; then
+              if grep -q '#if defined(__x86_64__) || defined(__aarch64__)' "${M}"; then
+                echo "✓ media-converter.h aarch64 处理已就绪"
+              else
+                echo "❌ media-converter.h 仍不含 aarch64 处理"
+                exit 1
+              fi
+            fi
+          else
+            echo "无 ${M}，跳过（该树不含 media-converter）"
+          fi
+
 
       - name: Configure ARM64 WOW64
         shell: bash
