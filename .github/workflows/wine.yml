@@ -1839,13 +1839,18 @@ jobs:
           # ARM64 构建里直接禁用该 DLL（游戏需要真 AGS 时自己带 Windows DLL）。
           CA="${WINE_SOURCE_DIR}/source/configure.ac"
 
-          if [ -f "${CA}" ] && grep -q '^WINE_CONFIG_MAKEFILE(dlls/amd_ags_x64)' "${CA}"; then
-            sed -i 's|^WINE_CONFIG_MAKEFILE(dlls/amd_ags_x64)$|# [termux-arm64] disabled (x86-only AGS impls): WINE_CONFIG_MAKEFILE(dlls/amd_ags_x64)|' "${CA}"
-            echo "已禁用 dlls/amd_ags_x64"
-            grep -n 'amd_ags_x64' "${CA}" || true
-          else
-            echo "configure.ac 无 amd_ags_x64 条目或已处理，跳过"
-          fi
+          # ARM64(arm64ec) 不兼容的 DLL：
+          #   amd_ags_x64 : AGS 实现只覆盖 x86/x86_64 -> 缺 DX11_*_impl 等符号
+          #   crtdll      : 来自 msvcrt 老代码，含 x86 内联汇编 -> arm64ec 下汇编报错
+          for _dll in amd_ags_x64 crtdll; do
+            if [ -f "${CA}" ] && grep -q "^WINE_CONFIG_MAKEFILE(dlls/${_dll})" "${CA}"; then
+              sed -i "s|^WINE_CONFIG_MAKEFILE(dlls/${_dll})$|# [termux-arm64] disabled (arm64ec incompatible): WINE_CONFIG_MAKEFILE(dlls/${_dll})|" "${CA}"
+              echo "已禁用 dlls/${_dll}"
+            else
+              echo "configure.ac 无 dlls/${_dll} 条目或已处理，跳过"
+            fi
+          done
+          grep -n 'termux-arm64] disabled' "${CA}" || true
 
           # configure.ac 里的 WINE_CONFIG_MAKEFILE 列表在 autogen.sh 时已被烘焙进生成的 configure，
           # 所以改完 configure.ac 必须重新生成 configure 才生效。
