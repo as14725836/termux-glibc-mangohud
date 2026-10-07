@@ -1223,6 +1223,14 @@ jobs:
             VMA=$(grep -c '0x7fffff0000' dlls/ntdll/unix/virtual.c || true)
             HIA=$(grep -c '0x7ffe000000' dlls/ntdll/unix/virtual.c || true)
             PLA=$(grep -c '0x7ffe000000' loader/preloader.c || true)
+            # wine-11.18+ 把"高地址区预留"从 loader/preloader.c 挪走了（如 commit eba89375 起
+            # preloader.c 里已无 0x7ffffe000000），此时 perl 替换 0 命中、PLA 必然为 0，
+            # 但这并不代表适配失败 —— 真正的 39-bit 收敛在 virtual.c 上（VMA/HIA 已校验）。
+            PRE_OLD=$(grep -c '0x7ffffe000000' loader/preloader.c || true)
+            if [ "${PLA}" = "0" ] && [ "${PRE_OLD}" = "0" ]; then
+              echo "  39-bit: preloader.c 无高区常量（该版本已将其移走）→ 视为无需适配"
+              PLA=1
+            fi
             echo "  39-bit check: virtual_limit=${VMA} virtual_hiarea=${HIA} preloader=${PLA}"
             if [ "${VMA}" = "0" ] || [ "${HIA}" = "0" ] || [ "${PLA}" = "0" ]; then
               echo "FATAL: 39-bit VA 适配未生效 (${VMA}/${HIA}/${PLA})"
