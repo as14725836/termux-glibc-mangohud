@@ -93,6 +93,12 @@ on:
         default: 'arm64ec,aarch64,i386'
         type: string
 
+      llvm_mingw_name:
+        description: 'llvm-mingw 资产全名（默认按版本+ubuntu-22.04 生成）。老版本（如 20240917）是 ubuntu-20.04 命名，需要显式给：llvm-mingw-20240917-ucrt-ubuntu-20.04-x86_64'
+        required: false
+        default: ''
+        type: string
+
       llvm_mingw_repo:
         description: 'llvm-mingw 仓库。arm64ec 构建建议用 bylaws/llvm-mingw（ARM64EC 支持完整）；默认 mstorsjo/llvm-mingw'
         required: false
@@ -114,7 +120,7 @@ on:
 env:
   LLVMMINGW_REPO: ${{ inputs.llvm_mingw_repo || 'mstorsjo/llvm-mingw' }}
   LLVMMINGW_DATE: ${{ inputs.llvm_mingw_date || '20251202' }}
-  LLVMMINGW_NAME: llvm-mingw-${{ inputs.llvm_mingw_date || '20251202' }}-ucrt-ubuntu-22.04-x86_64
+  LLVMMINGW_NAME: ${{ inputs.llvm_mingw_name || format('llvm-mingw-{0}-ucrt-ubuntu-22.04-x86_64', inputs.llvm_mingw_date || '20251202') }}
 
   WINE_SOURCE_DIR: /opt/wine-src
   WINE64_DIR: /opt/wine64
@@ -1841,6 +1847,16 @@ jobs:
             echo "configure.ac 无 amd_ags_x64 条目或已处理，跳过"
           fi
 
+          # configure.ac 里的 WINE_CONFIG_MAKEFILE 列表在 autogen.sh 时已被烘焙进生成的 configure，
+          # 所以改完 configure.ac 必须重新生成 configure 才生效。
+          if [ -f "${CA}" ] && command -v autoconf >/dev/null 2>&1; then
+            if ( cd "${WINE_SOURCE_DIR}/source" && autoconf -o configure configure.ac ); then
+              echo "configure 已按修改后的 configure.ac 重新生成"
+            else
+              echo "⚠️ autoconf 重新生成 configure 失败（继续）"
+            fi
+          fi
+
 
       - name: Configure ARM64 WOW64
         shell: bash
@@ -1905,12 +1921,19 @@ jobs:
             for _extra in "--no-default-config" ""; do
               if ${CROSSCC} -o /tmp/arm64ec_probe.exe -O2 -pipe -nostdlib -nodefaultlibs \
                    -target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX ${_extra} \
-                   /tmp/arm64ec_probe.c >/dev/null 2>&1; then
+                   /tmp/arm64ec_probe.c >/tmp/ec_probe.log 2>&1; then
                 _ec_ok=1
                 echo "arm64ec 编译器探测: OK"
                 break
               fi
             done
+
+            if [ "${_ec_ok}" != "1" ]; then
+              echo "=== arm64ec 探测原始报错（工具链: $(command -v ${CROSSCC})）==="
+              tail -8 /tmp/ec_probe.log || true
+              echo "=== 探测命令 ==="
+              echo "${CROSSCC} -o /tmp/arm64ec_probe.exe -O2 -pipe -nostdlib -nodefaultlibs -target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX <变体> /tmp/arm64ec_probe.c"
+            fi
 
             if [ "${_ec_ok}" = "1" ]; then
               : # 保留 arm64ec
