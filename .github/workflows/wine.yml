@@ -1628,7 +1628,17 @@ jobs:
 
           cd native
 
-          export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
+          # arm64ec 交叉编译器必须用 bylaws 那份 llvm-mingw（ARM64EC 支持完整；
+          # mstorsjo 新版 lld 会让 wine 的 arm64ec 探测以 "EC version of _load_config_used is missing" 失败）
+          BYLAWS_DIR="/opt/llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64"
+
+          if [ -x "${BYLAWS_DIR}/bin/arm64ec-w64-mingw32-clang" ]; then
+            export PATH="${BYLAWS_DIR}/bin:/opt/${LLVMMINGW_NAME}/bin:${PATH}"
+            echo "PATH 优先使用 bylaws llvm-mingw: ${BYLAWS_DIR}/bin"
+          else
+            export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
+            echo "未找到 bylaws llvm-mingw，沿用 ${LLVMMINGW_NAME}"
+          fi
 
           export CC="gcc"
           export CXX="g++"
@@ -1825,6 +1835,19 @@ jobs:
             echo "无 ${D42}，跳过"
           fi
 
+          # ---- amd_ags_x64：Proton9 的 AGS 实现只覆盖 x86/x86_64 ----
+          # aarch64 上链接会缺 DX11_*_impl / agsDriverExtensionsDX11_* 等符号。
+          # ARM64 构建里直接禁用该 DLL（游戏需要真 AGS 时自己带 Windows DLL）。
+          CA="${WINE_SOURCE_DIR}/source/configure.ac"
+
+          if [ -f "${CA}" ] && grep -q '^WINE_CONFIG_MAKEFILE(dlls/amd_ags_x64)' "${CA}"; then
+            sed -i 's|^WINE_CONFIG_MAKEFILE(dlls/amd_ags_x64)$|# [termux-arm64] disabled (x86-only AGS impls): WINE_CONFIG_MAKEFILE(dlls/amd_ags_x64)|' "${CA}"
+            echo "已禁用 dlls/amd_ags_x64"
+            grep -n 'amd_ags_x64' "${CA}" || true
+          else
+            echo "configure.ac 无 amd_ags_x64 条目或已处理，跳过"
+          fi
+
 
       - name: Configure ARM64 WOW64
         shell: bash
@@ -1843,7 +1866,17 @@ jobs:
 
           cd build-arm64
 
-          export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
+          # arm64ec 交叉编译器必须用 bylaws 那份 llvm-mingw（ARM64EC 支持完整；
+          # mstorsjo 新版 lld 会让 wine 的 arm64ec 探测以 "EC version of _load_config_used is missing" 失败）
+          BYLAWS_DIR="/opt/llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64"
+
+          if [ -x "${BYLAWS_DIR}/bin/arm64ec-w64-mingw32-clang" ]; then
+            export PATH="${BYLAWS_DIR}/bin:/opt/${LLVMMINGW_NAME}/bin:${PATH}"
+            echo "PATH 优先使用 bylaws llvm-mingw: ${BYLAWS_DIR}/bin"
+          else
+            export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
+            echo "未找到 bylaws llvm-mingw，沿用 ${LLVMMINGW_NAME}"
+          fi
 
           # Host compiler
           export CC="clang --target=aarch64-linux-gnu"
