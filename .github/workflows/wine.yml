@@ -1717,6 +1717,46 @@ jobs:
       # ============================================================
       # 12. ARM64 WOW64 configure
       # ============================================================
+      - name: 修复 winegstreamer unixlib.c 的宿主架构分支 (aarch64)
+        run: |
+          set -eux
+
+          F="${WINE_SOURCE_DIR}/source/dlls/winegstreamer/unixlib.c"
+
+          if [ ! -f "${F}" ]; then
+            echo "无 ${F}，跳过"
+            exit 0
+          fi
+
+          echo "=== 修改前 ==="
+          grep -n -E 'registry\.(x86_64|i386|aarch64)\.bin|Bad arch' "${F}" || true
+
+          if grep -q 'registry.aarch64.bin' "${F}"; then
+            echo "已含 registry.aarch64.bin，跳过"
+            exit 0
+          fi
+
+          if ! grep -q -E '^\s*#error Bad arch' "${F}"; then
+            echo "该树 unixlib.c 无 '#error Bad arch' 分支，跳过"
+            exit 0
+          fi
+
+          # Proton9 这棵树的 set_gst_env() 只处理 __x86_64__ / __i386__，
+          # aarch64 宿主会落到 #else -> #error Bad arch。
+          # 补一个 aarch64 分支（与新版 wine 一致：registry.aarch64.bin）。
+          perl -0pi -e 's{(#elif defined\(__i386__\)\n\s*const char \*arch = "/registry\.i386\.bin";\n)}{$1#elif defined(__aarch64__)\n        const char *arch = "/registry.aarch64.bin";\n}' "${F}"
+
+          echo "=== 修改后 ==="
+          grep -n -E 'registry\.(x86_64|i386|aarch64)\.bin|Bad arch' "${F}" || true
+
+          if ! grep -q 'registry.aarch64.bin' "${F}"; then
+            echo "❌ 注入失败"
+            exit 1
+          fi
+
+          echo "✓ unixlib.c aarch64 分支已就绪"
+
+
       - name: Configure ARM64 WOW64
         shell: bash
         env:
