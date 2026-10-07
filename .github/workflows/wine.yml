@@ -93,6 +93,18 @@ on:
         default: 'arm64ec,aarch64,i386'
         type: string
 
+      llvm_mingw_repo:
+        description: 'llvm-mingw 仓库。arm64ec 构建建议用 bylaws/llvm-mingw（ARM64EC 支持完整）；默认 mstorsjo/llvm-mingw'
+        required: false
+        default: 'mstorsjo/llvm-mingw'
+        type: string
+
+      llvm_mingw_date:
+        description: 'llvm-mingw 版本号（默认 20251202）。Proton9 之类的 arm64ec 构建可用 20250920（bylaws），因为新版 lld 会以 "EC version of _load_config_used is missing" 让 wine 的 arm64ec 探测失败'
+        required: false
+        default: '20251202'
+        type: string
+
       jobs:
         description: '并行编译线程'
         required: false
@@ -100,8 +112,9 @@ on:
         type: string
 
 env:
-  LLVMMINGW_DATE: 20251202
-  LLVMMINGW_NAME: llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64
+  LLVMMINGW_REPO: ${{ inputs.llvm_mingw_repo || 'mstorsjo/llvm-mingw' }}
+  LLVMMINGW_DATE: ${{ inputs.llvm_mingw_date || '20251202' }}
+  LLVMMINGW_NAME: llvm-mingw-${{ inputs.llvm_mingw_date || '20251202' }}-ucrt-ubuntu-22.04-x86_64
 
   WINE_SOURCE_DIR: /opt/wine-src
   WINE64_DIR: /opt/wine64
@@ -319,7 +332,7 @@ jobs:
           wget \
             -q \
             --show-progress \
-            "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVMMINGW_DATE}/${LLVMMINGW_NAME}.tar.xz"
+            "https://github.com/${LLVMMINGW_REPO}/releases/download/${LLVMMINGW_DATE}/${LLVMMINGW_NAME}.tar.xz"
 
           tar -xJf "${LLVMMINGW_NAME}.tar.xz"
 
