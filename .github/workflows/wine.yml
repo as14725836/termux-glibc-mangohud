@@ -1628,17 +1628,10 @@ jobs:
 
           cd native
 
-          # arm64ec 交叉编译器必须用 bylaws 那份 llvm-mingw（ARM64EC 支持完整；
-          # mstorsjo 新版 lld 会让 wine 的 arm64ec 探测以 "EC version of _load_config_used is missing" 失败）
-          BYLAWS_DIR="/opt/llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64"
-
-          if [ -x "${BYLAWS_DIR}/bin/arm64ec-w64-mingw32-clang" ]; then
-            export PATH="${BYLAWS_DIR}/bin:/opt/${LLVMMINGW_NAME}/bin:${PATH}"
-            echo "PATH 优先使用 bylaws llvm-mingw: ${BYLAWS_DIR}/bin"
-          else
-            export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
-            echo "未找到 bylaws llvm-mingw，沿用 ${LLVMMINGW_NAME}"
-          fi
+          # arm64ec 交叉编译器由 llvm_mingw_repo/llvm_mingw_date 决定
+          # （新版 lld 会要求 EC 版 _load_config_used，使 wine 的 arm64ec 探测失败；
+          #  需要 arm64ec 的树可选用较早的 llvm-mingw，例如 mstorsjo 20240619）
+          export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
 
           export CC="gcc"
           export CXX="g++"
@@ -1866,17 +1859,10 @@ jobs:
 
           cd build-arm64
 
-          # arm64ec 交叉编译器必须用 bylaws 那份 llvm-mingw（ARM64EC 支持完整；
-          # mstorsjo 新版 lld 会让 wine 的 arm64ec 探测以 "EC version of _load_config_used is missing" 失败）
-          BYLAWS_DIR="/opt/llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64"
-
-          if [ -x "${BYLAWS_DIR}/bin/arm64ec-w64-mingw32-clang" ]; then
-            export PATH="${BYLAWS_DIR}/bin:/opt/${LLVMMINGW_NAME}/bin:${PATH}"
-            echo "PATH 优先使用 bylaws llvm-mingw: ${BYLAWS_DIR}/bin"
-          else
-            export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
-            echo "未找到 bylaws llvm-mingw，沿用 ${LLVMMINGW_NAME}"
-          fi
+          # arm64ec 交叉编译器由 llvm_mingw_repo/llvm_mingw_date 决定
+          # （新版 lld 会要求 EC 版 _load_config_used，使 wine 的 arm64ec 探测失败；
+          #  需要 arm64ec 的树可选用较早的 llvm-mingw，例如 mstorsjo 20240619）
+          export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
 
           # Host compiler
           export CC="clang --target=aarch64-linux-gnu"
