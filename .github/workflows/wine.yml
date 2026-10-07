@@ -1176,19 +1176,19 @@ jobs:
           # --------------------------------------------------------
           # 统一 FEX DLL 名称
           # --------------------------------------------------------
-          find . \
+          find . -path ./.git -prune -o \
             -type f \
             \( -name "*.c" -o -name "*.h" \) \
             -print0 |
-          xargs -0 -r sed -i \
-            's/xtajit64\.dll/libarm64ecfex.dll/g'
+          { xargs -0 -r sed -i \
+            's/xtajit64\.dll/libarm64ecfex.dll/g'; } || true
 
-          find . \
+          find . -path ./.git -prune -o \
             -type f \
             \( -name "*.c" -o -name "*.h" \) \
             -print0 |
-          xargs -0 -r sed -i \
-            's/xtajit\.dll/libwow64fex.dll/g'
+          { xargs -0 -r sed -i \
+            's/xtajit\.dll/libwow64fex.dll/g'; } || true
 
           # --------------------------------------------------------
           # ARM64EC ntdll arch name
