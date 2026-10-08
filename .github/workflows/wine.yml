@@ -875,7 +875,7 @@ jobs:
           echo "WINE_VERSION_ACTUAL = ${WINE_VERSION_ACTUAL}"
           echo "VER_SAFE            = ${VER_SAFE}"
 
-          BUILD_NAME="wine-${VER_SAFE}-${COMMIT_HASH}-${BUILD_TYPE}-arm64-wow64-fex"
+          BUILD_NAME="wine-${VER_SAFE}-${COMMIT_HASH}-${BUILD_TYPE}-arm64ce-wow64"
 
           echo "BUILD_NAME=${BUILD_NAME}" >> "$GITHUB_ENV"
           echo "WINE_VERSION_ACTUAL=${WINE_VERSION_ACTUAL}" >> "$GITHUB_ENV"
