@@ -875,7 +875,7 @@ jobs:
           echo "WINE_VERSION_ACTUAL = ${WINE_VERSION_ACTUAL}"
           echo "VER_SAFE            = ${VER_SAFE}"
 
-          BUILD_NAME="wine-${VER_SAFE}-${COMMIT_HASH}-${BUILD_TYPE}-arm64-wow64"
+          BUILD_NAME="wine-${VER_SAFE}-${COMMIT_HASH}-${BUILD_TYPE}-arm64-wow64-fex"
 
           echo "BUILD_NAME=${BUILD_NAME}" >> "$GITHUB_ENV"
           echo "WINE_VERSION_ACTUAL=${WINE_VERSION_ACTUAL}" >> "$GITHUB_ENV"
@@ -2996,7 +2996,7 @@ jobs:
       - name: Upload Wine artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Wine-${{ inputs.wine_branch || 'proton' }}-${{ inputs.wine_version || 'latest' }}-ARM64-WOW64
+          name: Wine-${{ inputs.wine_branch || 'proton' }}-${{ inputs.wine_version || 'latest' }}-ARM64-WOW64-fex
           path: |
             *.tar.xz
             checksums.txt
