@@ -573,7 +573,7 @@ jobs:
 
           echo "PROTON_VERSION=$PROTON_VERSION" >> "$GITHUB_ENV"
 
-          echo "BUILD_NAME=proton-${PROTON_VERSION}-wow64-fex" >> "$GITHUB_ENV"
+          echo "BUILD_NAME=proton-${PROTON_VERSION}-wow64" >> "$GITHUB_ENV"
 
 
       # --------------------------------------------------------
@@ -795,7 +795,7 @@ jobs:
 
         with:
 
-          tag_name: proton-${{ github.event.inputs.proton_branch || 'proton_10.0' }}-wow64-fex
+          tag_name: proton-${{ github.event.inputs.proton_branch || 'proton_10.0' }}-wow64
 
           name: Proton ${{ github.event.inputs.proton_branch || 'proton_10.0' }} (WOW64 with Vulkan & GStreamer for Termux)
 
@@ -1101,7 +1101,7 @@ jobs:
               git rev-parse --short HEAD
             )"
 
-            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${WINE_BRANCH}-wow64-fex"
+            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${WINE_BRANCH}-wow64"
 
 
           elif [ "$WINE_BRANCH" = "staging" ]; then
@@ -1134,7 +1134,7 @@ jobs:
               git rev-parse --short HEAD
             )"
 
-            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-staging-wow64-fex"
+            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-staging-wow64"
 
             PURE_VERSION="$(
               echo "$WINE_VERSION_ACTUAL" \
@@ -1217,7 +1217,7 @@ jobs:
               git rev-parse --short HEAD
             )"
 
-            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-vanilla-wow64-fex"
+            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-vanilla-wow64"
 
 
           else
@@ -1802,7 +1802,7 @@ jobs:
 
         with:
 
-          name: Wine-${{ github.event.inputs.wine_branch || 'staging' }}-${{ github.event.inputs.wine_version || 'latest' }}-WoW64-fex
+          name: Wine-${{ github.event.inputs.wine_branch || 'staging' }}-${{ github.event.inputs.wine_version || 'latest' }}-WoW64
 
           path: |
             ${{ github.workspace }}/*.tar.xz
@@ -1825,7 +1825,7 @@ jobs:
 
         with:
 
-          tag_name: wine-${{ github.event.inputs.wine_branch || 'staging' }}-${{ github.event.inputs.wine_version || 'latest' }}-wow64-fex
+          tag_name: wine-${{ github.event.inputs.wine_branch || 'staging' }}-${{ github.event.inputs.wine_version || 'latest' }}-wow64
 
           name: Wine ${{ github.event.inputs.wine_branch || 'staging' }} ${{ github.event.inputs.wine_version || 'latest' }} (WOW64 with Vulkan & GStreamer for Termux)
 
