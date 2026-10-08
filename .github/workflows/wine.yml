@@ -2996,7 +2996,7 @@ jobs:
       - name: Upload Wine artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Wine-${{ inputs.wine_branch || 'proton' }}-${{ inputs.wine_version || 'latest' }}-ARM64-WOW64-fex
+          name: Wine-${{ inputs.wine_branch || 'proton' }}-${{ inputs.wine_version || 'latest' }}-ARM64CE-WOW64
           path: |
             *.tar.xz
             checksums.txt
