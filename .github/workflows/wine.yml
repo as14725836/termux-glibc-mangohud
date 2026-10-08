@@ -380,18 +380,6 @@ jobs:
 
       # ============================================================
       # 5.5 构建 FEX 模拟器 DLL（Hangover 方案）
-      #
-      # 目标：把真正能跑的 x86_64 / i386 模拟器编成 Wine 的 CPU DLL
-      #   libarm64ecfex.dll  <- x86_64 模拟（Hangover 里对应 HODLL64）
-      #   libwow64fex.dll    <- i386   模拟（Hangover 里对应 HODLL）
-      # 两者都安装到 wine 的 lib/wine/aarch64-windows/（Hangover 官方位置）
-      #
-      # 官方配方（AndreRH/hangover docs/COMPILE.md）：
-      #   cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-      #         -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
-      #         -DENABLE_LTO=False -DMINGW_TRIPLE=<triple> -DBUILD_TESTS=False ..
-      #   make -jN arm64ecfex   /   make -jN wow64fex
-      # PE 交叉工具链用 bylaws 的 llvm-mingw（ARM64EC 支持完整）
       # ============================================================
       - name: 构建 FEX 模拟器 DLL (arm64ecfex + wow64fex)
         shell: bash
@@ -446,11 +434,6 @@ jobs:
           python3 "${GITHUB_WORKSPACE}/patches/fex/termux-shm-dir.py" /opt/fex-src
 
           # ---- [termux-align] wine <-> libwow64fex WOW64 bridge interface alignment ----
-          # FEX only recognised the bridge by address equality. When wine's 32-bit ntdll
-          # runs its own inline `int 0x2e` stub (the proton9-arm64ec tree does), the RIP
-          # never equals the bop page -> the syscall is never intercepted and FEX raises
-          # #UD at the same EIP forever (c000001d loop). The script below adds byte-based
-          # recognition of the bridge opcode (default on; FEX_WOW64_BRIDGE_BYTES=0 disables).
           if [ -f "${GITHUB_WORKSPACE}/patches/fex/wow64-bridge-bytes.py" ]; then
             python3 "${GITHUB_WORKSPACE}/patches/fex/wow64-bridge-bytes.py" /opt/fex-src \
               && echo "OK: wow64 bridge interface alignment patch applied" \
@@ -633,9 +616,6 @@ jobs:
                   --all \
                   --no-autoconf
 
-                # 后续所有步骤都假设源码在 $WINE_SOURCE_DIR/source，
-                # 但 staging 分支把树放在 $WINE_SOURCE_DIR/staging-source/source，
-                # 这里补一个软链接把布局对齐（否则后面 cd /opt/wine-src/source 直接失败）
                 cd "$WINE_SOURCE_DIR"
                 ln -sfn staging-source/source source
                 echo "staging 源码布局对齐: $(ls -ld "$WINE_SOURCE_DIR/source") -> $(readlink -f "$WINE_SOURCE_DIR/source")"
@@ -664,7 +644,6 @@ jobs:
             proton-10.34-GE)
               echo "=== The412Banner proton-wine (proton_10.34-GE, GameNative 血脉) ==="
 
-              # 想换分支/上游，改下面两个变量即可
               GE_REPO="https://github.com/The412Banner/proton-wine.git"
               GE_BRANCH="proton_10.34-GE"
 
@@ -694,7 +673,6 @@ jobs:
             valve-wine)
               echo "=== ValveSoftware/wine (Valve 官方 wine 树) ==="
 
-              # 想换分支/上游，改下面两个变量即可（也可用 inputs 覆盖）
               VALVE_REPO="${INPUT_VALVE_REPO:-https://github.com/ValveSoftware/wine.git}"
               VALVE_BRANCH="${INPUT_VALVE_BRANCH:-experimental_10.0}"
 
@@ -729,9 +707,6 @@ jobs:
             valve-proton)
               echo "=== ValveSoftware/Proton（Proton 仓库：wine 源码在其 wine/ 子模块）==="
 
-              # 默认 proton_9.0；分支可用 valve_branch 覆盖。
-              # 必须是 Proton 仓库：valve_repo input 默认值是 ValveSoftware/wine.git，
-              # 所以只有调用方显式传了 *Proton* 仓库才采用它。
               VALVE_REPO="${INPUT_VALVE_REPO:-}"
               case "${VALVE_REPO}" in
                 *Proton*) : ;;
@@ -742,7 +717,6 @@ jobs:
               echo "Proton repo   : ${VALVE_REPO}"
               echo "Proton branch : ${VALVE_BRANCH}"
 
-              # 只拉 wine 子模块：不递归 dxvk/ffmpeg/gstreamer/vkd3d-proton 等（慢，且会挂在 gitlab 子模块上）
               git clone \
                 --branch "${VALVE_BRANCH}" \
                 --single-branch \
@@ -760,9 +734,6 @@ jobs:
                 exit 1
               fi
 
-              # 把 wine/ 子模块挪成 workflow 期望的 source/ 路径。
-              # 子模块的 .git 是指向 ../.git/modules/wine 的相对 gitdir 文件，目录一挪就失效，
-              # 所以这里改写成绝对路径，并重设 core.worktree。
               rm -rf source
               mv "${PROTON_ROOT}/wine" source
 
@@ -794,7 +765,6 @@ jobs:
               ;;
             proton-gamenative)
               echo "=== GameNative/proton-wine ==="
-              # 想换分支/上游，改下面两个变量即可
               GN_REPO="https://github.com/GameNative/proton-wine.git"
               GN_BRANCH="${INPUT_GN_BRANCH:-proton_11.0-2}"
               git clone \
@@ -863,7 +833,6 @@ jobs:
           #   tag_name is not a valid tag / tag_name is not well-formed
           # 所以做一个"可用于 tag/文件名"的净化版本：
           #   去掉 "Wine version " 前缀 → 空格转 - → 只留 [A-Za-z0-9._-]
-          # 兼容 "Wine version 11.0" / "Wine 9.0" / "9.0" 几种写法
           VER_SAFE="$(printf '%s' "${WINE_VERSION_ACTUAL}" \
             | sed -E 's/^[Ww]ine[ -]?version[ -]?//' \
             | sed -E 's/^[Ww]ine[ -]?//' \
@@ -877,30 +846,23 @@ jobs:
 
           BUILD_NAME="wine-${VER_SAFE}-${COMMIT_HASH}-${BUILD_TYPE}-arm64ce-wow64"
 
-          echo "BUILD_NAME=${BUILD_NAME}" >> "$GITHUB_ENV"
-          echo "WINE_VERSION_ACTUAL=${WINE_VERSION_ACTUAL}" >> "$GITHUB_ENV"
-          echo "WINE_COMMIT=${COMMIT_HASH}" >> "$GITHUB_ENV"
+          # 统一写入 GITHUB_ENV，后续所有步骤（BUILD_INFO / tar / artifact / release）都从这里取
+          {
+            echo "BUILD_NAME=${BUILD_NAME}"
+            echo "WINE_VERSION_ACTUAL=${WINE_VERSION_ACTUAL}"
+            echo "WINE_COMMIT=${COMMIT_HASH}"
+            echo "VER_SAFE=${VER_SAFE}"
+            echo "BUILD_TYPE=${BUILD_TYPE}"
+          } >> "$GITHUB_ENV"
 
           echo "BUILD_NAME=${BUILD_NAME}"
           echo "WINE_VERSION_ACTUAL=${WINE_VERSION_ACTUAL}"
           echo "WINE_COMMIT=${COMMIT_HASH}"
+          echo "VER_SAFE=${VER_SAFE}"
+          echo "BUILD_TYPE=${BUILD_TYPE}"
 
       # ============================================================
       # 6.1 初始化子模块 + 剪除缺失组件的 WINE_CONFIG_MAKEFILE
-      #
-      # 触发原因（run272 / wine_branch=proton-10.34-GE 的真实失败）：
-      #   The412Banner/proton-wine@proton_10.34-GE 里 dlls/winedirectaudio.drv
-      #   是一个 git submodule（.gitmodules → https://github.com/The412Banner/directaudio）。
-      #   普通 `git clone --single-branch` 不会拉子模块 → 该目录为空，
-      #   而 configure.ac:3351 有 WINE_CONFIG_MAKEFILE(dlls/winedirectaudio.drv)，
-      #   于是 config.status 生成 Makefile 时报：
-      #     dlls/winedirectaudio.drv/Makefile.in: error: open : No such file or directory
-      #     config.status: error: could not create Makefile
-      #
-      # 本步骤：
-      #   1) 有 .gitmodules 就初始化子模块（递归）
-      #   2) 兜底：若某目录仍缺 Makefile.in，就把对应的 WINE_CONFIG_MAKEFILE 注释掉
-      #      （打印清单），保证 configure 能过；对没有子模块的树完全无影响
       # ============================================================
       - name: 初始化子模块 + 剪除缺失的 WINE_CONFIG_MAKEFILE
         shell: bash
@@ -923,8 +885,6 @@ jobs:
             echo "无 .gitmodules，跳过子模块初始化"
           fi
 
-          # 精准兜底：只针对已知"可能因缺组件而失败"的目录，
-          # 按【行号】注释对应行（不把路径拼进 sed 模式，避免 , ( [ 等字符把 s 命令搞坏）
           for d in dlls/winedirectaudio.drv; do
             if [ -f "${d}/Makefile.in" ]; then
               echo "OK: ${d}/Makefile.in 存在（子模块已就位）"
@@ -953,35 +913,6 @@ jobs:
 
       # ============================================================
       # 6.2 修复 wineboot.c：aarch64 分支缺 initialize_xstate_features
-      #
-      # 触发原因（run274 / proton-10.34-GE 的真实编译错误）：
-      #   ../programs/wineboot/wineboot.c:539:5: error:
-      #     call to undeclared function 'initialize_xstate_features';
-      #     ISO C99 and later do not support implicit function declarations
-      #
-      # 该树 wineboot.c 的结构是：
-      #   #if defined(__i386__) || defined(__x86_64__)   -> 有实现
-      #   #elif defined(__aarch64__)                    -> 只写了 read_tsc_frequency，漏了它
-      #   #else                                          -> 有空实现
-      # 于是 aarch64 上该函数既无声明也无定义。
-      #
-      # 本步骤在 aarch64 分支里补一个空实现（幂等；其它 wine 树不受影响）。
-      # ============================================================
-      # ============================================================
-      # 6.2 修复 wineboot.c：aarch64 分支缺 initialize_xstate_features
-      #
-      # 触发原因（proton-10.34-GE 的真实编译错误）：
-      #   ../programs/wineboot/wineboot.c:539:5: error:
-      #     call to undeclared function 'initialize_xstate_features'
-      #   （另一路 x86 交叉编译还会报 redefinition）
-      #
-      # 该树 wineboot.c 的结构：
-      #   #if defined(__i386__) || defined(__x86_64__)   -> 有实现
-      #   #elif defined(__aarch64__)                    -> 只有 read_tsc_frequency（漏了它）
-      #   #else                                          -> 有空实现
-      #
-      # 教训（run277）：补丁必须插到 `#elif defined(__aarch64__)` 的【后面】——
-      #   插到前面会落进 x86 分支：aarch64 依然 undeclared，x86 反而 redefinition。
       # ============================================================
       - name: 修复 wineboot.c (aarch64 缺 initialize_xstate_features)
         shell: bash
@@ -1001,13 +932,11 @@ jobs:
             exit 0
           fi
 
-          # aarch64 分支内部已经有序号？（#elif aarch64 与 #else 之间）
           if awk '/#elif defined\(__aarch64__\)/{f=1} /^#else/{f=0} f && /static void initialize_xstate_features/{found=1} END{exit(found?0:1)}' "${F}"; then
             echo "aarch64 分支内已有 initialize_xstate_features，跳过"
             exit 0
           fi
 
-          # 锚点不存在（该树 wineboot.c 无 __aarch64__ 分支）→ 跳过，不做任何修改
           if ! grep -q -E '^[[:space:]]*#elif defined\(__aarch64__\)' "${F}"; then
             echo "该树 wineboot.c 无 #elif defined(__aarch64__) 锚点，跳过（无需修复）"
             grep -n -E 'initialize_xstate_features|__aarch64__|^#else' "${F}" | head -8 || true
@@ -1018,7 +947,6 @@ jobs:
 
           before_md5="$(md5sum "${F}" | cut -d' ' -f1)"
 
-          # 插到 #elif defined(__aarch64__) 行之后（分支内部）
           perl -0pi -e 's/(#elif defined\(__aarch64__\)\n)/$1static void initialize_xstate_features( struct _KUSER_SHARED_DATA *data )\n{\n    (void)data;\n}\n\n/' "${F}"
 
           after_md5="$(md5sum "${F}" | cut -d' ' -f1)"
@@ -1030,7 +958,6 @@ jobs:
           echo "=== 修改后：aarch64 分支 ==="
           awk '/#elif defined\(__aarch64__\)/{f=1} /^#else/{f=0} f{print}' "${F}" | sed -n '1,18p' || true
 
-          # 严格校验：定义必须落在 #elif defined(__aarch64__) 与下一个 #else 之间
           if awk '/#elif defined\(__aarch64__\)/{f=1} /^#else/{f=0} f && /static void initialize_xstate_features/{found=1} END{exit(found?0:1)}' "${F}"; then
             echo "OK: aarch64 分支内已补上 initialize_xstate_features 空实现"
           else
@@ -1074,7 +1001,6 @@ jobs:
         shell: bash
         run: |
           cd "${WINE_SOURCE_DIR}/source" || { echo 'no wine source dir'; exit 0; }
-          # ---- adapted-11.18 user patches (quartz colour / qasf asf / termux-dns) ----
           for _up in 0060-quartz-implement-colour-filter.patch \
                      0061-qasf-deliver-compressed-asf-streams.patch \
                      termux-dns-fix.patch; do
@@ -1098,11 +1024,9 @@ jobs:
           done
           echo "adapted-11.18 self-check: colour.c=$(ls dlls/quartz/colour.c 2>/dev/null || echo MISSING) dns=$(grep -c init_dns_config dlls/ntdll/unix/loader.c 2>/dev/null || echo 0)"
           if find . -name '*.rej' | head -1 | grep -q .; then echo 'WARN: 存在 .rej 文件:'; find . -name '*.rej' | head -5; fi
-          # ---- adapted-11.18 end ----
+
+      # ============================================================
       # 8. Termux compatibility patches
-      #
-      # 注意：外部 gstreamer01.patch 与当前 Proton 分支上下文不匹配，
-      # 已移除。其余为本地 sed 修改，不依赖外部补丁文件。
       # ============================================================
       - name: Termux compatibility patches
         shell: bash
@@ -1115,20 +1039,8 @@ jobs:
           echo "Applying Termux patches"
           echo "============================================"
 
-          # --------------------------------------------------------
-          # Termux tmp
-          # --------------------------------------------------------
           TERMUX_TMP="${TERMUX_TMP}"
 
-          # 【修复】socket 目录 /tmp/.wine-<uid> 也必须改到 Termux tmp：
-          #   server/request.c:675          asprintf(&base_dir, "/tmp/.wine-%u", getuid())
-          #   dlls/ntdll/unix/server.c:1323 asprintf(&dir, "/tmp/.wine-%u/server-%llx-%llx", ...)
-          # 这两个文件原来不在清单里，导致运行时直接失败：
-          #   wineserver: mkdir /tmp/.wine-10521: Permission denied
-          # 注意：旧的 s|"/tmp"|...|g 模式对 "/tmp/.wine-%u" 匹配不上（/tmp 后面不是引号），
-          #       靠的是下面 s|/tmp/|...|g 这一条，两条都要保留。
-          # 另外 全树扫过：dlls/wineps.drv/ps.c 里的 "/tmpmtrx" 是 PostScript 变量名，
-          # libs/gsm/** 是无关文档注释，都不能碰，所以这里只做定点替换。
           for FILE in \
             server/file.c \
             server/server.c \
@@ -1151,15 +1063,11 @@ jobs:
             fi
           done
 
-          # 硬校验：socket 目录必须已指向 Termux tmp，否则立刻失败（别浪费 30 分钟编译）
-          # 注意：替换后的字符串是 ".../usr/tmp/.wine-%u"，它同样包含子串 "/tmp/.wine-"，
-          #       所以这里必须用「引号开头」精确匹配原始字面量 "/tmp/.wine-，避免误判。
           if grep -rn '"/tmp/\.wine-' server/request.c dlls/ntdll/unix/server.c 2>/dev/null; then
             echo "FATAL: /tmp/.wine- 仍然存在，socket 目录没有改到 Termux tmp"
             exit 1
           fi
 
-          # 反向确认：必须能看到 Termux tmp 版
           grep -n 'usr/tmp/\.wine-' server/request.c dlls/ntdll/unix/server.c 2>/dev/null || \
             { echo "FATAL: 没找到 Termux tmp 版 socket 路径"; exit 1; }
 
@@ -1168,9 +1076,6 @@ jobs:
           grep -n 'wine-' server/request.c | head -3 || true
           grep -n 'wine-' dlls/ntdll/unix/server.c | head -3 || true
 
-          # --------------------------------------------------------
-          # FEX DLL names
-          # --------------------------------------------------------
           if [ -f loader/wine.inf.in ]; then
             sed -i \
               's/"xtajit64\.dll"/"libarm64ecfex.dll"/g' \
@@ -1191,9 +1096,6 @@ jobs:
               dlls/ntdll/loader.c
           fi
 
-          # --------------------------------------------------------
-          # 统一 FEX DLL 名称
-          # --------------------------------------------------------
           find . -path ./.git -prune -o \
             -type f \
             \( -name "*.c" -o -name "*.h" \) \
@@ -1208,9 +1110,6 @@ jobs:
           { xargs -0 -r sed -i \
             's/xtajit\.dll/libwow64fex.dll/g'; } || true
 
-          # --------------------------------------------------------
-          # ARM64EC ntdll arch name
-          # --------------------------------------------------------
           find dlls/ntdll \
             -type f \
             \( -name "*.c" -o -name "*.h" \) \
@@ -1218,9 +1117,6 @@ jobs:
           xargs -0 -r sed -i \
             's|x86_64-windows|aarch64-windows|g'
 
-          # --------------------------------------------------------
-          # wdscore workaround
-          # --------------------------------------------------------
           FILE_WDSCORE="dlls/wdscore/wdscore.spec"
 
           if [ -f "${FILE_WDSCORE}" ]; then
@@ -1237,9 +1133,6 @@ jobs:
             fi
           fi
 
-          # --------------------------------------------------------
-          # virtual.c workaround
-          # --------------------------------------------------------
           FILE_VIRTUAL="dlls/ntdll/unix/virtual.c"
 
           if [ -f "${FILE_VIRTUAL}" ]; then
@@ -1249,8 +1142,6 @@ jobs:
               's/HandleToULong( pbi.UniqueProcessId )/HandleToULong( (void *)(ULONG_PTR)pbi.UniqueProcessId )/g' \
               "${FILE_VIRTUAL}"
 
-            # userfaultfd: Termux 上绕过
-            # 整行替换，避免残留语法
             if grep -q 'uffd_fd = syscall( __NR_userfaultfd' "${FILE_VIRTUAL}"; then
               sed -i \
                 's/^\(.*\)uffd_fd = syscall( __NR_userfaultfd.*$/\1uffd_fd = -1; \/* Termux bypass *\//' \
@@ -1263,27 +1154,6 @@ jobs:
           echo "============================================"
 
       # ============================================================
-      # 8.05 【诊断 + 兜底】winegstreamer task pool
-      #
-      # 症状（arm wine 跑游戏实测）：
-      #   err:quartz:autoplug Failed to create filter ... hr 0x8007000e
-      #   fixme:ole:CoCreateInstanceEx no instance created ... hr 0x8007000e
-      #
-      # 源码链路（本树已核对）：
-      #   quartz_parser.c:1873  parser_create()
-      #     -> main.c:176       WINE_UNIX_CALL(unix_wg_parser_create) 失败 -> 返回 0
-      #       -> wg_parser.c    unix 侧只有两个 E_OUTOFMEMORY 出口：
-      #                         calloc()  /  wg_task_pool_new()
-      #         -> wg_task_pool.c  WgTaskPool 是 GstTaskPool 的 GObject 子类
-      #                            G_DEFINE_TYPE(WgTaskPool, wg_task_pool, GST_TYPE_TASK_POOL)
-      #
-      # 宿主 GStreamer/GLib 版本与构建时头文件不一致时，GType 注册可能失败，
-      # g_object_new() 返回 NULL -> parser 创建失败 -> MF/quartz 解码全灭。
-      #
-      # 这里做两件事：
-      #   1) 兜底：wg_task_pool_new() 失败时退回 GStreamer 自带 gst_task_pool_new()
-      #   2) 打点：把 wg_task_pool 的 GType 与宿主 gst/glib 版本打到 stderr
-      # ============================================================
       - name: ARM64 39-bit VA + noexec 兼容适配
         run: |
           echo "============================================"
@@ -1294,7 +1164,6 @@ jobs:
           echo "  enable_39bit_va        = ${ENABLE_39BIT}"
           echo "  enable_noexec_fallback = ${ENABLE_NOEXEC}"
 
-          # ---- 定位 wine 源码树（与其它步骤一致：${WINE_SOURCE_DIR}/source）----
           for CAND in "${WINE_SOURCE_DIR}/source" "${WINE_SOURCE_DIR}" /opt/wine-src/source; do
             if [ -f "${CAND}/dlls/ntdll/unix/virtual.c" ]; then
               cd "${CAND}"
@@ -1309,7 +1178,6 @@ jobs:
           fi
           echo "  wine source: $(pwd)"
 
-          # ---------- 1) 39-bit VA 适配 ----------
           if [ "${ENABLE_39BIT}" = "true" ]; then
             for F in dlls/ntdll/unix/virtual.c loader/preloader.c; do
               if [ -f "$F" ]; then
@@ -1321,9 +1189,6 @@ jobs:
             VMA=$(grep -c '0x7fffff0000' dlls/ntdll/unix/virtual.c || true)
             HIA=$(grep -c '0x7ffe000000' dlls/ntdll/unix/virtual.c || true)
             PLA=$(grep -c '0x7ffe000000' loader/preloader.c || true)
-            # wine-11.18+ 把"高地址区预留"从 loader/preloader.c 挪走了（如 commit eba89375 起
-            # preloader.c 里已无 0x7ffffe000000），此时 perl 替换 0 命中、PLA 必然为 0，
-            # 但这并不代表适配失败 —— 真正的 39-bit 收敛在 virtual.c 上（VMA/HIA 已校验）。
             PRE_OLD=$(grep -c '0x7ffffe000000' loader/preloader.c || true)
             if [ "${PLA}" = "0" ] && [ "${PRE_OLD}" = "0" ]; then
               echo "  39-bit: preloader.c 无高区常量（该版本已将其移走）→ 视为无需适配"
@@ -1334,7 +1199,6 @@ jobs:
               echo "FATAL: 39-bit VA 适配未生效 (${VMA}/${HIA}/${PLA})"
               exit 1
             fi
-            # 全树扫残留（只报不拦：其它版本可能合法保留）
             LEFT=$( { grep -rln '0x7ffffe000000\|0x7fffffff0000' --include='*.c' --include='*.h' . 2>/dev/null || true; } | head -10 )
             if [ -n "${LEFT}" ]; then
               echo "  39-bit: 以下文件仍含旧值（核对是否为无关版本）："
@@ -1346,13 +1210,11 @@ jobs:
             echo "  skip 39-bit VA (enable_39bit_va=false)"
           fi
 
-          # ---------- 2) noexec 分区兜底 ----------
           if [ "${ENABLE_NOEXEC}" = "true" ]; then
             if python3 - <<'PYEOF'
           import io
           p = 'dlls/ntdll/unix/virtual.c'
           src = io.open(p, encoding='utf-8', errors='surrogateescape').read()
-          # 检测该树是否已内置 read() 兜底（map_file_into_view / map_pe_header 的 noexec 分支）
           ev = [ (i + 1, l.strip()) for i, l in enumerate(src.split('\n'))
                  if 'falling back to read' in l or 'fall back to read()' in l ]
           if ev or 'failed to set PROT_EXEC on file map, noexec filesystem?' not in src:
@@ -1408,20 +1270,14 @@ jobs:
 
           apt-get install -y --no-install-recommends perl >/dev/null 2>&1 || true
 
-          # ---- (1) 入口打点：确认 unix 函数体是否真的被进入 + GType 是否为 0 ----
           perl -0pi -e 's/(static NTSTATUS wg_parser_create\(void \*args\)\n\{\n)/$1    { extern GType wg_task_pool_get_type(void) __attribute__((weak)); static int dbg_printed; if (!dbg_printed) { dbg_printed = 1; fprintf(stderr, "winegstreamer: unix wg_parser_create entered, wg_task_pool GType=%lu\\n", (unsigned long)(wg_task_pool_get_type ? wg_task_pool_get_type() : 0)); } }\n/' "${FILE_PARSER}"
 
-          # ---- (2) 兜底：task pool 创建失败时退回默认 pool ----
           perl -0pi -e 's/if \(!\(parser->task_pool = wg_task_pool_new\(\)\)\)\n    \{\n        free\(parser\);\n        return E_OUTOFMEMORY;\n    \}/if (!(parser->task_pool = wg_task_pool_new()))\n    {\n        fprintf(stderr, "winegstreamer: wg_task_pool_new() failed, falling back to the default GstTaskPool\\n");\n        if (!(parser->task_pool = gst_task_pool_new()))\n        {\n            free(parser);\n            return E_OUTOFMEMORY;\n        }\n    }/' "${FILE_PARSER}"
 
-          # ---- (3) 宿主 gst/glib 版本打点 ----
           if [ -f "${FILE_UNIXLIB}" ]; then
             perl -0pi -e 's/(GST_INFO\("GStreamer library version %s; wine built with %d\.%d\.%d\.",\n\s*gst_version_string\(\), GST_VERSION_MAJOR, GST_VERSION_MINOR, GST_VERSION_MICRO\);)/$1\n    fprintf(stderr, "winegstreamer: unix init: host gst %s, host glib %u.%u.%u, built with gst %d.%d.%d\\n", gst_version_string(), glib_major_version, glib_minor_version, glib_micro_version, GST_VERSION_MAJOR, GST_VERSION_MINOR, GST_VERSION_MICRO);/' "${FILE_UNIXLIB}"
           fi
 
-          # ---- (4) PE 侧打点：把 unixlib 调用的真实返回码用 ERR() 打出来 ----
-          # ERR() 走 Wine 的 err 通道，默认就显示在 stderr，不依赖 unix 侧是否跑起来。
-          # 0xc0000135 = STATUS_DLL_NOT_FOUND（多半是 .so 没加载到）
           FILE_MAIN="dlls/winegstreamer/main.c"
           if [ -f "${FILE_MAIN}" ]; then
             perl -0pi -e 's/if \(WINE_UNIX_CALL\(unix_wg_init_gstreamer, &params\)\)\n        return FALSE;/{ NTSTATUS _wg_rc = WINE_UNIX_CALL(unix_wg_init_gstreamer, &params); if (_wg_rc) { ERR("unix_wg_init_gstreamer FAILED rc=0x%08x\\n", (unsigned int)_wg_rc); return FALSE; } }/' "${FILE_MAIN}"
@@ -1450,26 +1306,6 @@ jobs:
           grep -n 'wg_task_pool_new\|gst_task_pool_new\|GType=%lu' "${FILE_PARSER}" | head -20 || echo "(无 task pool 诊断命中，属正常)"
 
       # ============================================================
-      # ============================================================
-      # ============================================================
-      # 8.0 【关键修复】去掉 winegstreamer 的 GstGL 依赖（对齐 AndreRH/wine）
-      #
-      # 对比 AndreRH/wine@3ea3a14941b6a122b892c84141ce9662c008081e 与
-      #      proton-9.0-arm64ec 的 dlls/winegstreamer：
-      #   AndreRH : 无 gst/gl 依赖、无自定义 GstTaskPool      -> 依赖面最小，实测能解码
-      #   Proton  : GstGL 互操作(gl_display / glupload / GL context) + WgTaskPool 子类
-      # 后果：Proton 版 winegstreamer.so 的 NEEDED 多一个 libgstgl-1.0.so.0，
-      #       而 libgstgl 自身还链 libEGL / libGL / libwayland / libX11，
-      #       在 Termux(Android) 上极易断链 -> dlopen 失败
-      #       -> PE 侧 init_gstreamer() 静默吞错(main.c 永远 return TRUE)
-      #       -> quartz/MF 全部报 hr 0x8007000e，且 GST_DEBUG 一行都不输出。
-      #
-      # 做法（纯宏垫片，不删任何源码，两版 wine 通吃）：
-      #   configure.ac : GSTREAMER pkg 列表去掉 gstreamer-gl-1.0
-      #   unixlib.c    : <gst/gl/gl.h> 换成垫片；gl_display 恒为 NULL
-      #   wg_parser.c  : 同上；use_opengl 自然恒为 FALSE（不再需要 glupload）
-      # 预期：winegstreamer.so 的 NEEDED 不再含 libgstgl，解码只需 core/base 库。
-      # ============================================================
       - name: 去掉 winegstreamer 的 GstGL 依赖 (对齐 AndreRH)
         shell: bash
         run: |
@@ -1481,15 +1317,8 @@ jobs:
           grep -n 'GSTREAMER,\[' configure.ac || true
           grep -n 'gst/gl/gl.h' dlls/winegstreamer/*.c || true
 
-          # ---- (1) configure.ac：pkg 列表去掉 gstreamer-gl-1.0 ----
           sed -i 's/gstreamer-tag-1\.0 gstreamer-gl-1\.0/gstreamer-tag-1.0/' configure.ac
 
-          # ---- (2) 宏垫片：把 gst-gl 的类型/函数全部中和 ----
-          #   gst_gl_display_new()             -> NULL        （gl_display 恒为 NULL）
-          #   gst_gl_display_create_context()  -> 0 / FALSE   （旧版 pipetto 才用）
-          #   gst_gl_display_add_context()     -> no-op
-          #   GST_GL_DISPLAY_CONTEXT_TYPE      -> 字符串常量  （不再引用 libgstgl 的 GType）
-          #   从而不再产生任何对 libgstgl 的符号引用 -> NEEDED 里不会再出现 libgstgl
           SHIM='typedef struct _GstGLDisplay GstGLDisplay;\ntypedef struct _GstGLContext GstGLContext;\n#define gst_gl_display_new() (NULL)\n#define gst_gl_display_create_context(d, c, o, e) (0)\n#define gst_gl_display_add_context(d, c) ((void)0)\n#define GST_GL_DISPLAY_CONTEXT_TYPE "gst.gl.GLDisplay"\n#define gst_context_set_gl_display(c, d) ((void)0)'
           for f in dlls/winegstreamer/unixlib.c dlls/winegstreamer/wg_parser.c; do
             if grep -q '#include <gst/gl/gl.h>' "${f}"; then
@@ -1500,7 +1329,6 @@ jobs:
             fi
           done
 
-          # gst 不再尝试用 x11 的 GL 窗口
           sed -i '/setenv("GST_GL_WINDOW"/d' dlls/winegstreamer/unixlib.c || true
 
           echo "=== 修改后自检 ==="
@@ -1537,22 +1365,8 @@ jobs:
           grep -n 'GSTREAMER,\[' configure.ac || true
           grep -c 'gstreamer-gl-1.0' configure.ac || echo "OK: configure.ac 已无 gstreamer-gl-1.0"
 
+      # ============================================================
       # 8.1 【关键修复】esync 头文件缺失
-      #
-      # 上游 WinNative-Emu/proton-wine@proton_11.0 的 tree 不一致：
-      #   dlls/ntdll/unix/server.c:1716 调用了 esync_init( shm_fd )
-      #   但该文件只 #include 了 "fsync.h"，漏了 "esync.h"
-      # 报错（本次 run #245 的真实失败原因）：
-      #   ../dlls/ntdll/unix/server.c:1716:17: error: call to undeclared function
-      #   'esync_init'; ISO C99 and later do not support implicit function
-      #   declarations [-Wimplicit-function-declaration]
-      #   note: did you mean 'fsync_init'?  (fsync.h:21 declared here)
-      #   make: *** [dlls/ntdll/unix/server.o] 오류 1
-      #
-      # 原因：隐式函数声明在 GCC 下只是 warning（上游用 gcc 所以没暴露），
-      #       但 clang 16+ 默认当 error；本 workflow 用 clang 就直接编译失败。
-      # 注意：sync.c / server/inproc_sync.c / server/main.c 都已正确 include，
-      #       全树只有 server.c 这一处遗漏，所以这是 1 行修复。
       # ============================================================
       - name: 修复 esync 头文件缺失 (server.c)
         shell: bash
@@ -1563,9 +1377,6 @@ jobs:
 
           FILE_SERVER_ESYNC="dlls/ntdll/unix/server.c"
 
-          # 这个修复只针对 proton / arm64ec 型 tree：
-          #   * 文件不存在  -> 直接跳过
-          #   * 没调用 esync_init（上游 Wine 9.0 之类）-> 跳过，避免插了不存在的头文件
           if [ ! -f "${FILE_SERVER_ESYNC}" ]; then
             echo "跳过 esync 修复：不存在 ${FILE_SERVER_ESYNC}"
           elif [ ! -f dlls/ntdll/unix/esync.h ] && ! grep -q 'esync_init' "${FILE_SERVER_ESYNC}"; then
@@ -1573,7 +1384,6 @@ jobs:
           elif grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"; then
             echo "已经包含 esync.h，无需修复"
           else
-            # 插到 fsync.h 前面（与上游 esync 补丁的写法一致）
             sed -i \
               's|^#include "fsync.h"$|#include "esync.h"\n#include "fsync.h"|' \
               "${FILE_SERVER_ESYNC}"
@@ -1585,7 +1395,6 @@ jobs:
             '#include "esync.h"\|#include "fsync.h"' \
             "${FILE_SERVER_ESYNC}" || echo "(该 tree 无 esync.h/fsync.h include —— 无需修复)"
 
-          # 硬校验：仅当确实存在 esync.h（即需要这个修复）时才强制要求
           if [ -f dlls/ntdll/unix/esync.h ]; then
             grep -q '#include "esync.h"' "${FILE_SERVER_ESYNC}"
             echo "esync.h include 修复完成（已校验）"
@@ -1606,7 +1415,6 @@ jobs:
           if [ -x ./autogen.sh ]; then
             ./autogen.sh
           elif [ -f configure ] && [ -f configure.ac ]; then
-            # 已有 configure：优先沿用，避免用 autoconf 覆盖掉原本完整的 configure（会丢特性检测，例如 gnutls）
             if [ configure -nt configure.ac ]; then
               echo "OK: configure 已存在且比 configure.ac 新 -> 直接沿用（不重新生成）"
             else
@@ -1646,9 +1454,6 @@ jobs:
 
           cd native
 
-          # arm64ec 交叉编译器由 llvm_mingw_repo/llvm_mingw_date 决定
-          # （新版 lld 会要求 EC 版 _load_config_used，使 wine 的 arm64ec 探测失败；
-          #  需要 arm64ec 的树可选用较早的 llvm-mingw，例如 mstorsjo 20240619）
           export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
 
           export CC="gcc"
@@ -1775,9 +1580,6 @@ jobs:
             exit 0
           fi
 
-          # Proton9 这棵树的 set_gst_env() 只处理 __x86_64__ / __i386__，
-          # aarch64 宿主会落到 #else -> #error Bad arch。
-          # 补一个 aarch64 分支（与新版 wine 一致：registry.aarch64.bin）。
           perl -0pi -e 's{(#elif defined\(__i386__\)\n\s*const char \*arch = "/registry\.i386\.bin";\n)}{$1#elif defined(__aarch64__)\n        const char *arch = "/registry.aarch64.bin";\n}' "${F}"
 
           echo "=== 修改后 ==="
@@ -1790,12 +1592,6 @@ jobs:
 
           echo "✓ unixlib.c aarch64 分支已就绪"
 
-          # ---- media-converter.h：murmur3_128_state 的宏选择同样只认 x86 ----
-          # Proton9 的 media-converter.h 里：
-          #   #ifdef __x86_64__  -> x64 变体
-          #   #elif defined(__i386__) -> x86 变体
-          # aarch64 宿主两个都不成立 -> struct murmur3_128_state 是未定义/不完整类型。
-          # Proton11 已修成 `#if defined(__x86_64__) || defined(__aarch64__)`，这里对齐。
           M="${WINE_SOURCE_DIR}/source/dlls/winegstreamer/media-converter/media-converter.h"
 
           if [ -f "${M}" ]; then
@@ -1824,12 +1620,6 @@ jobs:
             echo "无 ${M}，跳过（该树不含 media-converter）"
           fi
 
-          # ---- d3dx11_42: IMPORTS 指向的 d3dx11_43 模块，其 import lib 名其实是 d3dx11 ----
-          #   dlls/d3dx11_43/Makefile.in : IMPORTLIB = d3dx11
-          #   dlls/d3dx11_42/Makefile.in : IMPORTS = d3dcompiler d3dx11_43
-          # 本配置下 makedep 没把 d3dx11_43 解析成模块，直接给了 `-ld3dx11_43`
-          # -> lld-link: could not open 'd3dx11_43.lib'。
-          # 改成实际 import lib 名（等价、正确的链接）。
           D42="${WINE_SOURCE_DIR}/source/dlls/d3dx11_42/Makefile.in"
 
           if [ -f "${D42}" ]; then
@@ -1846,20 +1636,11 @@ jobs:
             echo "无 ${D42}，跳过"
           fi
 
-          # ---- amd_ags_x64：Proton9 的 AGS 实现只覆盖 x86/x86_64 ----
-          # aarch64 上链接会缺 DX11_*_impl / agsDriverExtensionsDX11_* 等符号。
-          # ARM64 构建里直接禁用该 DLL（游戏需要真 AGS 时自己带 Windows DLL）。
           CA="${WINE_SOURCE_DIR}/source/configure.ac"
 
-          # [termux-arm64-guard] 下面这段只对“非 arm64ec”（9.x 纯 aarch64+i386）路线需要：
-          # arm64ec 构建里 xstate_*/set_thread_teb 由树内 x86 侧提供，禁用 amd_ags/crtdll 也
-          # 会误伤 10.0/11.0 这类原生支持 arm64ec 的树，所以这里加守卫。
           if printf '%s' "${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}" | grep -q 'arm64ec'; then
             echo "[termux-arm64-guard] 已启用 arm64ec：跳过 xstate/TEB 兜底 与 amd_ags/crtdll 禁用"
           else
-          # ARM64(arm64ec) 不兼容的 DLL：
-          #   amd_ags_x64 : AGS 实现只覆盖 x86/x86_64 -> 缺 DX11_*_impl 等符号
-          #   crtdll      : 来自 msvcrt 老代码，含 x86 内联汇编 -> arm64ec 下汇编报错
           for _dll in amd_ags_x64 crtdll; do
             if [ -f "${CA}" ] && grep -q "^WINE_CONFIG_MAKEFILE(dlls/${_dll})" "${CA}"; then
               sed -i "s|^WINE_CONFIG_MAKEFILE(dlls/${_dll})$|# [termux-arm64] disabled (arm64ec incompatible): WINE_CONFIG_MAKEFILE(dlls/${_dll})|" "${CA}"
@@ -1870,18 +1651,9 @@ jobs:
           done
           grep -n 'termux-arm64] disabled' "${CA}" || true
 
-          # [termux-arm64-guard] 下面这段只对“非 arm64ec”（9.x 纯 aarch64+i386）路线需要：
-          # arm64ec 构建里 xstate_*/set_thread_teb 由树内 x86 侧提供，禁用 amd_ags/crtdll 也
-          # 会误伤 10.0/11.0 这类原生支持 arm64ec 的树，所以这里加守卫。
           if printf '%s' "${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}" | grep -q 'arm64ec'; then
             echo "[termux-arm64-guard] 已启用 arm64ec：跳过 xstate/TEB 兜底 与 amd_ags/crtdll 禁用"
           else
-          # ---- aarch64 ntdll 缺的 xstate / set_thread_teb 兜底 ----
-          # 这几个符号在 wine9 里只由 signal_i386.c / signal_x86_64.c 提供。
-          # 不启用 arm64ec（纯 aarch64,i386）时，ntdll.so 链接会缺：
-          #   set_thread_teb / xstate_supported_features_mask / xstate_features_size
-          # 这里给 aarch64 一份安全实现：扩展状态视为不支持（mask=0），TEB 指针在
-          # aarch64 上由 x18/系统寄存器维护，set_thread_teb 无需额外动作。
           SA="${WINE_SOURCE_DIR}/source/dlls/ntdll/unix/signal_arm64.c"
 
           if [ -f "${SA}" ] && ! grep -q 'termux-arm64 xstate/TEB fallbacks' "${SA}"; then
@@ -1908,8 +1680,6 @@ jobs:
           fi
 
 
-          # configure.ac 里的 WINE_CONFIG_MAKEFILE 列表在 autogen.sh 时已被烘焙进生成的 configure，
-          # 所以改完 configure.ac 必须重新生成 configure 才生效。
           if [ -f "${CA}" ] && command -v autoconf >/dev/null 2>&1; then
             if ( cd "${WINE_SOURCE_DIR}/source" && autoconf -o configure configure.ac ); then
               echo "configure 已按修改后的 configure.ac 重新生成"
@@ -1937,44 +1707,27 @@ jobs:
 
           cd build-arm64
 
-          # arm64ec 交叉编译器由 llvm_mingw_repo/llvm_mingw_date 决定
-          # （新版 lld 会要求 EC 版 _load_config_used，使 wine 的 arm64ec 探测失败；
-          #  需要 arm64ec 的树可选用较早的 llvm-mingw，例如 mstorsjo 20240619）
           export PATH="/opt/${LLVMMINGW_NAME}/bin:${PATH}"
 
-          # Host compiler
           export CC="clang --target=aarch64-linux-gnu"
           export CXX="clang++ --target=aarch64-linux-gnu"
 
-          # Windows cross compiler
           export CROSSCC="arm64ec-w64-mingw32-clang"
           export CROSSCXX="arm64ec-w64-mingw32-clang++"
 
-          # ARM64 Debian sysroot
           export SYSROOT="/usr"
 
           export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           export PKG_CONFIG_LIBDIR="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 
-          # Compiler flags
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
 
           export CROSSCFLAGS="-O2 -pipe"
           export CROSSCXXFLAGS="-O2 -pipe"
 
-          # 注意：不要在全局 LDFLAGS 里强制 Termux loader。
-          # 只在最终打包后用 patchelf 修改 ELF interpreter。
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,-O1 -Wl,--as-needed -Wl,--sort-common"
 
-          # ---- arm64ec：注入 autoconf 缓存变量，跳过 wine 的编译探测 ----
-          # wine9 的探测命令是 `clang -o conftest.exe -O2 -pipe -nostdlib -nodefaultlibs
-          # -target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX conftest.c`
-          # （见 config.log），在新版 lld 上会因 EC 版 mainCRTStartup / _load_config_used
-          # / __os_arm64x_dispatch_ret 等符号缺失而误判为“没有 arm64ec 编译器”，
-          # 于是 --enable-archs 里丢掉 arm64ec，接着 ntdll.so 会缺 set_thread_teb /
-          # xstate_features_size 等（这些只由 x86/x86_64 的 signal 实现提供）。
-          # 这里直接把探测结果写成 yes；真正编译/链接仍按 arm64ec 走。
           WINE_ARCHS="${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}"
 
           export ac_cv_arm64ec_crosscc=yes
@@ -2088,11 +1841,6 @@ jobs:
 
           echo "Building with ${JOBS} jobs"
 
-          # ---------------------------------------------------------------
-          # 打印真正生效的编译器 / 目标，并把日志落盘。
-          # 这段是"以后不用再猜"的关键：Actions 网页日志要登录才能看，
-          # 落成 artifact 后失败时能直接下载 build.log。
-          # ---------------------------------------------------------------
           echo "=== config.status 里实际生效的编译器 / 目标 ==="
           grep -aE '"(CC|CXX|HOST_ARCH|PE_ARCHS|(arm64ec|aarch64|i386|x86_64)_(CC|TARGET))"' \
             config.status | head -40 || true
@@ -2103,7 +1851,7 @@ jobs:
             2>&1 | tee build.log
 
       # ============================================================
-      # 14.5 失败时上传构建日志（Actions 网页日志需要登录，artifact 可直接下载）
+      # 14.5 失败时上传构建日志
       # ============================================================
       - name: 上传构建日志 (失败时)
         if: failure()
@@ -2159,7 +1907,6 @@ jobs:
             "${TARGET}/share/wine/nls" \
             "${TARGET}/share/wine/fonts"
 
-          # NLS
           rm -rf \
             "${TARGET}/share/wine/nls"
 
@@ -2173,7 +1920,6 @@ jobs:
           test -f \
             "${TARGET}/share/wine/nls/locale.nls"
 
-          # Fonts
           if [ -d "${WINE_SOURCE_DIR}/source/fonts" ]; then
             find "${WINE_SOURCE_DIR}/source/fonts" \
               -maxdepth 1 \
@@ -2188,7 +1934,6 @@ jobs:
               -exec cp -L {} "${TARGET}/share/wine/fonts/" \;
           fi
 
-          # Wine Unix libraries
           mkdir -p \
             "${TARGET}/lib/wine/aarch64-unix"
 
@@ -2217,7 +1962,6 @@ jobs:
               "${TARGET}/lib/wine/aarch64-unix/ntdll.so" \; \
             || true
 
-          # Wine executables
           for PROG in \
             wine \
             wineserver \
@@ -2246,7 +1990,6 @@ jobs:
             fi
           done
 
-          # ntdll loader compatibility
           if [ -f "${TARGET}/lib/wine/aarch64-unix/ntdll.so" ]; then
             ln -sfn \
               "../lib/wine/aarch64-unix/ntdll.so" \
@@ -2316,8 +2059,6 @@ jobs:
 
               file "${FILE}"
 
-              # Wine 9.0 里 bin/wineboot 是 POSIX shell 脚本（不是 ELF），
-              # 直接 readelf 会报 "Not an ELF file" 并让步骤失败 —— 这里先判断类型
               if ! file -b "${FILE}" | grep -q 'ELF'; then
                 echo "  (非 ELF 文件，跳过 readelf: $(file -b "${FILE}"))"
                 continue
@@ -2343,18 +2084,6 @@ jobs:
 
       # ============================================================
       # 18.5 安装 FEX 模拟器 DLL + Termux 路径配置
-      #
-      # 把 FEX 编出来的两个模拟器 DLL 放进 wine 的
-      #   lib/wine/aarch64-windows/         <- Hangover 官方位置
-      #     libarm64ecfex.dll   x86_64 模拟
-      #     libwow64fex.dll     i386   模拟
-      #
-      # 同时处理 FEX 内置的默认路径：
-      #   /usr/lib/wine/aarch64-windows/fex-emu/HostThunks
-      #   /usr/share/fex-emu/GuestThunks
-      # 这两条在 Termux(非 root) 下不存在，改用 FEX 官方支持的环境变量
-      #   FEX_THUNKHOSTLIBS / FEX_THUNKGUESTLIBS / FEX_ROOTFS / FEX_THUNKCONFIG
-      # 覆盖成 Termux glibc 前缀内的真实位置（脚本自定位，不写死绝对路径）。
       # ============================================================
       - name: 安装 FEX 模拟器 DLL (aarch64-windows)
         shell: bash
@@ -2380,18 +2109,14 @@ jobs:
           grep -a -i 'libarm64ecfex\|libwow64fex' "${TARGET}/share/wine/wine.inf" | head -6 || \
             echo "(wine.inf 里没找到 FEX 名称，检查 Termux compatibility patches 步骤)"
 
-          # ---------- FEX 的 thunk / rootfs 目录 ----------
           mkdir -p "${DEST}/fex-emu/HostThunks"
           mkdir -p "${TARGET}/share/fex-emu/GuestThunks"
           mkdir -p "${TARGET}/share/fex-emu/RootFS"
 
-          # ---------- 自定位的 FEX 环境脚本 ----------
           cat > "${TARGET}/share/fex-emu/fex-env.sh" <<'EOS'
           #!/bin/bash
           # FEX 在 Termux glibc 环境下的路径配置
           # 用法: source "<wine根>/share/fex-emu/fex-env.sh"
-          # 说明: FEX DLL 内置默认路径是 /usr/lib/wine/... 与 /usr/share/fex-emu/，
-          #       在 Termux(非 root) 里那些路径不存在也不可写，必须用环境变量覆盖。
           _fex_share="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
           _fex_root="$(cd "${_fex_share}/../.." && pwd)"
 
@@ -2399,9 +2124,7 @@ jobs:
           export FEX_THUNKGUESTLIBS="${_fex_share}/GuestThunks"
           export FEX_ROOTFS="${_fex_share}/RootFS"
           export FEX_THUNKCONFIG="${_fex_share}"
-          # FEX 用相对自身位置的路径（不再依赖 /usr、/etc）
           export FEX_PORTABLE=1
-          # Wine 侧选择模拟器 DLL（Hangover 约定）
           export HODLL64=libarm64ecfex.dll
           export HODLL=libwow64fex.dll
 
@@ -2412,7 +2135,6 @@ jobs:
 
           chmod 0755 "${TARGET}/share/fex-emu/fex-env.sh"
 
-          # ---------- FEX/WoW64 模拟器 DLL：就位 + 32 位侧安装脚本 + ABI 校验 ----------
           FEXX="${TARGET}/lib/wine/aarch64-windows"
           mkdir -p "${FEXX}"
           for D in libarm64ecfex.dll libwow64fex.dll wowbox64.dll; do
@@ -2426,10 +2148,6 @@ jobs:
             fi
           done
 
-          # （原 ${TARGET}/wow64-dlls 目录已移除：DLL 就在 lib/wine/aarch64-windows/，
-          #   前缀内需要的副本由 Termux 侧安装流程自行处理，包里不再多一份冗余目录）
-
-          # ABI 硬校验：Machine 必须是 ARM64EC，导出必须含 BTCpu*
           echo "=== FEX DLL ABI 校验 ==="
           OBJDUMP="$(command -v llvm-objdump || echo /opt/${LLVMMINGW_NAME}/bin/llvm-objdump)"
           for D in "${FEXX}"/*.dll; do
@@ -2448,7 +2166,6 @@ jobs:
             fi
           done
 
-          # 把 FEX 构建时生成的 thunk 数据（如果有）一并带上
           if [ -d /opt/fex-src/build_ec/Bin/Thunks ]; then
             cp -a /opt/fex-src/build_ec/Bin/Thunks/. "${DEST}/fex-emu/HostThunks/" || true
           fi
@@ -2475,7 +2192,6 @@ jobs:
 
           TERMUX_LOADER="${TERMUX_GLIBC_PREFIX}/lib/ld-linux-aarch64.so.1"
 
-          # ---------- bin/ ----------
           find "${TARGET}/bin" \
             -type f \
             -exec file {} \; |
@@ -2489,12 +2205,6 @@ jobs:
               "${ELF}" || true
           done
 
-          # ---------- lib/wine/（含非 .so 的可执行文件）----------
-          # 【修复】原来只处理 -name "*.so"，漏掉了
-          #   lib/wine/aarch64-unix/wine        <- 真正的 loader 二进制
-          #   lib/wine/*-unix/wineserver 等
-          # 它们仍指向宿主 /lib/ld-linux-aarch64.so.1，在 Termux 上会 ENOENT。
-          # 现在：统一设置 Termux RPATH；若该 ELF 自带 PT_INTERP 再顺带改 interpreter。
           while IFS= read -r -d '' ELF; do
             case "$(file -b "$ELF")" in
               *"ELF 64-bit LSB"*"ARM aarch64"*) ;;
@@ -2510,7 +2220,6 @@ jobs:
             fi
           done < <(find "${TARGET}/lib/wine" -type f -print0)
 
-          # ---------- 自检（不完整就直接失败，别让它跑到 Release）----------
           echo "=========== runtime path 自检 ==========="
           FAIL=0
           for ELF in "${TARGET}/bin/wine" "${TARGET}/bin/wineserver" "${TARGET}"/lib/wine/*-unix/wine; do
@@ -2548,12 +2257,8 @@ jobs:
             exit 1
           fi
 
-          # ---------- 残留 /tmp 路径检查（编译期不会报错、只有运行时才炸）----------
-          # 例: wineserver: mkdir /tmp/.wine-10521: Permission denied
           echo "=========== /tmp 残留检查 ==========="
           TMP_LEFT=0
-          # 用 PCRE 负向后顾：只有「前面不是 usr」的 /tmp/.wine- 才算残留，
-          # 这样替换后的 ".../usr/tmp/.wine-" 不会被误判。
           for BIN in "${TARGET}/bin/wine" "${TARGET}/bin/wineserver" "${TARGET}"/lib/wine/*-unix/*.so; do
             [ -f "${BIN}" ] || continue
             if grep -qaP '(?<!usr)/tmp/\.wine-' "${BIN}"; then
@@ -2645,14 +2350,7 @@ jobs:
           head -100 || true
 
       # ============================================================
-      # 22.1 【自检】解码 / 音频链依赖
-      #
-      # - winegstreamer.so 必须链上宿主 gstreamer（否则 MF/quartz 全灭，
-      #   典型现象 hr=0x8007000e）
-      # - winepulse.drv 的 DriverProc 转发到 winealsa.drv，所以 --with-pulse
-      #   时必须同时 --with-alsa，否则运行时：
-      #   err:module:find_forwarded_export module not found for forward
-      #   'winealsa.drv.DriverProc' used by winepulse.drv
+      # 22.1 验证解码 / 音频链依赖
       # ============================================================
       - name: 验证解码链依赖 (gstreamer + alsa)
         shell: bash
@@ -2714,15 +2412,7 @@ jobs:
           done
 
       # ============================================================
-      # 22.2 【自检】加密链路（gnutls / schannel / bcrypt）
-      #
-      # 症状（wineboot 日志实测，出现 80 次）：
-      #   err:bcrypt:key_asymmetric_create no encryption support
-      # 原因：configure 阶段没找到 libgnutls（漏装 libgnutls28-dev:arm64）
-      #   configure: WARNING: libgnutls 64-bit development files not found,
-      #              no schannel support.
-      # 影响：schannel(TLS/WinHTTP) 不可用 + bcrypt 无加密后端
-      #       -> 联网游戏/启动器、DRM、证书校验会失败
+      # 22.2 验证加密链依赖 (gnutls / schannel)
       # ============================================================
       - name: 验证加密链依赖 (gnutls / schannel)
         shell: bash
@@ -2739,12 +2429,7 @@ jobs:
             exit 0
           fi
           readelf -dW "${BCRYPT}" | grep -E 'NEEDED|RUNPATH' || true
-          # 注意：Wine 的 bcrypt 是 dlopen(SONAME_LIBGNUTLS) 动态加载的，
-          #       所以 NEEDED 里不会有 libgnutls —— 要查内嵌的 soname 字符串。
           echo "--- bcrypt.so 内嵌的动态库 soname ---"
-          # 注意：workflow 默认 shell 是 `bash -e -o pipefail`，
-          #       而 `strings | grep -q` 会因为 grep 提前退出触发 SIGPIPE(141) 被误判失败！
-          #       所以先把结果存进变量再判断。
           DLOPEN_SONAMES=$(strings -a "${BCRYPT}" | grep -E '^lib(gnutls|gmp|gcrypt)\.so' | sort -u || true)
           echo "${DLOPEN_SONAMES}" | sed 's/^/  /'
           case "${DLOPEN_SONAMES}" in
@@ -2755,8 +2440,6 @@ jobs:
           esac
 
           echo "=== secur32.so（报告用，不做硬断言）==="
-          # secur32 与 bcrypt 一样是运行时 dlopen 加载 gnutls，NEEDED 里不会有 libgnutls，
-          # 所以判定要看“内嵌 soname”，并且先把 strings 落到临时文件（避开 pipefail + SIGPIPE 的假失败）。
           SEC="${TARGET}/lib/wine/aarch64-unix/secur32.so"
           if [ -f "${SEC}" ]; then
             readelf -dW "${SEC}" | grep -E 'NEEDED' || true
@@ -2863,7 +2546,7 @@ jobs:
             wine-package/wine/share/wine/nls/locale.nls
 
       # ============================================================
-      # 27. Package manifest
+      # 27. Package manifest（版本一律取第 6 步写进 GITHUB_ENV 的权威变量）
       # ============================================================
       - name: 生成构建信息
         shell: bash
@@ -2874,11 +2557,17 @@ jobs:
           Wine ARM64 WOW64 / ARM64EC
           ============================
 
+          Build name:
+          ${BUILD_NAME}
+
           Build type:
-          ${{ inputs.wine_branch || 'proton' }}
+          ${BUILD_TYPE}
 
           Wine version:
           ${WINE_VERSION_ACTUAL}
+
+          Wine version (safe):
+          ${VER_SAFE}
 
           Wine commit:
           ${WINE_COMMIT}
@@ -2895,7 +2584,7 @@ jobs:
           Valve branch:
           ${{ inputs.valve_branch }}
 
-          Staging version:
+          Staging version (input):
           ${{ inputs.staging_version }}
 
           LLVM-MinGW:
@@ -2908,9 +2597,7 @@ jobs:
           ARM64 Linux / Termux glibc
 
           Windows architectures:
-          arm64ec
-          aarch64
-          i386
+          ${{ inputs.wine_archs }}
 
           Termux glibc:
           ${TERMUX_GLIBC_PREFIX}
@@ -2933,7 +2620,7 @@ jobs:
 
           cat wine-package/BUILD_INFO.txt
 
-          # ---------- 运行时依赖清单（给设备侧核对“缺哪个库”）----------
+          # ---------- 运行时依赖清单 ----------
           {
             echo "Wine ARM64 WOW64 / Termux glibc - runtime dependency manifest"
             echo "Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
@@ -2959,22 +2646,79 @@ jobs:
           cat wine-package/RUNTIME_DEPS.txt
 
       # ============================================================
-      # 28. tar.xz
+      # 28. tar.xz（打包前断言版本一致性）
       # ============================================================
       - name: 创建 tar.xz
         shell: bash
         run: |
           set -eux
 
+          # 一致性断言：BUILD_NAME 必须含 VER_SAFE
+          case "${BUILD_NAME}" in
+            *"${VER_SAFE}"*) echo "OK: BUILD_NAME 含 VER_SAFE (${VER_SAFE})" ;;
+            *) echo "FATAL: BUILD_NAME=${BUILD_NAME} 不含 VER_SAFE=${VER_SAFE}"; exit 1 ;;
+          esac
+
           tar \
             -cJf \
             "${BUILD_NAME}.tar.xz" \
             -C wine-package \
             wine \
-            BUILD_INFO.txt
+            BUILD_INFO.txt \
+            RUNTIME_DEPS.txt
+
+          test -f "${BUILD_NAME}.tar.xz"
 
           ls -lh \
             "${BUILD_NAME}.tar.xz"
+
+      # ============================================================
+      # 28.5 版本一致性自检（编译版本 == 包名 == Release 名）
+      # ============================================================
+      - name: 校验版本一致性
+        shell: bash
+        run: |
+          set -eux
+
+          echo "=== 权威版本变量 ==="
+          echo "  WINE_VERSION_ACTUAL = ${WINE_VERSION_ACTUAL}"
+          echo "  VER_SAFE            = ${VER_SAFE}"
+          echo "  WINE_COMMIT         = ${WINE_COMMIT}"
+          echo "  BUILD_NAME          = ${BUILD_NAME}"
+          echo "  BUILD_TYPE          = ${BUILD_TYPE}"
+
+          fail=0
+
+          case "${BUILD_NAME}" in
+            *"${VER_SAFE}"*)    echo "OK: BUILD_NAME 含 VER_SAFE" ;;
+            *) echo "FAIL: BUILD_NAME 不含 VER_SAFE"; fail=1 ;;
+          esac
+          case "${BUILD_NAME}" in
+            *"${WINE_COMMIT}"*) echo "OK: BUILD_NAME 含 WINE_COMMIT" ;;
+            *) echo "FAIL: BUILD_NAME 不含 WINE_COMMIT"; fail=1 ;;
+          esac
+
+          test -f "${BUILD_NAME}.tar.xz" \
+            && echo "OK: tar 包名 = ${BUILD_NAME}.tar.xz" \
+            || { echo "FAIL: 找不到 ${BUILD_NAME}.tar.xz"; fail=1; }
+
+          if grep -qF "${WINE_VERSION_ACTUAL}" wine-package/BUILD_INFO.txt; then
+            echo "OK: BUILD_INFO.txt 版本与 WINE_VERSION_ACTUAL 一致"
+          else
+            echo "FAIL: BUILD_INFO.txt 版本与 WINE_VERSION_ACTUAL 不一致"
+            fail=1
+          fi
+
+          if grep -qF "${BUILD_NAME}" wine-package/BUILD_INFO.txt; then
+            echo "OK: BUILD_INFO.txt 的 Build name 与 BUILD_NAME 一致"
+          else
+            echo "FAIL: BUILD_INFO.txt 的 Build name 与 BUILD_NAME 不一致"
+            fail=1
+          fi
+
+          [ "${fail}" = "0" ] || { echo "FATAL: 版本一致性校验失败"; exit 1; }
+
+          echo "=== 版本一致性全部通过 ==="
 
       # ============================================================
       # 29. SHA256
@@ -2991,12 +2735,12 @@ jobs:
           cat checksums.txt
 
       # ============================================================
-      # 30. Artifact
+      # 30. Artifact（名称统一为 BUILD_NAME）
       # ============================================================
       - name: Upload Wine artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Wine-${{ inputs.wine_branch || 'proton' }}-${{ inputs.wine_version || 'latest' }}-ARM64CE-WOW64
+          name: ${{ env.BUILD_NAME }}
           path: |
             *.tar.xz
             checksums.txt
@@ -3005,7 +2749,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 31. GitHub Release
+      # 31. GitHub Release（tag / name / files / body 全部走权威变量）
       # ============================================================
       - name: Publish Wine GitHub Release
         if: github.event_name == 'workflow_dispatch'
@@ -3019,8 +2763,10 @@ jobs:
 
             ## Build
 
-            - Build type: `${{ inputs.wine_branch || 'proton' }}`
-            - Wine version: `${{ inputs.wine_version || 'latest' }}`
+            - Build name: `${{ env.BUILD_NAME }}`
+            - Build type: `${{ env.BUILD_TYPE }}`
+            - Wine version: `${{ env.WINE_VERSION_ACTUAL }}`
+            - Wine version (safe): `${{ env.VER_SAFE }}`
             - Wine commit: `${{ env.WINE_COMMIT }}`
             - Host: Debian 12 amd64
             - Target: ARM64 Linux / Termux glibc
@@ -3038,7 +2784,7 @@ jobs:
 
             ## Wine-Staging
 
-            - Version: `${{ inputs.staging_version }}`
+            - Version (input): `${{ inputs.staging_version }}`
 
             ## Runtime
 
