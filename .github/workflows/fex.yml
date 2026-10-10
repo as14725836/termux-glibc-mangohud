@@ -891,7 +891,14 @@ jobs:
 
           PKG_NAME="${PKG_PREFIX}${FEX_DESC_SAFE}-arm64ec-wow64"
 
-          tar cJf "${PKG_NAME}.tar.xz" fex
+          # ---- 只打包 DLL：归档内容仅 fex/*.dll ----
+          # （fex-env.sh / INSTALL.md / BUILD_INFO.txt / BOX64_TAG 只留在构建目录用于
+          #   日志与校验，不再进入发布的 tar 包）
+          PKG_DLLS="$(cd "${PKG}" && ls fex/*.dll 2>/dev/null || true)"
+          test -n "${PKG_DLLS}" || { echo "FATAL: 没有可打包的 DLL"; exit 1; }
+          echo "将打包以下文件（仅 DLL）："
+          echo "${PKG_DLLS}"
+          tar cJf "${PKG_NAME}.tar.xz" -C "${PKG}" ${PKG_DLLS}
 
           sha256sum "${PKG_NAME}.tar.xz" > checksums.txt
 
@@ -928,17 +935,17 @@ jobs:
 
           file /tmp/fex-verify/fex/*.dll
 
-          echo "=== 关键文件存在性 ==="
+          echo "=== 包内容白名单检查：只允许 *.dll ==="
 
-          test -f /tmp/fex-verify/fex/fex-env.sh
-          echo "=== box64 WOW64 DLL 检查（与 FEX dll 同目录）==="
-          if [ -f /tmp/fex-verify/fex/wowbox64.dll ]; then
-            file /tmp/fex-verify/fex/wowbox64.dll
-          else
-            echo "(未包含 wowbox64.dll)"
+          EXTRA="$(find /tmp/fex-verify -type f ! -name '*.dll' | sort || true)"
+          if [ -n "${EXTRA}" ]; then
+            echo "::error::包内出现非 DLL 文件："
+            echo "${EXTRA}"
+            exit 1
           fi
+          echo "OK：包内只有 DLL"
 
-          test -f /tmp/fex-verify/fex/INSTALL.md
+          echo "=== 关键 DLL 存在性 ==="
 
           test -f /tmp/fex-verify/fex/libarm64ecfex.dll || \
             echo "(未构建 libarm64ecfex.dll)"
@@ -946,9 +953,16 @@ jobs:
           test -f /tmp/fex-verify/fex/libwow64fex.dll || \
             echo "(未构建 libwow64fex.dll)"
 
-          echo "=== fex-env.sh 语法检查 ==="
+          echo "=== box64 WOW64 DLL 检查（与 FEX dll 同目录）==="
+          if [ -f /tmp/fex-verify/fex/wowbox64.dll ]; then
+            file /tmp/fex-verify/fex/wowbox64.dll
+          else
+            echo "(未包含 wowbox64.dll)"
+          fi
 
-          bash -n /tmp/fex-verify/fex/fex-env.sh && echo OK
+          echo "=== fex-env.sh 语法检查（构建目录副本，不进包）==="
+
+          bash -n "${PKG_DIR}/fex/fex-env.sh" && echo OK
 
       # ============================================================
       # 8. 上传 artifact
