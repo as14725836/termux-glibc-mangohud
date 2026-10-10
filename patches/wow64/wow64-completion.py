@@ -358,7 +358,44 @@ def item_xstate():
     note("E", "wineboot XState 装填已注入 ✓")
 
 
-for fn in (item_hodll, item_hodll64, item_suspend, item_virtual_relax, item_xstate):
+# ------------------------------------------- F. 39-bit 主机分配对齐修复
+def item_vprot_align():
+    p = "dlls/ntdll/unix/virtual.c"
+    t = read(p)
+    if t is None:
+        return note("F", "%s 不存在，跳过" % p)
+    n = 0
+
+    # F1: anon_mmap_alloc 内部页对齐兜底（39-bit 主机上某些推导尺寸可能不是页整数倍）
+    old_assert = "    assert( !(size & host_page_mask) );"
+    sig = "void *anon_mmap_alloc( size_t size, int prot )"
+    sp = func_span(t, sig)
+    if sp and "rounding up" not in t[sp[0]:sp[1]] and old_assert in t[sp[0]:sp[1]]:
+        seg = t[sp[0]:sp[1]]
+        new_block = (
+            "    if (size & host_page_mask)\n"
+            "    {\n"
+            "        WARN( \"anon_mmap_alloc: size %#lx not host-page aligned, rounding up\\n\", (unsigned long)size );\n"
+            "        size = (size + host_page_mask) & ~host_page_mask;\n"
+            "    }")
+        seg = seg.replace(old_assert, new_block, 1)
+        t = t[:sp[0]] + seg + t[sp[1]:]
+        n += 1
+
+    # F2: pages_vprot 表尺寸对齐（39-bit 时 pages_vprot_size*8 可能不是页整数倍）
+    old_pv = "anon_mmap_alloc( pages_vprot_size * sizeof(*pages_vprot), PROT_READ | PROT_WRITE )"
+    new_pv = "anon_mmap_alloc( (pages_vprot_size * sizeof(*pages_vprot) + host_page_size - 1) & ~host_page_mask, PROT_READ | PROT_WRITE )"
+    if old_pv in t:
+        t = t.replace(old_pv, new_pv, 1)
+        n += 1
+
+    if n == 0:
+        return note("F", "无可改项（已修复或结构不同），跳过")
+    write(p, t)
+    note("F", "39-bit 分配对齐修复已注入（%d 处）✓" % n)
+
+
+for fn in (item_hodll, item_hodll64, item_suspend, item_virtual_relax, item_xstate, item_vprot_align):
     try:
         fn()
     except Exception as e:
