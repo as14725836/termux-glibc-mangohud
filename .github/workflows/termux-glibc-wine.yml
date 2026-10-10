@@ -1167,6 +1167,23 @@ jobs:
 
               git checkout "wine-$WINE_VERSION"
 
+            else
+
+              # latest：自动对齐到最新稳定 tag，避免 master tip 与 staging 补丁集错配
+              WINE_LATEST_TAG="$(git tag -l 'wine-*' --sort=-v:refname | grep -E '^wine-[0-9]+(\.[0-9]+)?$' | head -1)"
+
+              if [ -n "$WINE_LATEST_TAG" ]; then
+
+                echo "latest：自动切换到最新稳定 tag: $WINE_LATEST_TAG"
+
+                git checkout "$WINE_LATEST_TAG"
+
+              else
+
+                echo "WARN: 未找到稳定版本 tag，保持当前 HEAD（可能与补丁集错配）"
+
+              fi
+
             fi
 
             WINE_VERSION_ACTUAL="$(
