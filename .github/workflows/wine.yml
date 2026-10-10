@@ -1225,6 +1225,9 @@ jobs:
           if [ "${ENABLE_39BIT}" = "true" ]; then
             for F in dlls/ntdll/unix/virtual.c loader/preloader.c; do
               if [ -f "$F" ]; then
+                perl -pi -e 's/0x7ffff0000000/0x7f00000000/g' "$F"
+                perl -pi -e 's/0x7ff000000000/0x7f00000000/g' "$F"
+                perl -pi -e 's/0x7ff600000000/0x7ffe000000/g' "$F"
                 perl -pi -e 's/0x7ffffe000000/0x7ffe000000/g' "$F"
                 perl -pi -e 's/0x7fffffff0000/0x7fffff0000/g' "$F"
                 echo "  39-bit: rewrote $F"
@@ -1250,6 +1253,9 @@ jobs:
             else
               echo "  39-bit: 全树无旧值残留"
             fi
+          echo "39-bit: top-down => $(grep -n 'top-down area' dlls/ntdll/unix/virtual.c | head -1 || true)"
+          perl -ne 'while (/reserve_area\(\s*\(void\s*\*\)(0x[0-9a-fA-F]+)\s*,\s*\(void\s*\*\)(0x[0-9a-fA-F]+)\s*\)/g) { $bad = 1 if hex($1) > hex($2); } END { exit($bad ? 1 : 0) }' dlls/ntdll/unix/virtual.c loader/preloader.c || { echo 'FATAL: 39-bit rewrite produced inverted reserve_area range'; exit 1; }
+          echo "39-bit sanity: reserve_area ranges OK"
           else
             echo "  skip 39-bit VA (enable_39bit_va=false)"
           fi
