@@ -450,9 +450,12 @@ jobs:
           cd build_ec
 
           cmake \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
             -DENABLE_LTO=False \
+            -DENABLE_ASSERTIONS=False \
+            -DTUNE_ARCH=generic \
+            -DTUNE_CPU=none \
             -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
             -DBUILD_TESTS=OFF \
             -DBUILD_TESTING=OFF \
@@ -462,6 +465,14 @@ jobs:
 
           test -f Bin/libarm64ecfex.dll
 
+          ls -lh Bin/libarm64ecfex.dll
+
+          # ---- 体积：完整移除 COFF 符号表（Wine 只按导出表加载 DLL） ----
+          SZ_B=$(stat -c%s Bin/libarm64ecfex.dll)
+          llvm-strip --strip-all Bin/libarm64ecfex.dll || echo "⚠ llvm-strip 失败，保留未剥离版本"
+          echo "strip(COFF 符号表): ${SZ_B} -> $(stat -c%s Bin/libarm64ecfex.dll) bytes"
+          echo -n "       .debug_* 段数 = "
+          llvm-objdump --section-headers Bin/libarm64ecfex.dll 2>/dev/null | grep -c '\.debug_' || true
           ls -lh Bin/libarm64ecfex.dll
 
           cd ..
@@ -474,9 +485,12 @@ jobs:
           cd build_pe
 
           cmake \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
             -DENABLE_LTO=False \
+            -DENABLE_ASSERTIONS=False \
+            -DTUNE_ARCH=generic \
+            -DTUNE_CPU=none \
             -DMINGW_TRIPLE=aarch64-w64-mingw32 \
             -DBUILD_TESTS=OFF \
             -DBUILD_TESTING=OFF \
@@ -486,6 +500,14 @@ jobs:
 
           test -f Bin/libwow64fex.dll
 
+          ls -lh Bin/libwow64fex.dll
+
+          # ---- 体积：完整移除 COFF 符号表（Wine 只按导出表加载 DLL） ----
+          SZ_B=$(stat -c%s Bin/libwow64fex.dll)
+          llvm-strip --strip-all Bin/libwow64fex.dll || echo "⚠ llvm-strip 失败，保留未剥离版本"
+          echo "strip(COFF 符号表): ${SZ_B} -> $(stat -c%s Bin/libwow64fex.dll) bytes"
+          echo -n "       .debug_* 段数 = "
+          llvm-objdump --section-headers Bin/libwow64fex.dll 2>/dev/null | grep -c '\.debug_' || true
           ls -lh Bin/libwow64fex.dll
 
           echo "=== FEX 产物汇总 ==="
