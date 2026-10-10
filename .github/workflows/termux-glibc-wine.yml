@@ -626,17 +626,62 @@ jobs:
 
 
           # Strip
-          echo "开始 Strip..."
+          # 确保有 llvm-strip / file（llvm-strip 能同时处理 PE/COFF，GNU strip 做不到）
+          if ! command -v llvm-strip >/dev/null 2>&1; then
+            sudo apt-get install -y -qq llvm >/dev/null 2>&1 || true
+          fi
+          if ! command -v file >/dev/null 2>&1; then
+            sudo apt-get install -y -qq file >/dev/null 2>&1 || true
+          fi
+          echo "开始 Strip（llvm-strip：ELF + PE）..."
 
-          find "$PREFIX" \
-            -type f \
-            \( \
-              -name "*.so" \
-              -o -name "*.so.*" \
-              -o -perm -u+x \
-            \) \
-            -exec strip --strip-unneeded {} + \
-            2>/dev/null || true
+          if command -v llvm-strip >/dev/null 2>&1; then
+            SZ_B=$(du -sb "$PREFIX" | cut -f1)
+            ELF_N=0
+            PE_N=0
+            while IFS= read -r -d '' f; do
+              case "$(file -b "$f" 2>/dev/null || true)" in
+                ELF*)
+                  llvm-strip --strip-unneeded "$f" >/dev/null 2>&1 && ELF_N=$((ELF_N+1)) || true
+                  ;;
+                PE32*)
+                  llvm-strip --strip-all "$f" >/dev/null 2>&1 && PE_N=$((PE_N+1)) || true
+                  ;;
+              esac
+            done < <(find "$PREFIX" -type f -print0)
+            SZ_A=$(du -sb "$PREFIX" | cut -f1)
+            echo "Strip 完成：ELF=${ELF_N} 个，PE=${PE_N} 个"
+            echo "体积：${SZ_B} -> ${SZ_A} bytes（减少 $(( (SZ_B - SZ_A) / 1024 / 1024 )) MiB）"
+
+            # 健全性检查：bin/wine 的 INTERP、PE 导出表必须还在
+            if [ -x "$PREFIX/bin/wine" ] && command -v llvm-readelf >/dev/null 2>&1; then
+              if llvm-readelf -l "$PREFIX/bin/wine" 2>/dev/null | grep -q INTERP; then
+                echo "OK: bin/wine INTERP 仍存在"
+              fi
+            fi
+            if command -v llvm-readobj >/dev/null 2>&1; then
+              for D in ntdll kernelbase; do
+                for DIR in "$PREFIX"/lib/wine/*-windows; do
+                  DLL="$DIR/$D.dll"
+                  [ -f "$DLL" ] || continue
+                  N=$(llvm-readobj --coff-exports "$DLL" 2>/dev/null | grep -c 'Name:' || true)
+                  echo "  $(basename "$DIR")/$D.dll 导出数: ${N:-0}"
+                  if [ "${N:-0}" -gt 100 ]; then :; else echo "FATAL: $DLL 导出表异常"; exit 1; fi
+                done
+              done
+            fi
+          else
+            echo "WARN: 没有 llvm-strip，退回 GNU strip（仅 ELF）"
+            find "$PREFIX" \
+              -type f \
+              \( \
+                -name "*.so" \
+                -o -name "*.so.*" \
+                -o -perm -u+x \
+              \) \
+              -exec strip --strip-unneeded {} + \
+              2>/dev/null || true
+          fi
 
 
           # 删除空目录
@@ -1613,19 +1658,57 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "Strip ELF"
+          echo "Strip ELF + PE（llvm-strip）"
           echo "=========================================="
 
 
-          find "$PREFIX" \
-            -type f \
-            \( \
-              -name "*.so" \
-              -o -name "*.so.*" \
-              -o -perm -u+x \
-            \) \
-            -exec strip --strip-unneeded {} + \
-            2>/dev/null || true
+          if command -v llvm-strip >/dev/null 2>&1; then
+            SZ_B=$(du -sb "$PREFIX" | cut -f1)
+            ELF_N=0
+            PE_N=0
+            while IFS= read -r -d '' f; do
+              case "$(file -b "$f" 2>/dev/null || true)" in
+                ELF*)
+                  llvm-strip --strip-unneeded "$f" >/dev/null 2>&1 && ELF_N=$((ELF_N+1)) || true
+                  ;;
+                PE32*)
+                  llvm-strip --strip-all "$f" >/dev/null 2>&1 && PE_N=$((PE_N+1)) || true
+                  ;;
+              esac
+            done < <(find "$PREFIX" -type f -print0)
+            SZ_A=$(du -sb "$PREFIX" | cut -f1)
+            echo "Strip 完成：ELF=${ELF_N} 个，PE=${PE_N} 个"
+            echo "体积：${SZ_B} -> ${SZ_A} bytes（减少 $(( (SZ_B - SZ_A) / 1024 / 1024 )) MiB）"
+
+            # 健全性检查：bin/wine 的 INTERP、PE 导出表必须还在
+            if [ -x "$PREFIX/bin/wine" ] && command -v llvm-readelf >/dev/null 2>&1; then
+              if llvm-readelf -l "$PREFIX/bin/wine" 2>/dev/null | grep -q INTERP; then
+                echo "OK: bin/wine INTERP 仍存在"
+              fi
+            fi
+            if command -v llvm-readobj >/dev/null 2>&1; then
+              for D in ntdll kernelbase; do
+                for DIR in "$PREFIX"/lib/wine/*-windows; do
+                  DLL="$DIR/$D.dll"
+                  [ -f "$DLL" ] || continue
+                  N=$(llvm-readobj --coff-exports "$DLL" 2>/dev/null | grep -c 'Name:' || true)
+                  echo "  $(basename "$DIR")/$D.dll 导出数: ${N:-0}"
+                  if [ "${N:-0}" -gt 100 ]; then :; else echo "FATAL: $DLL 导出表异常"; exit 1; fi
+                done
+              done
+            fi
+          else
+            echo "WARN: 没有 llvm-strip，退回 GNU strip（仅 ELF）"
+            find "$PREFIX" \
+              -type f \
+              \( \
+                -name "*.so" \
+                -o -name "*.so.*" \
+                -o -perm -u+x \
+              \) \
+              -exec strip --strip-unneeded {} + \
+              2>/dev/null || true
+          fi
 
 
           # ----------------------------------------------------
