@@ -2620,6 +2620,57 @@ jobs:
             2>/dev/null || true
 
       # ============================================================
+      # 25.5 精简安装树体积（strip 符号表）
+      # ============================================================
+      - name: 精简安装树（strip ELF / PE 符号表）
+        shell: bash
+        run: |
+          set -eux
+
+          TARGET="/tmp/wine-install-wow64"
+
+          # llvm-strip 来自 FEX 工具链：架构无关，ELF aarch64 与 PE/COFF（含 ARM64X）都能处理。
+          export PATH="/opt/llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64/bin:${PATH}"
+
+          command -v llvm-strip
+
+          SZ_BEFORE=$(du -sb "${TARGET}" | cut -f1)
+
+          ELF_N=0
+          PE_N=0
+
+          while IFS= read -r -d '' f; do
+            case "$(file -b "$f" 2>/dev/null || true)" in
+              ELF*)
+                llvm-strip --strip-unneeded "$f" >/dev/null 2>&1 && ELF_N=$((ELF_N+1)) || true
+                ;;
+              PE32*)
+                llvm-strip --strip-all "$f" >/dev/null 2>&1 && PE_N=$((PE_N+1)) || true
+                ;;
+            esac
+          done < <(find "${TARGET}" -type f -print0)
+
+          SZ_AFTER=$(du -sb "${TARGET}" | cut -f1)
+
+          echo "strip 完成：ELF=${ELF_N} 个，PE=${PE_N} 个"
+          echo "安装树：${SZ_BEFORE} -> ${SZ_AFTER} bytes（减少 $(( (SZ_BEFORE - SZ_AFTER) / 1024 / 1024 )) MiB）"
+
+          # ---- 健全性检查：动态符号/解释器必须保留，PE 导出表不能被破坏 ----
+          llvm-readelf -S "${TARGET}/bin/wine" | grep -q '.dynsym' && echo "OK: bin/wine .dynsym 仍存在"
+          llvm-readelf -l "${TARGET}/bin/wine" | grep -q 'INTERP' && echo "OK: bin/wine INTERP 仍存在"
+
+          for D in ntdll kernelbase; do
+            DLL="${TARGET}/lib/wine/aarch64-windows/${D}.dll"
+            if [ -f "${DLL}" ]; then
+              N=$(llvm-readobj --coff-exports "${DLL}" 2>/dev/null | grep -c 'Name:' || true)
+              echo "  ${D}.dll 导出数: ${N}"
+              [ "${N:-0}" -gt 100 ] || { echo "FATAL: ${D}.dll 导出表异常"; exit 1; }
+            fi
+          done
+
+          ls -lh "${TARGET}/bin/wine"
+
+      # ============================================================
       # 26. Package
       # ============================================================
       - name: 准备 Wine package
