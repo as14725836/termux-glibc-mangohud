@@ -1115,6 +1115,25 @@ jobs:
 
         
       # ============================================================
+      # 7.7 cs-timeout-guard：堆锁自旋 + 临界区超时转储/限时处置
+      # ============================================================
+      - name: cs-timeout-guard (heap spin + CS timeout guard)
+        shell: bash
+        run: |
+          cd "${WINE_SOURCE_DIR}/source" || { echo 'no wine source dir'; exit 0; }
+          _u="/tmp/wine-termux/cs-timeout-guard.py"
+          mkdir -p /tmp/wine-termux
+          curl -fsSL --retry 2 -o "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/sync/cs-timeout-guard.py" \
+            || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/sync/cs-timeout-guard.py" \
+            || true
+          if [ ! -s "$_u" ]; then
+            _u="${GITHUB_WORKSPACE:-$PWD}/patches/sync/cs-timeout-guard.py"
+            [ -f "$_u" ] || { echo "WARN: cs-timeout-guard.py 不可用，跳过"; exit 0; }
+          fi
+          python3 "$_u" "$(pwd)" || echo "WARN: cs-timeout-guard 部分失败（不阻断构建）"
+          echo "cs-guard self-check: guard=$(grep -c 'cs-timeout-guard' dlls/ntdll/sync.c 2>/dev/null || echo 0) dump=$(grep -c 'cs-guard: waiter stack' dlls/ntdll/sync.c 2>/dev/null || echo 0) spin=$(grep -c '0xfa0' dlls/ntdll/heap.c 2>/dev/null || echo 0)"
+
+      # ============================================================
       # 8. Termux compatibility patches
       # ============================================================
       - name: Termux compatibility patches
