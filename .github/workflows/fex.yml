@@ -644,8 +644,21 @@ jobs:
           ls -lh Bin/libarm64ecfex.dll
           file Bin/libarm64ecfex.dll
 
+          # ---- Release 构建：剥离 COFF 符号表（约 1.2MB；Wine 只按导出表加载 DLL） ----
+          if [ "${{ inputs.build_type || 'Release' }}" = "Release" ]; then
+            SZ_B=$(stat -c%s Bin/libarm64ecfex.dll)
+            if command -v llvm-strip >/dev/null 2>&1; then
+              llvm-strip --strip-unneeded Bin/libarm64ecfex.dll || echo "⚠ llvm-strip 失败，保留未剥离版本"
+            else
+              echo "⚠ 未找到 llvm-strip，跳过符号表剥离"
+            fi
+            echo "strip(COFF 符号表): ${SZ_B} -> $(stat -c%s Bin/libarm64ecfex.dll) bytes"
+          else
+            echo "build_type=${{ inputs.build_type || 'Release' }}：保留符号（不剥离）"
+          fi
+          ls -lh Bin/libarm64ecfex.dll
+
           # ---- 段级体积自查：DWARF 调试段会让 DLL 膨胀约 30MB ----
-          echo "--- build_type = ${{ inputs.build_type || 'Release' }} ---"
           echo -n "       .debug_* 段数 = "
           llvm-objdump --section-headers Bin/libarm64ecfex.dll 2>/dev/null | grep -c '\.debug_' || true
 
@@ -687,8 +700,21 @@ jobs:
           ls -lh Bin/libwow64fex.dll
           file Bin/libwow64fex.dll
 
+          # ---- Release 构建：剥离 COFF 符号表（约 0.9MB；Wine 只按导出表加载 DLL） ----
+          if [ "${{ inputs.build_type || 'Release' }}" = "Release" ]; then
+            SZ_B=$(stat -c%s Bin/libwow64fex.dll)
+            if command -v llvm-strip >/dev/null 2>&1; then
+              llvm-strip --strip-unneeded Bin/libwow64fex.dll || echo "⚠ llvm-strip 失败，保留未剥离版本"
+            else
+              echo "⚠ 未找到 llvm-strip，跳过符号表剥离"
+            fi
+            echo "strip(COFF 符号表): ${SZ_B} -> $(stat -c%s Bin/libwow64fex.dll) bytes"
+          else
+            echo "build_type=${{ inputs.build_type || 'Release' }}：保留符号（不剥离）"
+          fi
+          ls -lh Bin/libwow64fex.dll
+
           # ---- 段级体积自查：DWARF 调试段会让 DLL 膨胀约 30MB ----
-          echo "--- build_type = ${{ inputs.build_type || 'Release' }} ---"
           echo -n "       .debug_* 段数 = "
           llvm-objdump --section-headers Bin/libwow64fex.dll 2>/dev/null | grep -c '\.debug_' || true
 
@@ -842,6 +868,7 @@ jobs:
           llvm-mingw  : ${LLVMMINGW_NAME}
           build_type  : ${{ inputs.build_type || 'Release' }}
           tune        : TUNE_ARCH=generic TUNE_CPU=none（不按 runner 的 CPU 调优，保证跨设备可跑）
+          strip       : Release 构建时执行 llvm-strip --strip-unneeded（剥离 COFF 符号表）
           build date  : $(date -u +%Y-%m-%dT%H:%M:%SZ)
           runner      : $(uname -m)
 
