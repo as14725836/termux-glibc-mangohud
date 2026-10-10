@@ -290,10 +290,14 @@ def item_suspend():
     # C5 wow64/process.c（NtSuspendThread -> RtlWow64SuspendThread）
     p5 = "dlls/wow64/process.c"
     t5 = read(p5)
+    c5_winh = read("include/winternl.h") or ""
+    c5_support = "RtlWow64SuspendThread" in c5_winh
     if t5 is None:
         note("C", "%s 不存在" % p5)
     elif "RtlWow64SuspendThread" in t5:
         note("C", "wow64/process.c 已改，跳过")
+    elif not c5_support:
+        note("C", "SKIP: 该树无 RtlWow64SuspendThread（<11.16），wow64/process.c 保持原样")
     elif ok_sys and ok_ldr:
         old5 = "    return NtSuspendThread( handle, count );"
         sp5 = func_span(t5, "NTSTATUS WINAPI wow64_NtSuspendThread( UINT *args )")
