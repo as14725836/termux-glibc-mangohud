@@ -104,6 +104,15 @@ on:
         default: '8'
         type: string
 
+      build_type:
+        description: 'CMAKE_BUILD_TYPE：Release = 与上游发布一致（DLL ~5MB）；RelWithDebInfo = 保留 DWARF 调试符号（DLL ~37MB，仅在需要符号排障时选）'
+        required: false
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - RelWithDebInfo
+
       publish_release:
         description: '构建成功后发布 GitHub Release'
         required: false
@@ -617,9 +626,12 @@ jobs:
           cd build_ec
 
           cmake \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'Release' }} \
             -DCMAKE_TOOLCHAIN_FILE=../${TOOLCHAIN_REL} \
             -DENABLE_LTO=False \
+            -DENABLE_ASSERTIONS=False \
+            -DTUNE_ARCH=generic \
+            -DTUNE_CPU=none \
             -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
             -DBUILD_TESTS=OFF \
             -DBUILD_TESTING=OFF \
@@ -631,6 +643,11 @@ jobs:
 
           ls -lh Bin/libarm64ecfex.dll
           file Bin/libarm64ecfex.dll
+
+          # ---- 段级体积自查：DWARF 调试段会让 DLL 膨胀约 30MB ----
+          echo "--- build_type = ${{ inputs.build_type || 'Release' }} ---"
+          echo -n "       .debug_* 段数 = "
+          llvm-objdump --section-headers Bin/libarm64ecfex.dll 2>/dev/null | grep -c '\.debug_' || true
 
       # ============================================================
       # 5. 构建 libwow64fex.dll（i386 模拟）
@@ -652,9 +669,12 @@ jobs:
           cd build_pe
 
           cmake \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'Release' }} \
             -DCMAKE_TOOLCHAIN_FILE=../${TOOLCHAIN_REL} \
             -DENABLE_LTO=False \
+            -DENABLE_ASSERTIONS=False \
+            -DTUNE_ARCH=generic \
+            -DTUNE_CPU=none \
             -DMINGW_TRIPLE=aarch64-w64-mingw32 \
             -DBUILD_TESTS=OFF \
             -DBUILD_TESTING=OFF \
@@ -666,6 +686,11 @@ jobs:
 
           ls -lh Bin/libwow64fex.dll
           file Bin/libwow64fex.dll
+
+          # ---- 段级体积自查：DWARF 调试段会让 DLL 膨胀约 30MB ----
+          echo "--- build_type = ${{ inputs.build_type || 'Release' }} ---"
+          echo -n "       .debug_* 段数 = "
+          llvm-objdump --section-headers Bin/libwow64fex.dll 2>/dev/null | grep -c '\.debug_' || true
 
       # ============================================================
       # 5.5 取 box64 的 WOW64 DLL（wowbox64.dll / box64ec.dll）
@@ -815,6 +840,8 @@ jobs:
           fex_describe: ${FEX_DESC}
           version_src : ${FEX_VERSION_SOURCE}
           llvm-mingw  : ${LLVMMINGW_NAME}
+          build_type  : ${{ inputs.build_type || 'Release' }}
+          tune        : TUNE_ARCH=generic TUNE_CPU=none（不按 runner 的 CPU 调优，保证跨设备可跑）
           build date  : $(date -u +%Y-%m-%dT%H:%M:%SZ)
           runner      : $(uname -m)
 
