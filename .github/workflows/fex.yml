@@ -648,7 +648,7 @@ jobs:
           if [ "${{ inputs.build_type || 'Release' }}" = "Release" ]; then
             SZ_B=$(stat -c%s Bin/libarm64ecfex.dll)
             if command -v llvm-strip >/dev/null 2>&1; then
-              llvm-strip --strip-unneeded Bin/libarm64ecfex.dll || echo "⚠ llvm-strip 失败，保留未剥离版本"
+              llvm-strip --strip-all Bin/libarm64ecfex.dll || echo "⚠ llvm-strip 失败，保留未剥离版本"
             else
               echo "⚠ 未找到 llvm-strip，跳过符号表剥离"
             fi
@@ -704,7 +704,7 @@ jobs:
           if [ "${{ inputs.build_type || 'Release' }}" = "Release" ]; then
             SZ_B=$(stat -c%s Bin/libwow64fex.dll)
             if command -v llvm-strip >/dev/null 2>&1; then
-              llvm-strip --strip-unneeded Bin/libwow64fex.dll || echo "⚠ llvm-strip 失败，保留未剥离版本"
+              llvm-strip --strip-all Bin/libwow64fex.dll || echo "⚠ llvm-strip 失败，保留未剥离版本"
             else
               echo "⚠ 未找到 llvm-strip，跳过符号表剥离"
             fi
@@ -868,7 +868,7 @@ jobs:
           llvm-mingw  : ${LLVMMINGW_NAME}
           build_type  : ${{ inputs.build_type || 'Release' }}
           tune        : TUNE_ARCH=generic TUNE_CPU=none（不按 runner 的 CPU 调优，保证跨设备可跑）
-          strip       : Release 构建时执行 llvm-strip --strip-unneeded（剥离 COFF 符号表）
+          strip       : Release 构建时执行 llvm-strip --strip-all（完整移除 COFF 符号表）
           build date  : $(date -u +%Y-%m-%dT%H:%M:%SZ)
           runner      : $(uname -m)
 
