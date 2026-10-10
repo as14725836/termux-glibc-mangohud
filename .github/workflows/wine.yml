@@ -1026,6 +1026,50 @@ jobs:
           if find . -name '*.rej' | head -1 | grep -q .; then echo 'WARN: 存在 .rej 文件:'; find . -name '*.rej' | head -5; fi
 
       # ============================================================
+      # 7.5 mfplat 补丁（wine_do_not_create_dxgi_device_manager2，仅 staging）
+      # ============================================================
+      - name: Apply mfplat DXGI / MPEG4 handler patch (staging only)
+        if: ${{ inputs.wine_branch == 'staging' }}
+        shell: bash
+        run: |
+          # 只对 staging 源码分支应用 wine_do_not_create_dxgi_device_manager2 补丁
+          BR="${{ inputs.wine_branch || 'proton' }}"
+          if [ "$BR" != "staging" ]; then
+            echo "staging-only patch: current wine_branch='$BR' -> skip"
+            exit 0
+          fi
+
+          cd "${WINE_SOURCE_DIR}/source" || { echo 'no wine source dir'; exit 0; }
+
+          _UP="wine_do_not_create_dxgi_device_manager2.patch"
+          _u="${GITHUB_WORKSPACE:-$PWD}/patches/staging/$_UP"
+          [ -f "$_u" ] || _u="/tmp/wine-termux/$_UP"
+          if [ ! -f "$_u" ]; then
+            mkdir -p /tmp/wine-termux
+            curl -fsSL -o "$_u" "https://raw.githubusercontent.com/as14725836/wine-termux/main/$_UP" \
+              || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/wine-termux/main/$_UP" \
+              || { echo "WARN: $_UP 下载失败，跳过"; exit 0; }
+          fi
+
+          if grep -q 'WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER' dlls/mfplat/main.c 2>/dev/null; then
+            echo "OK(already): dlls/mfplat/main.c 已含 WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER"
+            exit 0
+          fi
+
+          _out="$(patch -p1 --batch --dry-run --forward --no-backup-if-mismatch < "$_u" 2>&1)" || true
+          if echo "$_out" | grep -qE 'FAILED|hunk ignored|can.t find file'; then
+            echo "SKIP: $_UP 与当前源码不兼容"
+            echo "$_out" | grep -E 'FAILED|hunk ignored' | head -5 || true
+          elif patch -p1 --batch --forward --no-backup-if-mismatch < "$_u" >/dev/null 2>&1; then
+            echo "OK  : $_UP 已应用"
+          else
+            echo "SKIP: $_UP 应用失败"
+          fi
+
+          echo "mfplat self-check: dxgi_env=$(grep -c 'WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER' dlls/mfplat/main.c 2>/dev/null || echo 0) default_handler=$(grep -c 'resolver_create_default_handler' dlls/mfplat/main.c 2>/dev/null || echo 0) mfinternal_inc=$(grep -c 'wine/mfinternal.h' dlls/mfplat/main.c 2>/dev/null || echo 0) idl_guid=$(grep -c 'CLSID_MPEG4ByteStreamHandlerPlugin' include/wine/mfinternal.idl 2>/dev/null || echo 0)"
+          if find . -name '*.rej' | head -1 | grep -q .; then echo 'WARN: 存在 .rej 文件:'; find . -name '*.rej' | head -5; fi
+
+      # ============================================================
       # 8. Termux compatibility patches
       # ============================================================
       - name: Termux compatibility patches
