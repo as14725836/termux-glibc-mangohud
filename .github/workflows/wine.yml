@@ -1077,13 +1077,14 @@ jobs:
         run: |
           cd "${WINE_SOURCE_DIR}/source" || { echo 'no wine source dir'; exit 0; }
 
-          _u="${GITHUB_WORKSPACE:-$PWD}/patches/wow64/wow64-completion.py"
-          [ -f "$_u" ] || _u="/tmp/wine-termux/wow64-completion.py"
-          if [ ! -f "$_u" ]; then
-            mkdir -p /tmp/wine-termux
-            curl -fsSL -o "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/wow64-completion.py" \
-              || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/wow64-completion.py" \
-              || { echo "WARN: wow64-completion.py 下载失败，跳过"; exit 0; }
+          _u="/tmp/wine-termux/wow64-completion.py"
+          mkdir -p /tmp/wine-termux
+          curl -fsSL --retry 2 -o "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/wow64-completion.py" \
+            || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/wow64-completion.py" \
+            || true
+          if [ ! -s "$_u" ]; then
+            _u="${GITHUB_WORKSPACE:-$PWD}/patches/wow64/wow64-completion.py"
+            [ -f "$_u" ] || { echo "WARN: wow64-completion.py 不可用，跳过"; exit 0; }
           fi
 
           python3 "$_u" "$(pwd)" || echo "WARN: wow64 完善补丁部分失败（不阻断构建）"
