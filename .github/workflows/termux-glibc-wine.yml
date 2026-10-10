@@ -1170,7 +1170,7 @@ jobs:
             else
 
               # latest：自动对齐到最新稳定 tag，避免 master tip 与 staging 补丁集错配
-              WINE_LATEST_TAG="$(git tag -l 'wine-*' --sort=-v:refname | grep -E '^wine-[0-9]+(\.[0-9]+)?$' | head -1)"
+              WINE_LATEST_TAG="$(git tag -l 'wine-*' --sort=-v:refname | grep -E '^wine-[0-9]+\.[0-9]+$' | head -1)"
 
               if [ -n "$WINE_LATEST_TAG" ]; then
 
