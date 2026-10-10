@@ -78,19 +78,6 @@ index d6038c4d..3ad22fcb 100644
  #else
  static void *address_space_limit = (void *)0xc0000000;
  static void *user_space_limit    = (void *)0x7fff0000;
-diff --git a/loader/preloader.c b/loader/preloader.c
-index 72b7fcc7..74d828f7 100644
---- a/loader/preloader.c
-+++ b/loader/preloader.c
-@@ -1449,7 +1449,7 @@ void* wld_start( void **stack )
-         {
-             /* don't warn for low 64k */
-             if (preload_info[i].addr >= (void *)0x10000
--#ifdef __aarch64__
-+#if 1
-                 && preload_info[i].addr < (void *)0x7fffffffff /* ARM64 address space might end here*/
- #endif
-             )
 diff --git a/programs/winemenubuilder/winemenubuilder.c b/programs/winemenubuilder/winemenubuilder.c
 index 553a47b8..60f80765 100644
 --- a/programs/winemenubuilder/winemenubuilder.c
