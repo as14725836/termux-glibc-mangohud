@@ -81,6 +81,18 @@ on:
           - Pipetto-crypto/wine
           - GameNative/proton-wine
 
+      gst_decoders_version:
+        description: 'GStreamer(decoders)版本：作为编译依赖头文件/版本，替代 apt 自带的 1.22.0（来源：termux-glibc-GStreamer Releases）'
+        required: false
+        default: '1.29.2'
+        type: string
+
+      gst_decoders_repo:
+        description: 'GStreamer decoders 发布仓库'
+        required: false
+        default: 'as14725836/termux-glibc-GStreamer'
+        type: string
+
 env:
   USE_CCACHE: true
   BUILD_DIR: /tmp/build_wine
@@ -216,6 +228,61 @@ jobs:
             gstreamer1.0-* \
             libmpg123-dev \
             libopenal-dev
+
+
+      # --------------------------------------------------------
+      # GStreamer decoders sysroot（用 1.29.2 头文件/版本替换 apt 的 1.22.0）
+      # --------------------------------------------------------
+
+      - name: 安装 GStreamer decoders sysroot
+        shell: bash
+        env:
+          GST_REPO: ${{ inputs.gst_decoders_repo || 'as14725836/termux-glibc-GStreamer' }}
+          GST_TAG: ${{ inputs.gst_decoders_version || '1.29.2' }}
+        run: |
+          set -eux
+          DEST="/opt/gst-sysroot"
+          ASSET="termux-glibc-gst-decoders-${GST_TAG}.tar.gz"
+          rm -rf "${DEST}"
+          mkdir -p "${DEST}"
+          echo "GStreamer decoders: ${GST_REPO} @ ${GST_TAG}"
+          curl -fSL --retry 5 --retry-all-errors --max-time 900 \
+            -o /tmp/gst-decoders.tar.gz \
+            "https://github.com/${GST_REPO}/releases/download/${GST_TAG}/${ASSET}"
+
+          tar -xzf /tmp/gst-decoders.tar.gz -C "${DEST}" --strip-components=1   # 去掉 'glibc/' 顶层
+          test -f "${DEST}/lib/pkgconfig/gstreamer-1.0.pc"
+
+          # 生成“仅 GStreamer”的 pkg-config 目录（遵守两个约束）：
+          #  1) 绝不整体前置 sysroot/lib/pkgconfig —— freetype2/fontconfig 等同名 .pc 会遮蔽系统库检查；
+          #  2) 不让 sysroot 的 aarch64 .so 参与本机 x86_64 链接。
+          #  策略：Cflags 指向 sysroot（头文件/版本号=所选版本），Libs 指向本机 apt 的 x86_64 目录（同 SONAME 链接桩）。
+          #  说明：sysroot 头文件是架构无关的 GStreamer 头；Wine 的 winegstreamer 只做 GStreamer API 调用，
+          #        1.29.2 头 + 1.22.0 运行库的 ABI 兼容在 wine.yml 的 aarch64 交叉构建中已验证可行。
+          HOST_LIBDIR="/usr/lib/x86_64-linux-gnu"
+          PCGST="${DEST}/pc-gst"
+          rm -rf "${PCGST}"
+          mkdir -p "${PCGST}"
+          for pc in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0 gstreamer-pbutils-1.0 gstreamer-controller-1.0; do
+            if [ -f "${DEST}/lib/pkgconfig/${pc}.pc" ]; then cp "${DEST}/lib/pkgconfig/${pc}.pc" "${PCGST}/${pc}.pc"; fi
+          done
+          sed -i "s|^prefix=.*|prefix=${DEST}|" "${PCGST}"/*.pc
+          sed -i "s|^libdir=.*|libdir=${HOST_LIBDIR}|" "${PCGST}"/*.pc
+          sed -i '/^Requires\.private:/d;/^Libs\.private:/d' "${PCGST}"/*.pc
+
+          GSTV=$(PKG_CONFIG_LIBDIR="${PCGST}:${HOST_LIBDIR}/pkgconfig:/usr/share/pkgconfig" \
+                 PKG_CONFIG_PATH="${PCGST}:${HOST_LIBDIR}/pkgconfig:/usr/share/pkgconfig" \
+                 pkg-config --modversion gstreamer-1.0)
+          echo "gstreamer-1.0.pc 版本 = ${GSTV}"
+          [ "${GSTV}" = "${GST_TAG}" ] || { echo "FATAL: 版本 ${GSTV} != 期望 ${GST_TAG}"; exit 1; }
+
+          for p in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0; do
+            PKG_CONFIG_LIBDIR="${PCGST}:${HOST_LIBDIR}/pkgconfig:/usr/share/pkgconfig" \
+            PKG_CONFIG_PATH="${PCGST}:${HOST_LIBDIR}/pkgconfig:/usr/share/pkgconfig" \
+            pkg-config --exists "$p" || { echo "FATAL: 缺 ${p}.pc"; exit 1; }
+          done
+          echo "✅ GStreamer ${GSTV} 编译依赖就绪（Cflags=${DEST}，Libs=apt x86_64 桩）"
+          echo "GST_SYSROOT=${DEST}" >> "$GITHUB_ENV"
 
 
       # --------------------------------------------------------
@@ -402,6 +469,12 @@ jobs:
 
           export CROSSCC="ccache x86_64-w64-mingw32-gcc"
           export CROSSCXX="ccache x86_64-w64-mingw32-g++"
+
+          # GStreamer 编译依赖走所选 decoders 版本（Cflags=sysroot 头文件；Libs=apt x86_64 同 SONAME 桩）
+          export GST_SYSROOT="${GST_SYSROOT:-/opt/gst-sysroot}"
+          export PKG_CONFIG_PATH="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
 
 
           # ----------------------------------------------------
@@ -1027,6 +1100,59 @@ jobs:
 
 
       # --------------------------------------------------------
+      # GStreamer decoders sysroot（用 1.29.2 头文件/版本替换 apt 的 1.22.0）
+      # --------------------------------------------------------
+
+      - name: 安装 GStreamer decoders sysroot
+        shell: bash
+        env:
+          GST_REPO: ${{ inputs.gst_decoders_repo || 'as14725836/termux-glibc-GStreamer' }}
+          GST_TAG: ${{ inputs.gst_decoders_version || '1.29.2' }}
+        run: |
+          set -eux
+          DEST="/opt/gst-sysroot"
+          ASSET="termux-glibc-gst-decoders-${GST_TAG}.tar.gz"
+          rm -rf "${DEST}"
+          mkdir -p "${DEST}"
+          echo "GStreamer decoders: ${GST_REPO} @ ${GST_TAG}"
+          curl -fSL --retry 5 --retry-all-errors --max-time 900 \
+            -o /tmp/gst-decoders.tar.gz \
+            "https://github.com/${GST_REPO}/releases/download/${GST_TAG}/${ASSET}"
+
+          tar -xzf /tmp/gst-decoders.tar.gz -C "${DEST}" --strip-components=1   # 去掉 'glibc/' 顶层
+          test -f "${DEST}/lib/pkgconfig/gstreamer-1.0.pc"
+
+          # 生成“仅 GStreamer”的 pkg-config 目录（遵守两个约束）：
+          #  1) 绝不整体前置 sysroot/lib/pkgconfig —— freetype2/fontconfig 等同名 .pc 会遮蔽系统库检查；
+          #  2) 不让 sysroot 的 aarch64 .so 参与本机 x86_64 链接。
+          #  策略：Cflags 指向 sysroot（头文件/版本号=所选版本），Libs 指向本机 apt 的 x86_64 目录（同 SONAME 链接桩）。
+          HOST_LIBDIR="/usr/lib/x86_64-linux-gnu"
+          PCGST="${DEST}/pc-gst"
+          rm -rf "${PCGST}"
+          mkdir -p "${PCGST}"
+          for pc in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0 gstreamer-pbutils-1.0 gstreamer-controller-1.0; do
+            if [ -f "${DEST}/lib/pkgconfig/${pc}.pc" ]; then cp "${DEST}/lib/pkgconfig/${pc}.pc" "${PCGST}/${pc}.pc"; fi
+          done
+          sed -i "s|^prefix=.*|prefix=${DEST}|" "${PCGST}"/*.pc
+          sed -i "s|^libdir=.*|libdir=${HOST_LIBDIR}|" "${PCGST}"/*.pc
+          sed -i '/^Requires\.private:/d;/^Libs\.private:/d' "${PCGST}"/*.pc
+
+          GSTV=$(PKG_CONFIG_LIBDIR="${PCGST}:${HOST_LIBDIR}/pkgconfig:/usr/share/pkgconfig" \
+                 PKG_CONFIG_PATH="${PCGST}:${HOST_LIBDIR}/pkgconfig:/usr/share/pkgconfig" \
+                 pkg-config --modversion gstreamer-1.0)
+          echo "gstreamer-1.0.pc 版本 = ${GSTV}"
+          [ "${GSTV}" = "${GST_TAG}" ] || { echo "FATAL: 版本 ${GSTV} != 期望 ${GST_TAG}"; exit 1; }
+
+          for p in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0; do
+            PKG_CONFIG_LIBDIR="${PCGST}:${HOST_LIBDIR}/pkgconfig:/usr/share/pkgconfig" \
+            PKG_CONFIG_PATH="${PCGST}:${HOST_LIBDIR}/pkgconfig:/usr/share/pkgconfig" \
+            pkg-config --exists "$p" || { echo "FATAL: 缺 ${p}.pc"; exit 1; }
+          done
+          echo "✅ GStreamer ${GSTV} 编译依赖就绪（Cflags=${DEST}，Libs=apt x86_64 桩）"
+          echo "GST_SYSROOT=${DEST}" >> "$GITHUB_ENV"
+
+
+      # --------------------------------------------------------
       # Locale
       # --------------------------------------------------------
 
@@ -1438,6 +1564,12 @@ jobs:
 
           export CROSSCC="ccache x86_64-w64-mingw32-gcc"
           export CROSSCXX="ccache x86_64-w64-mingw32-g++"
+
+          # GStreamer 编译依赖走所选 decoders 版本（Cflags=sysroot 头文件；Libs=apt x86_64 同 SONAME 桩）
+          export GST_SYSROOT="${GST_SYSROOT:-/opt/gst-sysroot}"
+          export PKG_CONFIG_PATH="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
 
 
           # ----------------------------------------------------
