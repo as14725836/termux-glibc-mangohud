@@ -111,6 +111,18 @@ on:
         default: '20251202'
         type: string
 
+      gst_decoders_version:
+        description: 'GStreamer(decoders)版本：作为交叉编译依赖，替代 Debian bookworm apt 自带的 1.22.0（来源：termux-glibc-GStreamer Releases）'
+        required: false
+        default: '1.29.2'
+        type: string
+
+      gst_decoders_repo:
+        description: 'GStreamer decoders 发布仓库（默认 as14725836/termux-glibc-GStreamer）'
+        required: false
+        default: 'as14725836/termux-glibc-GStreamer'
+        type: string
+
       jobs:
         description: '并行编译线程'
         required: false
@@ -1804,6 +1816,46 @@ jobs:
           fi
 
 
+      # ============================================================
+      # 18.9 GStreamer decoders sysroot（用 1.29.2 替换 apt 的 1.22.0）
+      # ============================================================
+      - name: 安装 GStreamer decoders sysroot
+        shell: bash
+        env:
+          GST_REPO: ${{ inputs.gst_decoders_repo || 'as14725836/termux-glibc-GStreamer' }}
+          GST_TAG: ${{ inputs.gst_decoders_version || '1.29.2' }}
+        run: |
+          set -eux
+          DEST="/opt/gst-sysroot"
+          ASSET="termux-glibc-gst-decoders-${GST_TAG}.tar.gz"
+          rm -rf "${DEST}"
+          mkdir -p "${DEST}"
+          echo "GStreamer decoders: ${GST_REPO} @ ${GST_TAG}"
+          curl -fSL --retry 5 --retry-all-errors --max-time 900 \
+            -o /tmp/gst-decoders.tar.gz \
+            "https://github.com/${GST_REPO}/releases/download/${GST_TAG}/${ASSET}"
+
+          tar -xzf /tmp/gst-decoders.tar.gz -C "${DEST}" --strip-components=1   # 去掉 'glibc/' 顶层
+          test -f "${DEST}/lib/pkgconfig/gstreamer-1.0.pc"
+
+          # .pc 重定位到本目录（原包 prefix 指向 Termux 设备路径 /data/data/...）
+          sed -i "s|^prefix=.*|prefix=${DEST}|" "${DEST}"/lib/pkgconfig/*.pc
+          # 共享链接用不到 private 依赖；清掉以免 pkg-config 因缺私依赖而失败
+          sed -i '/^Requires\.private:/d;/^Libs\.private:/d' "${DEST}"/lib/pkgconfig/*.pc
+
+          GSTV=$(PKG_CONFIG_LIBDIR="${DEST}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+                 PKG_CONFIG_PATH="${DEST}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+                 pkg-config --modversion gstreamer-1.0)
+          echo "gstreamer-1.0.pc 版本 = ${GSTV}"
+          [ "${GSTV}" = "${GST_TAG}" ] || { echo "FATAL: 版本 ${GSTV} != 期望 ${GST_TAG}"; exit 1; }
+
+          for p in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0; do
+            PKG_CONFIG_LIBDIR="${DEST}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+            PKG_CONFIG_PATH="${DEST}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+            pkg-config --exists "$p" || { echo "FATAL: 缺 ${p}.pc"; exit 1; }
+          done
+          echo "✅ GStreamer ${GSTV} sysroot 就绪: ${DEST}"
+
       - name: Configure ARM64 WOW64
         shell: bash
         env:
@@ -1831,8 +1883,10 @@ jobs:
 
           export SYSROOT="/usr"
 
-          export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-          export PKG_CONFIG_LIBDIR="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          # GStreamer 1.29.2 sysroot（替代 apt 的 1.22.0）：pkg-config/链接均优先它
+          export GST_SYSROOT="/opt/gst-sysroot"
+          export PKG_CONFIG_PATH="${GST_SYSROOT}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
@@ -1840,7 +1894,8 @@ jobs:
           export CROSSCFLAGS="-O2 -pipe"
           export CROSSCXXFLAGS="-O2 -pipe"
 
-          export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,-O1 -Wl,--as-needed -Wl,--sort-common"
+          export LDFLAGS="-L${GST_SYSROOT}/lib -L/usr/lib/aarch64-linux-gnu -Wl,-O1 -Wl,--as-needed -Wl,--sort-common"
+          echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
 
           WINE_ARCHS="${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}"
 
@@ -2462,6 +2517,22 @@ jobs:
             '*gstreamer*' \
             2>/dev/null |
           head -100 || true
+          echo "=== 本次构建使用的 GStreamer sysroot ==="
+          if [ -f /opt/gst-sysroot/lib/pkgconfig/gstreamer-1.0.pc ]; then
+            grep -m1 '^Version:' /opt/gst-sysroot/lib/pkgconfig/gstreamer-1.0.pc
+          else
+            echo "WARN: /opt/gst-sysroot 不存在"
+          fi
+
+          echo "=== 断言：wine 配置阶段必须使用 sysroot 的 GStreamer ==="
+          if grep -rqs -m1 --include='Makefile' --include='config.log' '/opt/gst-sysroot' \
+               "${WINE_SOURCE_DIR}/source/build-arm64" 2>/dev/null; then
+            echo "OK: 构建使用的是 /opt/gst-sysroot 的 GStreamer 1.29.2"
+          else
+            echo "FAIL: 构建未使用 /opt/gst-sysroot（可能仍链 apt 的 1.22.0）"
+            exit 1
+          fi
+
 
       # ============================================================
       # 22.1 验证解码 / 音频链依赖
@@ -2754,6 +2825,8 @@ jobs:
 
           LLVM-MinGW:
           ${LLVMMINGW_NAME}
+          GStreamer (sysroot):
+          ${{ inputs.gst_decoders_version || '1.29.2' }} (termux-glibc-GStreamer decoders, replaces apt 1.22.0)
 
           Host:
           Debian 12 amd64 GitHub Actions
