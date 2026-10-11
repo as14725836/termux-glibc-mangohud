@@ -1838,23 +1838,34 @@ jobs:
           tar -xzf /tmp/gst-decoders.tar.gz -C "${DEST}" --strip-components=1   # 去掉 'glibc/' 顶层
           test -f "${DEST}/lib/pkgconfig/gstreamer-1.0.pc"
 
-          # .pc 重定位到本目录（原包 prefix 指向 Termux 设备路径 /data/data/...）
-          sed -i "s|^prefix=.*|prefix=${DEST}|" "${DEST}"/lib/pkgconfig/*.pc
+          # 生成“仅 GStreamer”的 pkg-config 目录（这里有两个必须遵守的约束）：
+          #  1) 绝不整体前置 sysroot/lib/pkgconfig —— freetype2/fontconfig 等同名 .pc 会把系统库检查遮蔽掉；
+          #  2) 不要让 sysroot 的 .so 参与链接 —— 该包在 Ubuntu24.04(glibc 2.38+) 上构建，
+          #     bookworm(2.36) 交叉工具链会报 “undefined reference to xxx@GLIBC_2.38”；
+          #  策略：Cflags 指向 sysroot（头文件/版本号=所选版本），Libs 指向 apt 的 aarch64 目录（同 SONAME 链接桩）。
+          PCGST="${DEST}/pc-gst"
+          rm -rf "${PCGST}"
+          mkdir -p "${PCGST}"
+          for pc in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0 gstreamer-pbutils-1.0 gstreamer-controller-1.0; do
+            if [ -f "${DEST}/lib/pkgconfig/${pc}.pc" ]; then cp "${DEST}/lib/pkgconfig/${pc}.pc" "${PCGST}/${pc}.pc"; fi
+          done
+          sed -i "s|^prefix=.*|prefix=${DEST}|" "${PCGST}"/*.pc
+          sed -i "s|^libdir=.*|libdir=/usr/lib/aarch64-linux-gnu|" "${PCGST}"/*.pc
           # 共享链接用不到 private 依赖；清掉以免 pkg-config 因缺私依赖而失败
-          sed -i '/^Requires\.private:/d;/^Libs\.private:/d' "${DEST}"/lib/pkgconfig/*.pc
+          sed -i '/^Requires\.private:/d;/^Libs\.private:/d' "${PCGST}"/*.pc
 
-          GSTV=$(PKG_CONFIG_LIBDIR="${DEST}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-                 PKG_CONFIG_PATH="${DEST}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          GSTV=$(PKG_CONFIG_LIBDIR="${PCGST}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+                 PKG_CONFIG_PATH="${PCGST}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
                  pkg-config --modversion gstreamer-1.0)
           echo "gstreamer-1.0.pc 版本 = ${GSTV}"
           [ "${GSTV}" = "${GST_TAG}" ] || { echo "FATAL: 版本 ${GSTV} != 期望 ${GST_TAG}"; exit 1; }
 
           for p in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0; do
-            PKG_CONFIG_LIBDIR="${DEST}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-            PKG_CONFIG_PATH="${DEST}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+            PKG_CONFIG_LIBDIR="${PCGST}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+            PKG_CONFIG_PATH="${PCGST}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
             pkg-config --exists "$p" || { echo "FATAL: 缺 ${p}.pc"; exit 1; }
           done
-          echo "✅ GStreamer ${GSTV} sysroot 就绪: ${DEST}"
+          echo "✅ GStreamer ${GSTV} 编译依赖就绪（Cflags=${DEST}，Libs=apt aarch64 桩）"
 
       - name: Configure ARM64 WOW64
         shell: bash
@@ -1883,10 +1894,10 @@ jobs:
 
           export SYSROOT="/usr"
 
-          # GStreamer 1.29.2 sysroot（替代 apt 的 1.22.0）：pkg-config/链接均优先它
+          # GStreamer 编译依赖走 1.29.2（Cflags=sysroot 头文件；Libs=apt 同 SONAME 桩，详见 18.9 步骤注释）
           export GST_SYSROOT="/opt/gst-sysroot"
-          export PKG_CONFIG_PATH="${GST_SYSROOT}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-          export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          export PKG_CONFIG_PATH="${GST_SYSROOT}/pc-gst:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/pc-gst:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
@@ -1894,7 +1905,7 @@ jobs:
           export CROSSCFLAGS="-O2 -pipe"
           export CROSSCXXFLAGS="-O2 -pipe"
 
-          export LDFLAGS="-L${GST_SYSROOT}/lib -L/usr/lib/aarch64-linux-gnu -Wl,-O1 -Wl,--as-needed -Wl,--sort-common"
+          export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,-O1 -Wl,--as-needed -Wl,--sort-common"
           echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
 
           WINE_ARCHS="${{ inputs.wine_archs || 'arm64ec,aarch64,i386' }}"
