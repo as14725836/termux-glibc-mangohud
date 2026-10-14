@@ -1664,6 +1664,23 @@ jobs:
             echo "OK: build.gradle.in 无需补齐"
           fi
 
+          # 同理，Pipetto 分支的 .gitignore 里有 "build*"，
+          # 把 tools/winebuild/build.h 这个手写源文件也误伤了，
+          # 导致 winebuild 编译时报 build.h: No such file or directory。
+          # 必须用 wine-9.0 tag 的版本：该分支 VERSION=9.0 但 cherry-pick
+          # 了后续改动，只有 9.0 的 build.h 结构体布局能对上 import.c。
+          if [ ! -f tools/winebuild/build.h ] && [ -f tools/winebuild/import.c ]; then
+            echo "=== 补 tools/winebuild/build.h（wine-9.0 tag）==="
+            _bh_url="https://raw.githubusercontent.com/wine-mirror/wine/wine-9.0/tools/winebuild/build.h"
+            if curl -fsSL "$_bh_url" -o tools/winebuild/build.h; then
+              echo "OK: 已补入 build.h ($(wc -c < tools/winebuild/build.h) 字节)"
+            else
+              echo "!!! 下载 build.h 失败 !!!"; exit 1
+            fi
+          else
+            echo "OK: tools/winebuild/build.h 无需补齐"
+          fi
+
 
           # ====================================================
           # Build
