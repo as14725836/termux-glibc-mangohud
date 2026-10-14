@@ -1873,6 +1873,39 @@ jobs:
           fi
 
 
+          # ====================================================
+          # Termux /tmp 修复（wineserver 目录）
+          # ====================================================
+          #
+          # 症状：
+          #   wineserver: mkdir /tmp/.wine-10521: Permission denied
+          #
+          # 原因：Android/Termux 上 /tmp 不可写。Wine 有 #ifdef __ANDROID__
+          # 兜底，但那是给 bionic/交叉编译用的；这里是 x86_64 glibc 构建，
+          # 不定义 __ANDROID__，于是走 #else 的 /tmp 分支。
+          #
+          # 上游 patch11.16/termux-wine-full-11.16.patch 里有这个修复，但按
+          # Wine 11.16 的行号/写法编排，套到 Wine 9.0 上 hunk 打不上 →
+          # 按「能打就打」策略整份跳过，连这个修复一起丢了。
+          #
+          # 用内容锚点注入，覆盖 Wine 9/10/11 都相同的两个点：
+          #   dlls/ntdll/unix/server.c   init_server_dir()
+          #   server/request.c           create_server_dir()
+          echo "=========================================="
+          echo "Termux /tmp 修复（wineserver 目录）"
+          echo "=========================================="
+
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_wine_tmp.py" ..
+
+          echo "--- 修复结果 ---"
+          grep -n 'termux/files/usr/tmp' ../dlls/ntdll/unix/server.c ../server/request.c || true
+
+          # 兜底：确保 Termux 的 tmp 目录存在
+          mkdir -p /data/data/com.termux/files/usr/tmp 2>/dev/null || true
+
+          echo "OK: Termux /tmp 修复完成"
+
+
           ../configure \
             --enable-win64 \
             --enable-archs=i386,x86_64 \
