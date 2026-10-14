@@ -1193,33 +1193,6 @@ jobs:
       # Wine Build
       # ========================================================
 
-      - name: Termux /tmp 修复（wineserver 目录）
-        working-directory: /tmp/build_wine_${{ github.event.inputs.wine_branch || 'staging' }}_${{ github.event.inputs.wine_version || 'latest' }}/build-wow64
-        run: |
-          set -e
-
-          # 症状：wineserver: mkdir /tmp/.wine-10521: Permission denied
-          # Android/Termux 上 /tmp 不可写；Wine 的 __ANDROID__ 兜底只对
-          # bionic/交叉编译生效，x86_64 glibc 构建走 #else 的 /tmp 分支。
-          #
-          # 上游 patch11.16/termux-wine-full-11.16.patch 里有这个修复，但按
-          # Wine 11.16 的行号编排，套 Wine 9.0 打不上 → 「能打就打」整份跳过，
-          # 连这个修复一起丢了。改用内容锚点注入，覆盖 Wine 9/10/11。
-          echo "=========================================="
-          echo "Termux /tmp 修复（wineserver 目录）"
-          echo "=========================================="
-
-          ls -d .. >/dev/null || { echo "SKIP: 找不到源码树"; exit 0; }
-
-          python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_wine_tmp.py" ..
-
-          echo "--- 修复结果 ---"
-          grep -n 'termux/files/usr/tmp' ../dlls/ntdll/unix/server.c ../server/request.c || true
-
-          mkdir -p /data/data/com.termux/files/usr/tmp 2>/dev/null || true
-
-          echo "OK: Termux /tmp 修复完成"
-
       - name: 构建 Wine WOW64
         run: |
 
@@ -1898,6 +1871,12 @@ jobs:
             echo "box64 icache 补丁已禁用"
 
           fi
+
+          # Termux /tmp 修复：wineserver 用 /tmp/.wine-<uid>，Android 上不可写
+          # -> "wineserver: mkdir /tmp/.wine-10521: Permission denied"
+          # Wine 的 #ifdef __ANDROID__ 只对 bionic 生效，x86_64 glibc 走 #else。
+          # 上游 11.16 补丁按行号写，套 Wine 9.0 打不上 → 用内容锚点注入。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_wine_tmp.py" ..
 
 
           ../configure \
