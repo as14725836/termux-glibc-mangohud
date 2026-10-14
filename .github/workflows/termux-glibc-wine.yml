@@ -1643,6 +1643,27 @@ jobs:
             echo "OK: 仓库自带 configure"
           fi
 
+          # ====================================================
+          # 补齐缺失的生成物（Pipetto proton-9.0-x86_64 分支裁剪过）
+          # ====================================================
+          # dlls/wineandroid.drv/Makefile.in 仍然引用 build.gradle.in，
+          # 但该分支把 build.gradle.in 删掉了，导致 configure 阶段
+          #   makedep: error: open build.gradle.in : No such file or directory
+          # 这里在需要时从上游 wine-mirror/wine 补回来。
+          if [ ! -f dlls/wineandroid.drv/build.gradle.in ] &&              [ -f dlls/wineandroid.drv/Makefile.in ] &&              grep -q 'build.gradle.in' dlls/wineandroid.drv/Makefile.in; then
+            echo "=== 补 dlls/wineandroid.drv/build.gradle.in ==="
+            _bg_url="https://raw.githubusercontent.com/wine-mirror/wine/master/dlls/wineandroid.drv/build.gradle.in"
+            if curl -fsSL "$_bg_url" -o dlls/wineandroid.drv/build.gradle.in; then
+              echo "OK: 已补入 build.gradle.in ($(wc -c < dlls/wineandroid.drv/build.gradle.in) 字节)"
+            else
+              echo "WARN: 下载失败，改用最小占位文件"
+              printf '/* placeholder - wineandroid.drv not built on this platform */\n' \
+                > dlls/wineandroid.drv/build.gradle.in
+            fi
+          else
+            echo "OK: build.gradle.in 无需补齐"
+          fi
+
 
           # ====================================================
           # Build
