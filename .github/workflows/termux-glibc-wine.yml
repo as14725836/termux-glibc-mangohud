@@ -469,6 +469,9 @@ jobs:
 
           cd build-wow64
 
+          # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
+          # 导致 SID 退化、系统 UUID 全 FF；改指 Termux glibc 路径。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
 
           # ====================================================
           # 编译优化
@@ -1877,6 +1880,10 @@ jobs:
           # Wine 的 #ifdef __ANDROID__ 只对 bionic 生效，x86_64 glibc 走 #else。
           # 上游 11.16 补丁按行号写，套 Wine 9.0 打不上 → 用内容锚点注入。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_wine_tmp.py" ..
+
+          # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
+          # 导致 SID 退化、系统 UUID 全 FF；改指 Termux glibc 路径。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
 
 
           ../configure \
