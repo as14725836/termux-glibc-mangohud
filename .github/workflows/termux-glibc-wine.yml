@@ -476,6 +476,10 @@ jobs:
           if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q WINEVMEMMAXSIZE ../dlls/ntdll/unix/virtual.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. || echo "WARN: vmem inject"
           fi
+          # Termux: uffd writewatch 禁用 + shm_open -> Termux tmp（Pipetto 270a7ce5 适配，幂等）
+          if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q 'termux_shm_open' ../dlls/ntdll/unix/virtual.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_termux_uffd_shm.py" .. || echo "WARN: uffd/shm inject"
+          fi
 
 
           # ====================================================
@@ -1864,6 +1868,10 @@ jobs:
           # WINEVMEMMAXSIZE (Pipetto f9224d6b): idempotent anchor inject
           if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q WINEVMEMMAXSIZE ../dlls/ntdll/unix/virtual.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. || echo "WARN: vmem inject"
+          fi
+          # Termux: uffd writewatch 禁用 + shm_open -> Termux tmp（Pipetto 270a7ce5 适配，幂等）
+          if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q 'termux_shm_open' ../dlls/ntdll/unix/virtual.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_termux_uffd_shm.py" .. || echo "WARN: uffd/shm inject"
           fi
 
 
