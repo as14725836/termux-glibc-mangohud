@@ -1621,6 +1621,30 @@ jobs:
 
 
           # ====================================================
+          # autotools 引导
+          # ====================================================
+          # 有些分支（如 Pipetto 的 proton-9.0-x86_64）是纯 autotools 树，
+          # 仓库里不带 configure，必须先跑 autogen.sh 生成，否则后面
+          # 的 ../configure 会以 127 退出。
+          if [ ! -f configure ]; then
+            if [ -x ./autogen.sh ]; then
+              echo "=== 无 configure，运行 ./autogen.sh ==="
+              ./autogen.sh
+            elif [ -f ./autogen.sh ]; then
+              echo "=== 无 configure，运行 sh ./autogen.sh ==="
+              sh ./autogen.sh
+            else
+              echo "=== 无 configure 也无 autogen.sh，尝试 autoreconf -fiv ==="
+              autoreconf -fiv
+            fi
+            [ -f configure ] || { echo "!!! autogen 后仍未生成 configure !!!"; exit 1; }
+            echo "OK: configure 已生成"
+          else
+            echo "OK: 仓库自带 configure"
+          fi
+
+
+          # ====================================================
           # Build
           # ====================================================
 
