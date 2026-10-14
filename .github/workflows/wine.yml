@@ -141,6 +141,8 @@ env:
   TERMUX_GLIBC_PREFIX: /data/data/com.termux/files/usr/glibc
   TERMUX_PREFIX: /data/data/com.termux/files/usr
   TERMUX_TMP: /data/data/com.termux/files/usr/tmp
+  # Wine 读 machine-id 派生 SID / 系统 UUID；Termux 上 /etc 与 /var/lib/dbus 都不可用
+  TERMUX_MACHINE_ID: /data/data/com.termux/files/usr/glibc/etc/machine-id
 
   DEBIAN_FRONTEND: noninteractive
 
@@ -1272,6 +1274,32 @@ jobs:
           echo "============================================"
           echo "Termux patches completed"
           echo "============================================"
+
+          # ------------------------------------------------------------
+          # machine-id：Wine 从中派生本地用户 SID 与系统 UUID。
+          #   server/token.c            init_user_sid()  -> /etc/machine-id
+          #   dlls/ntdll/unix/system.c  get_system_uuid() -> /var/lib/dbus/machine-id
+          # Termux 上这两个标准路径读不到，SID 退化、UUID 全 FF，
+          # 于是授权/防盗版/存档校验类程序行为异常。改成 Termux glibc 路径。
+          # 内容锚点注入（不依赖行号），幂等；上游 Wine 没有 init_user_sid，
+          # 非 Proton 分支会自动跳过 token.c。
+          # ------------------------------------------------------------
+          _u="/tmp/wine-termux/fix_termux_machine_id.py"
+          mkdir -p /tmp/wine-termux
+          curl -fsSL --retry 2 -o "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/fix_termux_machine_id.py" \
+            || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/fix_termux_machine_id.py" \
+            || true
+          if [ ! -s "$_u" ]; then
+            _u="${GITHUB_WORKSPACE:-$PWD}/patches/wow64/fix_termux_machine_id.py"
+            [ -f "$_u" ] || { echo "WARN: fix_termux_machine_id.py 不可用，跳过"; _u=""; }
+          fi
+
+          if [ -n "${_u:-}" ]; then
+            python3 "$_u" "$(pwd)" "${TERMUX_MACHINE_ID}" || echo "WARN: machine-id 修复部分失败（不阻断构建）"
+            echo "machine-id self-check:"
+            grep -n 'machine-id' server/token.c 2>/dev/null | head -3 || true
+            grep -n 'machine-id' dlls/ntdll/unix/system.c 2>/dev/null | head -3 || true
+          fi
 
       # ============================================================
       - name: ARM64 39-bit VA + noexec 兼容适配
