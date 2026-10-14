@@ -472,6 +472,25 @@ jobs:
           # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
           # 导致 SID 退化、系统 UUID 全 FF；改指 Termux glibc 路径。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
+          # ====================================================
+          # WINEVMEMMAXSIZE（Pipetto-crypto/wine@f9224d6b 语义移植，幂等）
+          # ====================================================
+          # 原 commit 直接 patch -p1 对 9/10/11 各树行号漂移会失败，
+          # 这里用内容锚点注入；已存在（如 Pipetto proton-9.0-x86_64 自带）则跳过。
+          # 用法：WINEVMEMMAXSIZE=<MiB>（0/未设 = 不限制）
+          if [ -f ../dlls/ntdll/unix/virtual.c ]; then
+            if grep -q 'WINEVMEMMAXSIZE' ../dlls/ntdll/unix/virtual.c; then
+              echo "✔ WINEVMEMMAXSIZE 已存在（源码自带或上次注入）→ 跳过"
+            else
+              python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. \
+                || echo "WARN: WINEVMEMMAXSIZE 注入未完成（不阻断构建）"
+            fi
+            echo "--- WINEVMEMMAXSIZE 自检 ---"
+            grep -n 'WINEVMEMMAXSIZE\|vmem_max_size' ../dlls/ntdll/unix/virtual.c | head -8 || true
+          else
+            echo "WARN: ../dlls/ntdll/unix/virtual.c 不存在，跳过 WINEVMEMMAXSIZE"
+          fi
+
 
           # ====================================================
           # 编译优化
@@ -1884,6 +1903,25 @@ jobs:
           # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
           # 导致 SID 退化、系统 UUID 全 FF；改指 Termux glibc 路径。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
+          # ====================================================
+          # WINEVMEMMAXSIZE（Pipetto-crypto/wine@f9224d6b 语义移植，幂等）
+          # ====================================================
+          # 原 commit 直接 patch -p1 对 9/10/11 各树行号漂移会失败，
+          # 这里用内容锚点注入；已存在（如 Pipetto proton-9.0-x86_64 自带）则跳过。
+          # 用法：WINEVMEMMAXSIZE=<MiB>（0/未设 = 不限制）
+          if [ -f ../dlls/ntdll/unix/virtual.c ]; then
+            if grep -q 'WINEVMEMMAXSIZE' ../dlls/ntdll/unix/virtual.c; then
+              echo "✔ WINEVMEMMAXSIZE 已存在（源码自带或上次注入）→ 跳过"
+            else
+              python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. \
+                || echo "WARN: WINEVMEMMAXSIZE 注入未完成（不阻断构建）"
+            fi
+            echo "--- WINEVMEMMAXSIZE 自检 ---"
+            grep -n 'WINEVMEMMAXSIZE\|vmem_max_size' ../dlls/ntdll/unix/virtual.c | head -8 || true
+          else
+            echo "WARN: ../dlls/ntdll/unix/virtual.c 不存在，跳过 WINEVMEMMAXSIZE"
+          fi
+
 
 
           ../configure \
