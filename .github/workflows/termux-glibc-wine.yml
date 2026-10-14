@@ -48,6 +48,7 @@ on:
           - staging
           - staging-tkg
           - staging-tkg-fsync
+          - proton-9.0-x86_64
 
       wine_version:
         description: 'Wine 版本 (仅 Wine 构建)'
@@ -57,6 +58,15 @@ on:
 
       apply_dxgi_patch:
         description: '应用 DXGI 补丁'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+      apply_box64_icache_patch:
+        description: 'box64 指令缓存失效补丁（加壳程序自解密后能刷新 JIT 缓存）'
         required: false
         default: 'true'
         type: choice
@@ -1408,6 +1418,32 @@ jobs:
             BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-vanilla-wow64"
 
 
+          elif [ "$WINE_BRANCH" = "proton-9.0-x86_64" ]; then
+
+            echo "处理 Pipetto proton-9.0-x86_64"
+
+            git clone \
+              --depth 1 \
+              -b proton-9.0-x86_64 \
+              https://github.com/Pipetto-crypto/wine.git \
+              wine
+
+            SOURCE_DIR="wine"
+
+            cd "$SOURCE_DIR"
+
+            git config advice.detachedHead false
+
+            WINE_VERSION_ACTUAL="$(
+              sed 's/^Wine version //' VERSION 2>/dev/null || echo "9.0"
+            )"
+
+            COMMIT_HASH="$(
+              git rev-parse --short HEAD
+            )"
+
+            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-proton-wow64"
+
           else
 
             echo "未知 Wine 分支: $WINE_BRANCH"
@@ -1677,6 +1713,51 @@ jobs:
           else
             echo "SKIP: adapted-11.18 —— 当前目录下没找到 wine 源码树"
           fi
+          # ====================================================
+          # box64 指令缓存失效补丁
+          # ====================================================
+          #
+          # proton-9.0-x86_64 构建 x86_64，因此 virtual.c 里
+          #   #if defined(__x86_64__) || defined(__i386__)
+          #       /* no-op */
+          # 把 NtFlushInstructionCache 当真空操作。真 x86_64 CPU 上成立
+          # （store 与 I-cache 硬件一致），box64 下不成立：guest 镜像被翻译
+          # 成 box64 自缓存里的宿主代码，没有 CPU 机制失效它。加壳程序自解密
+          # 后调这个 API 发布代码，于是拿到过期 dynablock。
+          #
+          # box64 唯一认的“代码变了”信号是某段范围的 PROT_EXEC 被清掉
+          # （custommem.c 的 updateProtection()）。这里按页降成 read/write
+          # 再逐页恢复原保护 —— 经 box64 包装过的 mprotect
+          # (x64syscall.c case 10 -> my_mprotect) 触发失效。
+          #
+          # 用内容锚点注入而非 patch -p1：Wine 9/10/11 的 virtual.c 行号
+          # 差异极大，但这段骨架逐字相同。
+          if [ "${{ github.event.inputs.apply_box64_icache_patch || 'true' }}" = "true" ]; then
+
+            echo "=========================================="
+            echo "注入 box64 指令缓存失效补丁"
+            echo "=========================================="
+
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_box64_icache.py" .
+
+            echo "--- 注入结果 ---"
+            grep -n 'box64_icache_bounce' dlls/ntdll/unix/virtual.c
+
+            test "$(grep -c 'box64_icache_bounce' dlls/ntdll/unix/virtual.c)" -ge 2 \
+              || { echo "FATAL: 注入失败"; exit 1; }
+
+            grep -q 'WINE_BOX64_ICACHE_BOUNCE' dlls/ntdll/unix/virtual.c \
+              || { echo "FATAL: 环境变量开关缺失"; exit 1; }
+
+            echo "OK: box64 icache 补丁已注入"
+
+          else
+
+            echo "box64 icache 补丁已禁用"
+
+          fi
+
+
           ../configure \
             --enable-win64 \
             --enable-archs=i386,x86_64 \
