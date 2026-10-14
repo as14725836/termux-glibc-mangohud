@@ -555,7 +555,7 @@ jobs:
 
           # ---- adapted-11.18 补丁（自动探测源码目录，子 shell 内应用，不改动 cwd）----
           _wsrc=""
-          for _d in . source wine wine-tkg wine-src ./wine; do
+          for _d in . .. source wine wine-tkg wine-src ./wine ../wine; do
             if [ -f "$_d/dlls/quartz/Makefile.in" ]; then _wsrc="$_d"; break; fi
           done
           if [ -n "$_wsrc" ]; then
@@ -1717,7 +1717,7 @@ jobs:
 
           # ---- adapted-11.18 补丁（自动探测源码目录，子 shell 内应用，不改动 cwd）----
           _wsrc=""
-          for _d in . source wine wine-tkg wine-src ./wine; do
+          for _d in . .. source wine wine-tkg wine-src ./wine ../wine; do
             if [ -f "$_d/dlls/quartz/Makefile.in" ]; then _wsrc="$_d"; break; fi
           done
           if [ -n "$_wsrc" ]; then
@@ -1776,15 +1776,16 @@ jobs:
             echo "注入 box64 指令缓存失效补丁"
             echo "=========================================="
 
-            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_box64_icache.py" .
+            # build-wow64/ 是 out-of-tree 构建目录，源码树在上一层（同 ../configure）
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_box64_icache.py" ..
 
             echo "--- 注入结果 ---"
-            grep -n 'box64_icache_bounce' dlls/ntdll/unix/virtual.c
+            grep -n 'box64_icache_bounce' ../dlls/ntdll/unix/virtual.c
 
-            test "$(grep -c 'box64_icache_bounce' dlls/ntdll/unix/virtual.c)" -ge 2 \
+            test "$(grep -c 'box64_icache_bounce' ../dlls/ntdll/unix/virtual.c)" -ge 2 \
               || { echo "FATAL: 注入失败"; exit 1; }
 
-            grep -q 'WINE_BOX64_ICACHE_BOUNCE' dlls/ntdll/unix/virtual.c \
+            grep -q 'WINE_BOX64_ICACHE_BOUNCE' ../dlls/ntdll/unix/virtual.c \
               || { echo "FATAL: 环境变量开关缺失"; exit 1; }
 
             echo "OK: box64 icache 补丁已注入"
