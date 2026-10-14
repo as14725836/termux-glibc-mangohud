@@ -1543,7 +1543,14 @@ jobs:
             echo "Minor: $VERSION_MINOR"
 
 
-            if [ "$VERSION_MAJOR" -gt 9 ] || \
+            # 幂等检测：proton-9.0-x86_64 / Proton 分支往往已自带
+            # WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER 支持，重复应用会导致
+            #   dlls/mfplat/main.c: error: redefinition of 'do_not_create'
+            if [ -f dlls/mfplat/main.c ] && \
+               grep -q 'WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER' dlls/mfplat/main.c; then
+              echo "SKIP: dlls/mfplat/main.c 已自带 DXGI 修复 → 跳过"
+
+            elif [ "$VERSION_MAJOR" -gt 9 ] || \
                [ "$VERSION_MAJOR" -eq 9 -a "$VERSION_MINOR" -ge 10 ]; then
 
               echo "使用 9.10+ DXGI 修复"
@@ -1555,8 +1562,9 @@ jobs:
 
               if [ -f "dlls/mfplat/main.c" ]; then
 
-                patch -p1 \
-                  < wine_do_not_create_dxgi_device_manager2.patch
+                patch -p1 --forward --batch \
+                  < wine_do_not_create_dxgi_device_manager2.patch \
+                  || echo "WARN: DXGI 补丁未完全应用（可能已应用过）"
 
                 echo "✓ DXGI patch applied"
 
@@ -1579,10 +1587,16 @@ jobs:
 
               chmod +x fix_wine9.2_mfplat.sh
 
-              ./fix_wine9.2_mfplat.sh
+              ./fix_wine9.2_mfplat.sh || echo "WARN: Wine 9.10 以下修复脚本未成功（可能已应用过）"
 
               echo "✓ Wine 9.10 以下修复完成"
 
+            fi
+
+            # 无论哪条路径，都要保证最终只有一份定义
+            if [ -f dlls/mfplat/main.c ]; then
+              _cnt=$(grep -c 'WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER' dlls/mfplat/main.c || true)
+              echo "mfplat/main.c 中 WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER 出现次数: $_cnt"
             fi
 
           else
