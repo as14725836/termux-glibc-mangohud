@@ -472,23 +472,9 @@ jobs:
           # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
           # 导致 SID 退化、系统 UUID 全 FF；改指 Termux glibc 路径。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
-          # ====================================================
-          # WINEVMEMMAXSIZE（Pipetto-crypto/wine@f9224d6b 语义移植，幂等）
-          # ====================================================
-          # 原 commit 直接 patch -p1 对 9/10/11 各树行号漂移会失败，
-          # 这里用内容锚点注入；已存在（如 Pipetto proton-9.0-x86_64 自带）则跳过。
-          # 用法：WINEVMEMMAXSIZE=<MiB>（0/未设 = 不限制）
-          if [ -f ../dlls/ntdll/unix/virtual.c ]; then
-            if grep -q 'WINEVMEMMAXSIZE' ../dlls/ntdll/unix/virtual.c; then
-              echo "✔ WINEVMEMMAXSIZE 已存在（源码自带或上次注入）→ 跳过"
-            else
-              python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. \
-                || echo "WARN: WINEVMEMMAXSIZE 注入未完成（不阻断构建）"
-            fi
-            echo "--- WINEVMEMMAXSIZE 自检 ---"
-            grep -n 'WINEVMEMMAXSIZE\|vmem_max_size' ../dlls/ntdll/unix/virtual.c | head -8 || true
-          else
-            echo "WARN: ../dlls/ntdll/unix/virtual.c 不存在，跳过 WINEVMEMMAXSIZE"
+          # WINEVMEMMAXSIZE (Pipetto f9224d6b): idempotent anchor inject
+          if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q WINEVMEMMAXSIZE ../dlls/ntdll/unix/virtual.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. || echo "WARN: vmem inject"
           fi
 
 
@@ -1245,9 +1231,7 @@ jobs:
           cd "$BUILD_DIR"
 
 
-          # ====================================================
           # Source selection
-          # ====================================================
 
           if [ "$WINE_BRANCH" = "staging-tkg" ] || \
              [ "$WINE_BRANCH" = "staging-tkg-fsync" ]; then
@@ -1484,9 +1468,7 @@ jobs:
           echo "构建名称: $BUILD_NAME"
 
 
-          # ====================================================
           # Custom patches
-          # ====================================================
 
           echo "应用自定义补丁"
 
@@ -1532,9 +1514,7 @@ jobs:
           find . -name '*.orig' -delete 2>/dev/null || true
 
 
-          # ====================================================
           # DXGI patch
-          # ====================================================
 
           if [ "$APPLY_DXGI_PATCH" = "true" ]; then
 
@@ -1627,9 +1607,7 @@ jobs:
 
           fi
 
-                    # ====================================================
           # 检查补丁残留
-          # ====================================================
           if find . -name '*.rej' | grep -q .; then
             echo "!!! 存在未应用的补丁片段 !!!"
             find . -name '*.rej'
@@ -1645,9 +1623,7 @@ jobs:
             fi
           fi
 
-          # ====================================================
           # 重新生成 ntsyscalls.h（LAA 补丁改了 ntdll.spec）
-          # ====================================================
           echo "=== 运行 tools/make_specfiles ==="
           perl tools/make_specfiles || { echo "make_specfiles 失败"; exit 1; }
 
@@ -1656,9 +1632,7 @@ jobs:
             echo "!!! ntsyscalls.h 中没有 large_address_aware !!!"; exit 1; }
 
 
-          # ====================================================
           # autotools 引导
-          # ====================================================
           # 有些分支（如 Pipetto 的 proton-9.0-x86_64）是纯 autotools 树，
           # 仓库里不带 configure，必须先跑 autogen.sh 生成，否则后面
           # 的 ../configure 会以 127 退出。
@@ -1679,9 +1653,7 @@ jobs:
             echo "OK: 仓库自带 configure"
           fi
 
-          # ====================================================
           # 补齐缺失的生成物（Pipetto proton-9.0-x86_64 分支裁剪过）
-          # ====================================================
           # dlls/wineandroid.drv/Makefile.in 仍然引用 build.gradle.in，
           # 但该分支把 build.gradle.in 删掉了，导致 configure 阶段
           #   makedep: error: open build.gradle.in : No such file or directory
@@ -1718,18 +1690,14 @@ jobs:
           fi
 
 
-          # ====================================================
           # Build
-          # ====================================================
 
           mkdir -p build-wow64
 
           cd build-wow64
 
 
-          # ====================================================
           # Compiler optimization
-          # ====================================================
 
           export CC="ccache gcc"
           export CXX="ccache g++"
@@ -1744,9 +1712,7 @@ jobs:
           echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
 
 
-          # ----------------------------------------------------
           # CFLAGS
-          # ----------------------------------------------------
 
           export CFLAGS="\
           -march=x86-64 \
@@ -1768,9 +1734,7 @@ jobs:
           export CXXFLAGS="$CFLAGS"
 
 
-          # ----------------------------------------------------
           # PE CFLAGS
-          # ----------------------------------------------------
 
           export CROSSCFLAGS="\
           -march=x86-64 \
@@ -1789,9 +1753,7 @@ jobs:
           export CROSSCXXFLAGS="$CROSSCFLAGS"
 
 
-          # ----------------------------------------------------
           # Linker
-          # ----------------------------------------------------
 
           export LDFLAGS="\
           -Wl,-O2 \
@@ -1809,9 +1771,7 @@ jobs:
           echo "=========================================="
 
 
-          # ====================================================
           # Configure
-          # ====================================================
 
           # ---- adapted-11.18 补丁（自动探测源码目录，子 shell 内应用，不改动 cwd）----
           _wsrc=""
@@ -1849,9 +1809,7 @@ jobs:
           else
             echo "SKIP: adapted-11.18 —— 当前目录下没找到 wine 源码树"
           fi
-          # ====================================================
           # box64 指令缓存失效补丁
-          # ====================================================
           #
           # proton-9.0-x86_64 构建 x86_64，因此 virtual.c 里
           #   #if defined(__x86_64__) || defined(__i386__)
@@ -1903,23 +1861,9 @@ jobs:
           # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
           # 导致 SID 退化、系统 UUID 全 FF；改指 Termux glibc 路径。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
-          # ====================================================
-          # WINEVMEMMAXSIZE（Pipetto-crypto/wine@f9224d6b 语义移植，幂等）
-          # ====================================================
-          # 原 commit 直接 patch -p1 对 9/10/11 各树行号漂移会失败，
-          # 这里用内容锚点注入；已存在（如 Pipetto proton-9.0-x86_64 自带）则跳过。
-          # 用法：WINEVMEMMAXSIZE=<MiB>（0/未设 = 不限制）
-          if [ -f ../dlls/ntdll/unix/virtual.c ]; then
-            if grep -q 'WINEVMEMMAXSIZE' ../dlls/ntdll/unix/virtual.c; then
-              echo "✔ WINEVMEMMAXSIZE 已存在（源码自带或上次注入）→ 跳过"
-            else
-              python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. \
-                || echo "WARN: WINEVMEMMAXSIZE 注入未完成（不阻断构建）"
-            fi
-            echo "--- WINEVMEMMAXSIZE 自检 ---"
-            grep -n 'WINEVMEMMAXSIZE\|vmem_max_size' ../dlls/ntdll/unix/virtual.c | head -8 || true
-          else
-            echo "WARN: ../dlls/ntdll/unix/virtual.c 不存在，跳过 WINEVMEMMAXSIZE"
+          # WINEVMEMMAXSIZE (Pipetto f9224d6b): idempotent anchor inject
+          if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q WINEVMEMMAXSIZE ../dlls/ntdll/unix/virtual.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. || echo "WARN: vmem inject"
           fi
 
 
@@ -1961,9 +1905,7 @@ jobs:
             --without-v4l2
 
 
-          # ====================================================
           # Build
-          # ====================================================
 
           echo "=========================================="
           echo "开始构建 Wine WOW64"
@@ -1974,9 +1916,7 @@ jobs:
           make install
 
 
-      # ========================================================
       # Wine 瘦身
-      # ========================================================
 
       - name: Wine 安装包瘦身
         run: |
