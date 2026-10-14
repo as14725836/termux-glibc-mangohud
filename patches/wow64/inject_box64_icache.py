@@ -54,6 +54,8 @@ import os
 import sys
 
 HELPER = r'''
+#include <stdint.h>  /* [box64 patch] uintptr_t (Wine staging/vanilla trees may lack it) */
+
 /***********************************************************************
  *           box64_icache_bounce
  *
