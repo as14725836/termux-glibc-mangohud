@@ -535,6 +535,26 @@ jobs:
           # 这里整体编译期剔除，退回上游 Wine 行为。非 Proton 树自动跳过。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_peercred.py" .. || echo "WARN: no-peercred inject"
 
+          # Proton/dwproton 在 server/ 里带了一套上游没有的 inproc_sync/ntsync
+          # 框架（server/inproc_sync.c + server/ntsync_tmp.h）。即使运行时设了
+          # PROTON_NO_NTSYNC=1，真实现代码仍被编入并在 thread/alert 路径上被
+          # 调用，在 box64 下会让 wineserver 崩溃：
+          #   wineserver: using server-side synchronization.
+          #   wineserver crashed ... / recvmsg: Connection reset by peer
+          # 对照：wine-proton-9.0 与 wine-staging-11.18（同为 x86_64 wow64）都没有
+          # 这套框架，都能正常启动。这里在编译期注释掉 NTSYNC_IOC_EVENT_READ，
+          # 让 inproc_sync.c 选中最末尾那套安全 stub 实现（等价上游行为）。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_ntsync.py" .. || echo "WARN: no-ntsync inject"
+
+          # ★ 真正的崩溃根因：Wine 10.x 起 server/fd.c 的 main_loop_epoll()
+          # 会用 epoll_pwait2( -1, ... ) 探测内核是否支持该 syscall。
+          # box64 v0.4.5 的 epoll_pwait2 wrapper 在 fd=-1 时解引用空指针：
+          #   SIGSEGV @(epoll_pwait2) for accessing (nil), RDI=0xffffffff
+          #   -> wineserver 的 SIGSEGV handler abort() -> wineserver crashed
+          #   -> wine client error:0: recvmsg: Connection reset by peer
+          # 直接把 use_epoll_pwait2 置 0，退回 epoll_wait（所有内核都支持）。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_epoll_pwait2.py" .. || echo "WARN: no-epoll2 inject"
+
           # ====================================================
           # 编译优化
           # ====================================================
@@ -1940,6 +1960,26 @@ jobs:
           #   wineserver crashed / recvmsg: Connection reset by peer
           # 这里整体编译期剔除，退回上游 Wine 行为。非 Proton 树自动跳过。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_peercred.py" .. || echo "WARN: no-peercred inject"
+
+          # Proton/dwproton 在 server/ 里带了一套上游没有的 inproc_sync/ntsync
+          # 框架（server/inproc_sync.c + server/ntsync_tmp.h）。即使运行时设了
+          # PROTON_NO_NTSYNC=1，真实现代码仍被编入并在 thread/alert 路径上被
+          # 调用，在 box64 下会让 wineserver 崩溃：
+          #   wineserver: using server-side synchronization.
+          #   wineserver crashed ... / recvmsg: Connection reset by peer
+          # 对照：wine-proton-9.0 与 wine-staging-11.18（同为 x86_64 wow64）都没有
+          # 这套框架，都能正常启动。这里在编译期注释掉 NTSYNC_IOC_EVENT_READ，
+          # 让 inproc_sync.c 选中最末尾那套安全 stub 实现（等价上游行为）。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_ntsync.py" .. || echo "WARN: no-ntsync inject"
+
+          # ★ 真正的崩溃根因：Wine 10.x 起 server/fd.c 的 main_loop_epoll()
+          # 会用 epoll_pwait2( -1, ... ) 探测内核是否支持该 syscall。
+          # box64 v0.4.5 的 epoll_pwait2 wrapper 在 fd=-1 时解引用空指针：
+          #   SIGSEGV @(epoll_pwait2) for accessing (nil), RDI=0xffffffff
+          #   -> wineserver 的 SIGSEGV handler abort() -> wineserver crashed
+          #   -> wine client error:0: recvmsg: Connection reset by peer
+          # 直接把 use_epoll_pwait2 置 0，退回 epoll_wait（所有内核都支持）。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_epoll_pwait2.py" .. || echo "WARN: no-epoll2 inject"
 
           ../configure \
             --enable-win64 \
