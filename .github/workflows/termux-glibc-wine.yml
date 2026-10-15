@@ -571,6 +571,23 @@ jobs:
           # 这里把编译期常量改成运行时探测：只有 i386-unix/wine64 真存在才切换。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"
 
+          # ====================================================
+          # ★ 修复 syswow64 为空（Wow64Install 被 PreInstall 失败连带跳过）
+          # ====================================================
+          # dwproton 的 wine.inf 把 syswow64 的填充放在 [Wow64Install.ntx86]
+          # （Needs=BaseWow64Install -> WineFakeDlls=FakeDllsWin32,FakeDllsWow64），
+          # 该段由 wineboot 起 32 位 rundll32 进程执行 —— 只有 32 位上下文里
+          # setupapi 的 DIRID 11 才解析成 syswow64，[FakeDllsWin32] 的 11,,\* 通配
+          # 才会把 lib/wine/i386-windows/ 下的真·32 位 PE 拷进 syswow64。
+          # 但 update_wineprefix() 把整个循环嵌在
+          #   if ((process = start_rundll32(PreInstall))) { for(;;){ ...Wow64Install... } }
+          # 里：PreInstall 的 CreateProcessW 一旦失败，Wow64Install 永不执行 ->
+          # syswow64 为空，而 .update-timestamp 仍被写入 -> 之后 wineboot -u 也不再重试。
+          # （对照：wine-proton-9.0 的 [Wow64Install.ntx86] 直接内联 WineFakeDlls=，
+          #  不依赖 32 位进程，所以老包在同一个 box64 上 syswow64 正常。）
+          # 这里把 Wow64Install 循环从 PreInstall 成功判断里解耦，并给每步失败补 ERR 日志。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_wineboot_wow64_decouple.py" .. || echo "WARN: wineboot-wow64 decouple inject"
+
 
           # ====================================================
           # 编译优化
@@ -2069,6 +2086,8 @@ jobs:
           # 9.0/10.0 的 preloader_exec() 没有这段，所以老包正常。
           # 这里把编译期常量改成运行时探测：只有 i386-unix/wine64 真存在才切换。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"
+          # syswow64 为空修复：Wow64Install 循环与 PreInstall 解耦（见 proton 段说明）
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_wineboot_wow64_decouple.py" .. || echo "WARN: wineboot-wow64 decouple inject"
 
 
           ../configure \
