@@ -484,6 +484,10 @@ jobs:
           if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q 'noexec relax' ../dlls/ntdll/unix/virtual.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_noexec_relax.py" .. || echo "WARN: noexec relax inject"
           fi
+          # seccomp: 放宽 install_bpf 低地址拒绝 + 测试 mmap 不限地址（Pipetto 441c0fe6 适配，幂等；新旧树自动跳过）
+          if [ -f ../dlls/ntdll/unix/signal_x86_64.c ] && ! grep -q 'seccomp relax' ../dlls/ntdll/unix/signal_x86_64.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_seccomp_relax.py" .. || echo "WARN: seccomp relax inject"
+          fi
 
 
           # ====================================================
@@ -1880,6 +1884,10 @@ jobs:
           # noexec: 允许 noexec 分区（/sdcard 等）映射回退 read()（Pipetto b0fdd49f 适配，幂等）
           if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q 'noexec relax' ../dlls/ntdll/unix/virtual.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_noexec_relax.py" .. || echo "WARN: noexec relax inject"
+          fi
+          # seccomp: 放宽 install_bpf 低地址拒绝 + 测试 mmap 不限地址（Pipetto 441c0fe6 适配，幂等；新旧树自动跳过）
+          if [ -f ../dlls/ntdll/unix/signal_x86_64.c ] && ! grep -q 'seccomp relax' ../dlls/ntdll/unix/signal_x86_64.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_seccomp_relax.py" .. || echo "WARN: seccomp relax inject"
           fi
 
 
