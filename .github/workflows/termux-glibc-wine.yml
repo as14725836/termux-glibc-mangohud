@@ -480,6 +480,10 @@ jobs:
           if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q 'termux_shm_open' ../dlls/ntdll/unix/virtual.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_termux_uffd_shm.py" .. || echo "WARN: uffd/shm inject"
           fi
+          # noexec: 允许 noexec 分区（/sdcard 等）映射回退 read()（Pipetto b0fdd49f 适配，幂等）
+          if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q 'noexec relax' ../dlls/ntdll/unix/virtual.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_noexec_relax.py" .. || echo "WARN: noexec relax inject"
+          fi
 
 
           # ====================================================
@@ -1872,6 +1876,10 @@ jobs:
           # Termux: uffd writewatch 禁用 + shm_open -> Termux tmp（Pipetto 270a7ce5 适配，幂等）
           if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q 'termux_shm_open' ../dlls/ntdll/unix/virtual.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_termux_uffd_shm.py" .. || echo "WARN: uffd/shm inject"
+          fi
+          # noexec: 允许 noexec 分区（/sdcard 等）映射回退 read()（Pipetto b0fdd49f 适配，幂等）
+          if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q 'noexec relax' ../dlls/ntdll/unix/virtual.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_noexec_relax.py" .. || echo "WARN: noexec relax inject"
           fi
 
 
