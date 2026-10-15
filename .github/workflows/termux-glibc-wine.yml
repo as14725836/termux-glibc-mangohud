@@ -556,6 +556,23 @@ jobs:
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_epoll_pwait2.py" .. || echo "WARN: no-epoll2 inject"
 
           # ====================================================
+          # ★ 修复 WoW64 preloader 误判（子进程创建失败 / c0000135 的真正原因）
+          # ====================================================
+          # Proton 给 dlls/ntdll/unix/loader.c 的 preloader_exec() 加了
+          # WoW64-on-ARM64 分支：当 machine==AMD64 时把 wineloader 换成
+          # <prefix>/lib/wine/i386-unix/wine64。它用编译期 __aarch64__ 判断宿主，
+          # 但 dwproton 的 Wine 本体是 x86_64 二进制（跑在 box64 上），
+          # __aarch64__ 未定义 -> 这段被编入 -> 运行时把 wineloader 指向
+          # 不存在的 i386-unix/wine64 -> 两次 execv 都失败 -> _exit(1)：
+          #   get_new_process_info() = 0 { success=0, exit_code=1 }
+          #   err:environ:run_wineboot failed to start wineboot 1
+          #   wine: could not load kernel32.dll, status c0000135
+          # 9.0/10.0 的 preloader_exec() 没有这段，所以老包正常。
+          # 这里把编译期常量改成运行时探测：只有 i386-unix/wine64 真存在才切换。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"
+
+
+          # ====================================================
           # 编译优化
           # ====================================================
 
@@ -2036,6 +2053,23 @@ jobs:
           #   -> wine client error:0: recvmsg: Connection reset by peer
           # 直接把 use_epoll_pwait2 置 0，退回 epoll_wait（所有内核都支持）。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_epoll_pwait2.py" .. || echo "WARN: no-epoll2 inject"
+
+          # ====================================================
+          # ★ 修复 WoW64 preloader 误判（子进程创建失败 / c0000135 的真正原因）
+          # ====================================================
+          # Proton 给 dlls/ntdll/unix/loader.c 的 preloader_exec() 加了
+          # WoW64-on-ARM64 分支：当 machine==AMD64 时把 wineloader 换成
+          # <prefix>/lib/wine/i386-unix/wine64。它用编译期 __aarch64__ 判断宿主，
+          # 但 dwproton 的 Wine 本体是 x86_64 二进制（跑在 box64 上），
+          # __aarch64__ 未定义 -> 这段被编入 -> 运行时把 wineloader 指向
+          # 不存在的 i386-unix/wine64 -> 两次 execv 都失败 -> _exit(1)：
+          #   get_new_process_info() = 0 { success=0, exit_code=1 }
+          #   err:environ:run_wineboot failed to start wineboot 1
+          #   wine: could not load kernel32.dll, status c0000135
+          # 9.0/10.0 的 preloader_exec() 没有这段，所以老包正常。
+          # 这里把编译期常量改成运行时探测：只有 i386-unix/wine64 真存在才切换。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"
+
 
           ../configure \
             --enable-win64 \
