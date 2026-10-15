@@ -2,33 +2,29 @@
 # -*- coding: utf-8 -*-
 """gst-priority: 让 MediaFoundation byte stream handler 优先使用 GStreamer 解码器。
 
-问题
+背景
 ----
-Proton 系（WinNative-Emu/proton-wine 等）把 dlls/mfsrcsnk/media_source.c 的
+dlls/mfsrcsnk/media_source.c 的
 
-    static BOOL use_gst_byte_stream_handler(void)
-    {
-        ...
-        return FALSE;          /* Proton: 默认不用 GStreamer */
-    }
+    static BOOL use_gst_byte_stream_handler(void) { ... return FALSE/TRUE; }
 
-改成了默认 FALSE，于是 MF 媒体源默认走 winedmo（FFmpeg）解复用，
-GStreamer 解码器只在 winedmo 明确不支持时才兜底。
-
-上游 wine-mirror/wine 的默认值是 return TRUE（默认用 GStreamer）。
+在不同源码树里语义不同：
+  * 上游 wine-mirror/wine      : 默认 return TRUE  (GStreamer 优先)
+  * Proton 系 (WinNative-Emu)  : 默认 return FALSE (winedmo/FFmpeg 优先)
+  * dwproton (dawn.wine)       : 默认 return FALSE，但已经支持
+                                 PROTON_MEDIA_FORCE_GST=1 强制 GStreamer
 
 目标
 ----
-提供两种可切换行为：
-  1. 默认改为 GStreamer（与上游一致）—— 让 GStreamer 解码器成为首选；
-  2. 同时尊重 WINE_USE_DMO 环境变量（Pipetto 7bde91b5 语义）：
-        WINE_USE_DMO 未设置   -> 走开关 1（默认 GST）
-        WINE_USE_DMO=0        -> 强制 GStreamer
-        WINE_USE_DMO=1        -> 强制 winedmo (FFmpeg)
+统一切换为「默认 GStreamer」，并提供运行时开关：
+    WINE_USE_DMO 未设置 -> 默认 GStreamer
+    WINE_USE_DMO=0      -> 强制 GStreamer
+    WINE_USE_DMO=1      -> 强制 winedmo (FFmpeg)
+同时保留原树里已有的 PROTON_MEDIA_FORCE_GST 语义（若存在）。
 
 幂等
 ----
-以 'WINE_USE_DMO' 作为注入标记：已含则跳过（无论来自本脚本还是上游）。
+以 'WINE_USE_DMO' 作为注入标记：已含则跳过。
 
 用法:
     inject_gst_priority.py <wine-source-dir> [--dry-run]
@@ -40,7 +36,6 @@ import sys
 REL = "dlls/mfsrcsnk/media_source.c"
 MARK = "WINE_USE_DMO"
 
-# 函数原始形态（Proton: return FALSE；上游: return TRUE），整体替换
 FUNC_RE = re.compile(
     r"static\s+BOOL\s+use_gst_byte_stream_handler\s*\(\s*void\s*\)\s*\n"
     r"\{.*?\n\}\n",
@@ -52,10 +47,10 @@ NEW_FUNC = '''static BOOL use_gst_byte_stream_handler(void)
     BOOL result;
     DWORD size = sizeof(result);
 
-    /* Termux: 允许通过 WINE_USE_DMO 强制选择 demuxer 后端。
-     *   WINE_USE_DMO=1 -> 使用 winedmo (FFmpeg)
-     *   WINE_USE_DMO=0 -> 使用 GStreamer（默认）
-     * 未设置时默认 GStreamer，即与上游 wine 行为一致。 */
+    /* Termux/gst-priority: 运行时选择 demuxer 后端。
+     *   WINE_USE_DMO=1 -> winedmo (FFmpeg)
+     *   WINE_USE_DMO=0 -> GStreamer
+     * 未设置时默认 GStreamer（与上游 wine 行为一致）。 */
     if (wine_use_dmo)
     {
         BOOL use_dmo = (wine_use_dmo[0] == '1');
@@ -102,8 +97,12 @@ def main():
     if "DisableGstByteStreamHandler" not in body:
         note("find", "SKIP: 函数结构与预期不同 → 跳过")
         return 0
-    if "getenv" in body:
-        note("idempotent", "已含 getenv → 跳过")
+
+    # 判定这棵树原始默认值：return FALSE(Proton) / return TRUE(上游)
+    # 只要结尾不是 TRUE，就需要改。
+    tail = body.rstrip()
+    if re.search(r"return\s+TRUE\s*;\s*\}$", tail):
+        note("idempotent", "已经是默认 GStreamer (return TRUE) → 跳过")
         return 0
 
     new_src = src[:m.start()] + NEW_FUNC + src[m.end():]
