@@ -481,6 +481,7 @@ jobs:
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_no_gl.py" .. || echo "WARN: gst-no-gl inject"
           fi
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_media_converter_gates.py" .. || true
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_dpi_v2_awareness.py" .. || true
 
           # ====================================================
           # 编译优化
@@ -1834,6 +1835,7 @@ jobs:
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_no_gl.py" .. || echo "WARN: gst-no-gl inject"
           fi
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_media_converter_gates.py" .. || true
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_dpi_v2_awareness.py" .. || true
 
           ../configure \
             --enable-win64 \
