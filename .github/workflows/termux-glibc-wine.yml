@@ -1658,7 +1658,31 @@ jobs:
             echo "OK: tools/winebuild/build.h 无需补齐"
           fi
 
+          # 记录源码树绝对路径，供下一步（拆分出的编译步骤）使用
+          echo "$PWD" > /tmp/wine_srcdir.txt
+          echo "WINE_SRCDIR=$PWD"
+
+
+      - name: 配置并编译 Wine WOW64
+        run: |
+
+          set -e
+
           # Build
+          # 本步骤由原「构建 Wine WOW64」拆分而来；shell 状态不跨步骤，
+          # 因此从第 1 步落盘的源码树路径重新进入。
+
+          if [ -f /tmp/wine_srcdir.txt ]; then
+            WINE_SRCDIR="$(cat /tmp/wine_srcdir.txt)"
+          else
+            echo "!!! 找不到 /tmp/wine_srcdir.txt（第 1 步未成功落盘）"; exit 1
+          fi
+
+          [ -d "$WINE_SRCDIR" ] || { echo "!!! 源码树不存在: $WINE_SRCDIR"; exit 1; }
+
+          cd "$WINE_SRCDIR"
+
+          echo "WINE_SRCDIR=$WINE_SRCDIR"
 
           mkdir -p build-wow64
 
