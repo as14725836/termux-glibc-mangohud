@@ -713,6 +713,62 @@ jobs:
 
           make install
 
+          # --------------------------------------------------------
+          # 修复 bin/ 下的 symlink：dwproton 用新式 loader（tools/wine/wine.c），
+          # wine 二进制靠 get_bindir() 推导路径；在 box64 下该推导退回编译期
+          # prefix /tmp/wine-install-proton（设备上不存在），于是找不到
+          # wineboot.exe → prefix 无法初始化 → kernel32.dll 加载失败 c0000135。
+          #
+          # 解决：把 `xxx -> wine` 的符号链接替换成自包含包装脚本，
+          # 脚本用 $0 所在目录定位 wine，完全不依赖编译期路径。
+          # （这与旧式 loader 构建产物 bin/* 的 shell 脚本行为一致）
+          # --------------------------------------------------------
+
+          echo "=== 修复 bin/ 符号链接为自包含包装脚本 ==="
+
+          for _d in /tmp/wine-install-proton/bin; do
+            [ -d "$_d" ] || continue
+            for _link in "$_d"/*; do
+              [ -L "$_link" ] || continue
+              _target=$(readlink "$_link")
+              case "$_target" in
+                wine|wine64) ;;
+                *) continue ;;
+              esac
+              _name=$(basename "$_link")
+              rm -f "$_link"
+              {
+                printf '%s\n' '#!/bin/sh'
+                printf '%s\n' '# 自包含 Wine 包装脚本（Termux/box64 兼容）'
+                printf '%s\n' 'appname=`basename "$0" .exe`.exe'
+                printf '%s\n' 'case "$0" in'
+                printf '%s\n' '  */*) appdir=`dirname "$0"` ;;'
+                printf '%s\n' '  *)   appdir=. ;;'
+                printf '%s\n' 'esac'
+                printf '%s\n' 'if [ -n "$WINELOADER" ] && [ -x "$WINELOADER" ]; then exec "$WINELOADER" "$appname" "$@"; fi'
+                printf '%s\n' 'if [ -x "$appdir/wine" ];   then exec "$appdir/wine"   "$appname" "$@"; fi'
+                printf '%s\n' 'if [ -x "$appdir/wine64" ]; then exec "$appdir/wine64" "$appname" "$@"; fi'
+                printf '%s\n' 'saved_ifs=$IFS'
+                printf '%s\n' 'IFS=:'
+                printf '%s\n' 'for d in $PATH; do'
+                printf '%s\n' '  IFS=$saved_ifs'
+                printf '%s\n' '  [ -x "$d/wine" ]   && exec "$d/wine"   "$appname" "$@"'
+                printf '%s\n' '  [ -x "$d/wine64" ] && exec "$d/wine64" "$appname" "$@"'
+                printf '%s\n' 'done'
+                printf '%s\n' 'echo "$0: the Wine loader is missing" >&2'
+                printf '%s\n' 'exit 1'
+              } > "$_link"
+              chmod +x "$_link"
+              echo "  已替换: $_name"
+            done
+          done
+
+          echo "=== bin/ 修复后，剩余 symlink（应为空）==="
+          find /tmp/wine-install-proton/bin -maxdepth 1 -type l -printf '  %f -> %l\n' 2>/dev/null || true
+          echo "=== bin/ 内容 ==="
+          ls -la /tmp/wine-install-proton/bin/ | head -30
+
+
           # ====================================================
           # 版本信息
           # ====================================================
