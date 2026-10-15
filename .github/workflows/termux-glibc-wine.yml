@@ -527,6 +527,14 @@ jobs:
           # 运行时 WINE_USE_DMO=1 可强制退回 winedmo/FFmpeg。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_priority.py" .. || echo "WARN: gst-priority inject"
 
+          # Proton/dwproton 在 server/request.c 的 accept_new_client() 里用
+          # SO_PEERCRED + /proc/<pid>/status 反查客户端父进程（Steam 进程树）。
+          # box64 下 SO_PEERCRED 的 struct ucred 与 PPid 都不可靠，会让
+          # wineserver 在第一次 accept 客户端时崩溃：
+          #   wineserver crashed / recvmsg: Connection reset by peer
+          # 这里整体编译期剔除，退回上游 Wine 行为。非 Proton 树自动跳过。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_peercred.py" .. || echo "WARN: no-peercred inject"
+
           # ====================================================
           # 编译优化
           # ====================================================
@@ -1924,6 +1932,14 @@ jobs:
           # 已有 return TRUE 或已注入 WINE_USE_DMO 则自动跳过。
           # 运行时 WINE_USE_DMO=1 可强制退回 winedmo/FFmpeg。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_priority.py" .. || echo "WARN: gst-priority inject"
+
+          # Proton/dwproton 在 server/request.c 的 accept_new_client() 里用
+          # SO_PEERCRED + /proc/<pid>/status 反查客户端父进程（Steam 进程树）。
+          # box64 下 SO_PEERCRED 的 struct ucred 与 PPid 都不可靠，会让
+          # wineserver 在第一次 accept 客户端时崩溃：
+          #   wineserver crashed / recvmsg: Connection reset by peer
+          # 这里整体编译期剔除，退回上游 Wine 行为。非 Proton 树自动跳过。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_peercred.py" .. || echo "WARN: no-peercred inject"
 
           ../configure \
             --enable-win64 \
