@@ -488,6 +488,10 @@ jobs:
           if [ -f ../dlls/ntdll/unix/signal_x86_64.c ] && ! grep -q 'seccomp relax' ../dlls/ntdll/unix/signal_x86_64.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_seccomp_relax.py" .. || echo "WARN: seccomp relax inject"
           fi
+          # winegstreamer: GstGL 可条件关闭 WINE_GST_NO_GL（Pipetto 76f6eab3 适配，幂等；新旧树自动跳过）
+          if [ -f ../dlls/winegstreamer/unixlib.c ] && ! grep -q 'wine_gst_no_gl' ../dlls/winegstreamer/unixlib.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_no_gl.py" .. || echo "WARN: gst-no-gl inject"
+          fi
 
 
           # ====================================================
@@ -1888,6 +1892,10 @@ jobs:
           # seccomp: 放宽 install_bpf 低地址拒绝 + 测试 mmap 不限地址（Pipetto 441c0fe6 适配，幂等；新旧树自动跳过）
           if [ -f ../dlls/ntdll/unix/signal_x86_64.c ] && ! grep -q 'seccomp relax' ../dlls/ntdll/unix/signal_x86_64.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_seccomp_relax.py" .. || echo "WARN: seccomp relax inject"
+          fi
+          # winegstreamer: GstGL 可条件关闭 WINE_GST_NO_GL（Pipetto 76f6eab3 适配，幂等；新旧树自动跳过）
+          if [ -f ../dlls/winegstreamer/unixlib.c ] && ! grep -q 'wine_gst_no_gl' ../dlls/winegstreamer/unixlib.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_no_gl.py" .. || echo "WARN: gst-no-gl inject"
           fi
 
 
