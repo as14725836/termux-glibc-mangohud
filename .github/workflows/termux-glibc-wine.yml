@@ -110,7 +110,6 @@ env:
 permissions:
   contents: write
 
-
 # ============================================================
 # Proton
 # ============================================================
@@ -140,7 +139,6 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
-
 
       # --------------------------------------------------------
       # 构建依赖
@@ -219,7 +217,6 @@ jobs:
 
           sudo apt install -y $BASE_DEPS
 
-
       # --------------------------------------------------------
       # GStreamer
       # --------------------------------------------------------
@@ -238,7 +235,6 @@ jobs:
             gstreamer1.0-* \
             libmpg123-dev \
             libopenal-dev
-
 
       # --------------------------------------------------------
       # GStreamer decoders sysroot（用 1.29.2 头文件/版本替换 apt 的 1.22.0）
@@ -294,7 +290,6 @@ jobs:
           echo "✅ GStreamer ${GSTV} 编译依赖就绪（Cflags=${DEST}，Libs=apt x86_64 桩）"
           echo "GST_SYSROOT=${DEST}" >> "$GITHUB_ENV"
 
-
       # --------------------------------------------------------
       # Locale
       # --------------------------------------------------------
@@ -309,7 +304,6 @@ jobs:
           echo "LC_ALL=zh_CN.UTF-8" >> "$GITHUB_ENV"
           echo "LANGUAGE=zh_CN:zh:en_US:en" >> "$GITHUB_ENV"
 
-
       # --------------------------------------------------------
       # ccache
       # --------------------------------------------------------
@@ -319,7 +313,6 @@ jobs:
         with:
           key: ${{ github.job }}-${{ github.ref }}
           max-size: 5G
-
 
       # --------------------------------------------------------
       # Proton Build
@@ -343,7 +336,6 @@ jobs:
           mkdir -p "$BUILD_DIR/proton"
 
           cd "$BUILD_DIR/proton"
-
 
           # ----------------------------------------------------
           # Clone
@@ -371,7 +363,6 @@ jobs:
             command -v python3 >/dev/null 2>&1 || PY=python
             "${PY}" "$GITHUB_WORKSPACE/patches/termux-env/termux_env_tweaks.py" "$PWD" || true
           fi
-
 
           # ----------------------------------------------------
           # Termux / Android /tmp 路径修复
@@ -412,7 +403,6 @@ jobs:
             -exec sed -i \
               's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
 
-
           # ----------------------------------------------------
           # 自定义补丁
           # ----------------------------------------------------
@@ -430,7 +420,6 @@ jobs:
             echo "Warning: Patch file not found"
 
           fi
-
 
           # ----------------------------------------------------
           # Autogen
@@ -459,7 +448,6 @@ jobs:
             echo "既无 autogen.sh 也无 configure，尝试 autoreconf -fiv"
             autoreconf -fiv || true
           fi
-
 
           # ----------------------------------------------------
           # Build directory
@@ -492,7 +480,7 @@ jobs:
           if [ -f ../dlls/winegstreamer/unixlib.c ] && ! grep -q 'wine_gst_no_gl' ../dlls/winegstreamer/unixlib.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_no_gl.py" .. || echo "WARN: gst-no-gl inject"
           fi
-
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_media_converter_gates.py" .. || true
 
           # ====================================================
           # 编译优化
@@ -509,7 +497,6 @@ jobs:
           export PKG_CONFIG_PATH="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
-
 
           # ----------------------------------------------------
           # Unix compiler
@@ -532,7 +519,6 @@ jobs:
 
           export CXXFLAGS="$CFLAGS"
 
-
           # ----------------------------------------------------
           # PE compiler
           # ----------------------------------------------------
@@ -552,7 +538,6 @@ jobs:
 
           export CROSSCXXFLAGS="$CROSSCFLAGS"
 
-
           # ----------------------------------------------------
           # Linker
           # ----------------------------------------------------
@@ -563,7 +548,6 @@ jobs:
           -Wl,--gc-sections \
           -Wl,--build-id=none"
 
-
           echo "=========================================="
           echo "CFLAGS:"
           echo "$CFLAGS"
@@ -571,7 +555,6 @@ jobs:
           echo "LDFLAGS:"
           echo "$LDFLAGS"
           echo "=========================================="
-
 
           # ====================================================
           # Configure
@@ -647,7 +630,6 @@ jobs:
             --without-v4l2 \
             --without-wayland
 
-
           # ====================================================
           # Build
           # ====================================================
@@ -657,7 +639,6 @@ jobs:
           make -j"$(nproc)"
 
           make install
-
 
           # ====================================================
           # 版本信息
@@ -682,7 +663,6 @@ jobs:
 
           echo "BUILD_NAME=proton-${PROTON_VERSION}-wow64" >> "$GITHUB_ENV"
 
-
       # --------------------------------------------------------
       # Proton 瘦身
       # --------------------------------------------------------
@@ -700,7 +680,6 @@ jobs:
 
           du -sh "$PREFIX"
 
-
           # 删除静态库
           find "$PREFIX" \
             -type f \
@@ -710,7 +689,6 @@ jobs:
             \) \
             -print \
             -delete
-
 
           # 删除 debug 文件
           find "$PREFIX" \
@@ -722,15 +700,12 @@ jobs:
             -print \
             -delete
 
-
           # 删除开发目录
           rm -rf "$PREFIX/include"
-
 
           # 删除文档
           rm -rf "$PREFIX/share/man"
           rm -rf "$PREFIX/share/doc"
-
 
           # Strip
           # 确保有 llvm-strip / file（llvm-strip 能同时处理 PE/COFF，GNU strip 做不到）
@@ -790,14 +765,12 @@ jobs:
               2>/dev/null || true
           fi
 
-
           # 删除空目录
           find "$PREFIX" \
             -type d \
             -empty \
             -delete \
             2>/dev/null || true
-
 
           echo "=========================================="
           echo "最终安装大小"
@@ -811,7 +784,6 @@ jobs:
           du -sh "$PREFIX"/* \
             2>/dev/null \
             | sort -h || true
-
 
       # --------------------------------------------------------
       # Proton 检查
@@ -860,7 +832,6 @@ jobs:
             \( -name "*.so" -o -name "*.so.*" \) \
             | wc -l
 
-
       # --------------------------------------------------------
       # Package
       # --------------------------------------------------------
@@ -877,7 +848,6 @@ jobs:
           cp -a \
             /tmp/wine-install-proton/. \
             "wine-package/$PACKAGE_NAME/"
-
 
       # --------------------------------------------------------
       # Tar XZ
@@ -903,7 +873,6 @@ jobs:
 
           ls -lh "$PACKAGE_NAME.tar.xz"
 
-
       # --------------------------------------------------------
       # Checksum
       # --------------------------------------------------------
@@ -914,7 +883,6 @@ jobs:
           sha256sum *.tar.xz > checksums.txt
 
           cat checksums.txt
-
 
       # --------------------------------------------------------
       # Artifact
@@ -931,7 +899,6 @@ jobs:
             ${{ github.workspace }}/checksums.txt
 
           retention-days: 30
-
 
       # --------------------------------------------------------
       # Release
@@ -990,7 +957,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-
 # ============================================================
 # Wine WOW64
 # ============================================================
@@ -1018,7 +984,6 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
-
 
       # --------------------------------------------------------
       # Build dependencies
@@ -1094,7 +1059,6 @@ jobs:
 
           sudo apt install -y $BASE_DEPS
 
-
       # --------------------------------------------------------
       # GStreamer
       # --------------------------------------------------------
@@ -1131,7 +1095,6 @@ jobs:
             libx265-dev \
             libvpx-dev \
             libtheora-dev
-
 
       # --------------------------------------------------------
       # GStreamer decoders sysroot（用 1.29.2 头文件/版本替换 apt 的 1.22.0）
@@ -1185,7 +1148,6 @@ jobs:
           echo "✅ GStreamer ${GSTV} 编译依赖就绪（Cflags=${DEST}，Libs=apt x86_64 桩）"
           echo "GST_SYSROOT=${DEST}" >> "$GITHUB_ENV"
 
-
       # --------------------------------------------------------
       # Locale
       # --------------------------------------------------------
@@ -1200,7 +1162,6 @@ jobs:
           echo "LC_ALL=zh_CN.UTF-8" >> "$GITHUB_ENV"
           echo "LANGUAGE=zh_CN:zh:en_US:en" >> "$GITHUB_ENV"
 
-
       # --------------------------------------------------------
       # ccache
       # --------------------------------------------------------
@@ -1211,7 +1172,6 @@ jobs:
         with:
           key: ${{ github.job }}-${{ github.ref }}
           max-size: 5G
-
 
       # ========================================================
       # Wine Build
@@ -1245,7 +1205,6 @@ jobs:
           mkdir -p "$BUILD_DIR"
 
           cd "$BUILD_DIR"
-
 
           # Source selection
 
@@ -1306,7 +1265,6 @@ jobs:
 
             BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${WINE_BRANCH}-wow64"
 
-
           elif [ "$WINE_BRANCH" = "staging" ]; then
 
             echo "处理 Wine Staging"
@@ -1363,7 +1321,6 @@ jobs:
 
             STAGING_VERSION="v${PURE_VERSION}"
 
-
             wget \
               -O "wine-staging-${PURE_VERSION}.tar.gz" \
               "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" \
@@ -1371,7 +1328,6 @@ jobs:
             wget \
               -O "wine-staging-${PURE_VERSION}.tar.gz" \
               "https://github.com/wine-staging/wine-staging/archive/refs/tags/v${PURE_VERSION}.tar.gz"
-
 
             if [ -f "wine-staging-${PURE_VERSION}.tar.gz" ]; then
 
@@ -1406,7 +1362,6 @@ jobs:
 
             fi
 
-
           elif [ "$WINE_BRANCH" = "vanilla" ]; then
 
             echo "处理 Vanilla"
@@ -1438,7 +1393,6 @@ jobs:
             )"
 
             BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-${COMMIT_HASH}-vanilla-wow64"
-
 
           elif [ "$WINE_BRANCH" = "proton-9.0-x86_64" ]; then
 
@@ -1474,7 +1428,6 @@ jobs:
 
           fi
 
-
           echo "BUILD_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
 
           echo "WINE_VERSION_ACTUAL=$WINE_VERSION_ACTUAL" >> "$GITHUB_ENV"
@@ -1482,7 +1435,6 @@ jobs:
           echo "当前源码目录: $(pwd)"
 
           echo "构建名称: $BUILD_NAME"
-
 
           # Custom patches
 
@@ -1529,7 +1481,6 @@ jobs:
           find . -name '*.rej' -delete 2>/dev/null || true
           find . -name '*.orig' -delete 2>/dev/null || true
 
-
           # DXGI patch
 
           if [ "$APPLY_DXGI_PATCH" = "true" ]; then
@@ -1537,7 +1488,6 @@ jobs:
             echo "=========================================="
             echo "启用 DXGI 补丁"
             echo "=========================================="
-
 
             PURE_VERSION="$(
               echo "$WINE_VERSION_ACTUAL" \
@@ -1554,12 +1504,10 @@ jobs:
               | cut -d. -f2
             )"
 
-
             echo "Wine version: $WINE_VERSION_ACTUAL"
             echo "Pure version: $PURE_VERSION"
             echo "Major: $VERSION_MAJOR"
             echo "Minor: $VERSION_MINOR"
-
 
             # 幂等检测：proton-9.0-x86_64 / Proton 分支往往已自带
             # WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER 支持，重复应用会导致
@@ -1577,7 +1525,6 @@ jobs:
                 -O wine_do_not_create_dxgi_device_manager2.patch \
                 https://raw.githubusercontent.com/as14725836/wine-termux/main/wine_do_not_create_dxgi_device_manager2.patch
 
-
               if [ -f "dlls/mfplat/main.c" ]; then
 
                 patch -p1 --forward --batch \
@@ -1593,7 +1540,6 @@ jobs:
                 exit 1
 
               fi
-
 
             else
 
@@ -1646,7 +1592,6 @@ jobs:
           echo "=== 确认 LAA syscall 已生成 ==="
           grep -n "large_address_aware" dlls/ntdll/ntsyscalls.h || {
             echo "!!! ntsyscalls.h 中没有 large_address_aware !!!"; exit 1; }
-
 
           # autotools 引导
           # 有些分支（如 Pipetto 的 proton-9.0-x86_64）是纯 autotools 树，
@@ -1705,13 +1650,11 @@ jobs:
             echo "OK: tools/winebuild/build.h 无需补齐"
           fi
 
-
           # Build
 
           mkdir -p build-wow64
 
           cd build-wow64
-
 
           # Compiler optimization
 
@@ -1726,7 +1669,6 @@ jobs:
           export PKG_CONFIG_PATH="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
-
 
           # CFLAGS
 
@@ -1746,9 +1688,7 @@ jobs:
           -fno-ident \
           -DWINE_DISABLE_REPARSE_RESOLVE"
 
-
           export CXXFLAGS="$CFLAGS"
-
 
           # PE CFLAGS
 
@@ -1765,9 +1705,7 @@ jobs:
           -fmerge-all-constants \
           -fno-ident"
 
-
           export CROSSCXXFLAGS="$CROSSCFLAGS"
-
 
           # Linker
 
@@ -1777,7 +1715,6 @@ jobs:
           -Wl,--gc-sections \
           -Wl,--build-id=none"
 
-
           echo "=========================================="
           echo "CFLAGS"
           echo "$CFLAGS"
@@ -1785,7 +1722,6 @@ jobs:
           echo "LDFLAGS"
           echo "$LDFLAGS"
           echo "=========================================="
-
 
           # Configure
 
@@ -1897,8 +1833,7 @@ jobs:
           if [ -f ../dlls/winegstreamer/unixlib.c ] && ! grep -q 'wine_gst_no_gl' ../dlls/winegstreamer/unixlib.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_no_gl.py" .. || echo "WARN: gst-no-gl inject"
           fi
-
-
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_media_converter_gates.py" .. || true
 
           ../configure \
             --enable-win64 \
@@ -1936,7 +1871,6 @@ jobs:
             --without-usb \
             --without-v4l2
 
-
           # Build
 
           echo "=========================================="
@@ -1947,7 +1881,6 @@ jobs:
 
           make install
 
-
       # Wine 瘦身
 
       - name: Wine 安装包瘦身
@@ -1957,13 +1890,11 @@ jobs:
 
           PREFIX="/tmp/wine-install-wow64"
 
-
           echo "=========================================="
           echo "Wine 原始安装大小"
           echo "=========================================="
 
           du -sh "$PREFIX"
-
 
           # ----------------------------------------------------
           # 删除静态库
@@ -1981,7 +1912,6 @@ jobs:
             -print \
             -delete
 
-
           # ----------------------------------------------------
           # 删除 debug
           # ----------------------------------------------------
@@ -1998,7 +1928,6 @@ jobs:
             -print \
             -delete
 
-
           # ----------------------------------------------------
           # 删除开发头文件
           # ----------------------------------------------------
@@ -2007,7 +1936,6 @@ jobs:
           echo "删除 include"
 
           rm -rf "$PREFIX/include"
-
 
           # ----------------------------------------------------
           # 删除文档
@@ -2019,7 +1947,6 @@ jobs:
           rm -rf "$PREFIX/share/man"
           rm -rf "$PREFIX/share/doc"
 
-
           # ----------------------------------------------------
           # Strip
           # ----------------------------------------------------
@@ -2028,7 +1955,6 @@ jobs:
           echo "=========================================="
           echo "Strip ELF + PE（llvm-strip）"
           echo "=========================================="
-
 
           if command -v llvm-strip >/dev/null 2>&1; then
             SZ_B=$(du -sb "$PREFIX" | cut -f1)
@@ -2078,7 +2004,6 @@ jobs:
               2>/dev/null || true
           fi
 
-
           # ----------------------------------------------------
           # 清理空目录
           # ----------------------------------------------------
@@ -2088,7 +2013,6 @@ jobs:
             -empty \
             -delete \
             2>/dev/null || true
-
 
           # ----------------------------------------------------
           # Final size
@@ -2101,7 +2025,6 @@ jobs:
 
           du -sh "$PREFIX"
 
-
           echo
           echo "=========================================="
           echo "各目录大小"
@@ -2110,7 +2033,6 @@ jobs:
           du -sh "$PREFIX"/* \
             2>/dev/null \
             | sort -h || true
-
 
           echo
           echo "=========================================="
@@ -2123,7 +2045,6 @@ jobs:
             | sort -n \
             | tail -30
 
-
       # ========================================================
       # Runtime check
       # ========================================================
@@ -2135,33 +2056,27 @@ jobs:
 
           PREFIX="/tmp/wine-install-wow64"
 
-
           echo "=========================================="
           echo "检查 Wine 核心文件"
           echo "=========================================="
-
 
           test -f "$PREFIX/bin/wine"
 
           echo "✓ wine"
 
-
           test -f "$PREFIX/bin/wineserver"
 
           echo "✓ wineserver"
 
-
           if [ -f "$PREFIX/bin/wine64" ]; then
             echo "✓ wine64"
           fi
-
 
           if [ -d "$PREFIX/share/wine" ]; then
             echo "✓ share/wine"
           else
             echo "⚠️ share/wine 不存在"
           fi
-
 
           echo
           echo "DLL 数量："
@@ -2174,7 +2089,6 @@ jobs:
             \) \
             | wc -l
 
-
           echo
           echo "SO 数量："
 
@@ -2185,7 +2099,6 @@ jobs:
               -o -name "*.so.*" \
             \) \
             | wc -l
-
 
       # ========================================================
       # Package
@@ -2204,7 +2117,6 @@ jobs:
             /tmp/wine-install-wow64/. \
             "wine-package/$PACKAGE_NAME/"
 
-
       # ========================================================
       # Tar
       # ========================================================
@@ -2215,7 +2127,6 @@ jobs:
           set -e
 
           PACKAGE_NAME="${BUILD_NAME}"
-
 
           tar \
             --sort=name \
@@ -2228,9 +2139,7 @@ jobs:
             -C wine-package \
             "$PACKAGE_NAME"
 
-
           ls -lh "$PACKAGE_NAME.tar.xz"
-
 
       # ========================================================
       # Checksum
@@ -2242,7 +2151,6 @@ jobs:
           sha256sum *.tar.xz > checksums.txt
 
           cat checksums.txt
-
 
       # ========================================================
       # Artifact
@@ -2260,7 +2168,6 @@ jobs:
             ${{ github.workspace }}/checksums.txt
 
           retention-days: 30
-
 
       # ========================================================
       # Release
