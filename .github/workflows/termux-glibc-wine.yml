@@ -37,6 +37,9 @@ on:
           - bleeding-edge
           - main
           - master
+          - dwproton/11.0-14
+          - dwproton/11.0-13
+          - dwproton/10.0-26
 
       wine_branch:
         description: 'Wine 分支 (仅 Wine 构建)'
@@ -90,6 +93,7 @@ on:
           - WinNative-Emu/proton-wine
           - Pipetto-crypto/wine
           - GameNative/proton-wine
+          - dawn.wine/dawn-winery/wine-dwproton
 
       gst_decoders_version:
         description: 'GStreamer(decoders)版本：作为编译依赖头文件/版本，替代 apt 自带的 1.22.0（来源：termux-glibc-GStreamer Releases）'
@@ -343,9 +347,30 @@ jobs:
 
           PROTON_REPO="${{ github.event.inputs.proton_repo || 'WinNative-Emu/proton-wine' }}"
           echo "Proton 源码仓库: ${PROTON_REPO}"
-          git clone \
-            "https://github.com/${PROTON_REPO}.git" \
-            wine
+
+          # ---- 自动判定 host：非 GitHub 仓库（如 dawn.wine / GitLab）走裸 URL ----
+          case "$PROTON_REPO" in
+            http://*|https://*)  CLONE_URL="$PROTON_REPO" ;;
+            dawn.wine/*)         CLONE_URL="https://${PROTON_REPO}.git" ;;
+            gitlab.*/*)          CLONE_URL="https://${PROTON_REPO}.git" ;;
+            *)                   CLONE_URL="https://github.com/${PROTON_REPO}.git" ;;
+          esac
+          echo "Clone URL: ${CLONE_URL}"
+
+          # dwproton 的 wine 子模块仓库（wine-dwproton）本身就是完整 Wine 树，
+          # 不含任何 git submodule；深度 1 克隆以省时间。
+          case "$PROTON_REPO" in
+            *wine-dwproton*|*dwproton*)
+              git clone --depth 1 --branch "${{ github.event.inputs.proton_branch || 'dwproton/11.0-14' }}" \
+                "$CLONE_URL" wine || {
+                  echo "浅克隆失败，回退全量克隆"
+                  git clone "$CLONE_URL" wine
+                }
+              ;;
+            *)
+              git clone "$CLONE_URL" wine
+              ;;
+          esac
 
           cd wine
 
@@ -353,9 +378,19 @@ jobs:
 
           echo "Proton 分支: $PROTON_BRANCH"
 
-          git checkout "$PROTON_BRANCH"
+          # 浅克隆已 checkout 到目标分支；全量克隆才需要显式 checkout
+          if ! git rev-parse --verify -q HEAD >/dev/null; then
+            git checkout "$PROTON_BRANCH"
+          else
+            echo "当前 HEAD: $(git rev-parse --short HEAD) ($(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached))"
+          fi
 
-          git submodule update --init --recursive
+          # 无 submodule 的仓库（如 wine-dwproton）跳过，避免无谓报错
+          if [ -f .gitmodules ]; then
+            git submodule update --init --recursive
+          else
+            echo "无 .gitmodules —— 跳过 submodule 初始化"
+          fi
           # ---------------- Termux 环境优化（幂等，不冲突）----------------
           if [ "${{ github.event.inputs.enable_termux_env_tweaks || 'true' }}" = "true" ]; then
             echo "=== Termux 环境优化 ==="
@@ -486,8 +521,10 @@ jobs:
           # mfasfsrcsnk/mfh264enc/mfmp4srcsnk/msauddecmft/msmpeg2vdec/msvproc/resampledmo/wmadmod）
           # 已存在则按哨兵跳过；打不上仅告警，不阻断构建。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_decoder_registrations.py" .. || echo "WARN: decoder-reg inject"
-          # MediaFoundation byte stream handler：默认优先 GStreamer（上游行为），
-          # 可用环境变量 WINE_USE_DMO=1 强制退回 winedmo/FFmpeg。已注入则跳过。
+          # MediaFoundation byte stream handler：默认优先 GStreamer（上游行为）。
+          # 兼容 Proton(return FALSE) / 上游(return TRUE) / dwproton(PROTON_MEDIA_FORCE_GST) 三种树；
+          # 已有 return TRUE 或已注入 WINE_USE_DMO 则自动跳过。
+          # 运行时 WINE_USE_DMO=1 可强制退回 winedmo/FFmpeg。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_priority.py" .. || echo "WARN: gst-priority inject"
 
           # ====================================================
@@ -1871,8 +1908,10 @@ jobs:
           # mfasfsrcsnk/mfh264enc/mfmp4srcsnk/msauddecmft/msmpeg2vdec/msvproc/resampledmo/wmadmod）
           # 已存在则按哨兵跳过；打不上仅告警，不阻断构建。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_decoder_registrations.py" .. || echo "WARN: decoder-reg inject"
-          # MediaFoundation byte stream handler：默认优先 GStreamer（上游行为），
-          # 可用环境变量 WINE_USE_DMO=1 强制退回 winedmo/FFmpeg。已注入则跳过。
+          # MediaFoundation byte stream handler：默认优先 GStreamer（上游行为）。
+          # 兼容 Proton(return FALSE) / 上游(return TRUE) / dwproton(PROTON_MEDIA_FORCE_GST) 三种树；
+          # 已有 return TRUE 或已注入 WINE_USE_DMO 则自动跳过。
+          # 运行时 WINE_USE_DMO=1 可强制退回 winedmo/FFmpeg。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_priority.py" .. || echo "WARN: gst-priority inject"
 
           ../configure \
