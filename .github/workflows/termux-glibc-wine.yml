@@ -482,6 +482,13 @@ jobs:
           fi
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_media_converter_gates.py" .. || true
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_dpi_v2_awareness.py" .. || true
+          # 解码器注册补全（Pipetto proton-9.0-arm64ec 21 条提交：quartz/l3codecx.ax/colorcnv/
+          # mfasfsrcsnk/mfh264enc/mfmp4srcsnk/msauddecmft/msmpeg2vdec/msvproc/resampledmo/wmadmod）
+          # 已存在则按哨兵跳过；打不上仅告警，不阻断构建。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_decoder_registrations.py" .. || echo "WARN: decoder-reg inject"
+          # MediaFoundation byte stream handler：默认优先 GStreamer（上游行为），
+          # 可用环境变量 WINE_USE_DMO=1 强制退回 winedmo/FFmpeg。已注入则跳过。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_priority.py" .. || echo "WARN: gst-priority inject"
 
           # ====================================================
           # 编译优化
@@ -1836,6 +1843,13 @@ jobs:
           fi
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_media_converter_gates.py" .. || true
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_dpi_v2_awareness.py" .. || true
+          # 解码器注册补全（Pipetto proton-9.0-arm64ec 21 条提交：quartz/l3codecx.ax/colorcnv/
+          # mfasfsrcsnk/mfh264enc/mfmp4srcsnk/msauddecmft/msmpeg2vdec/msvproc/resampledmo/wmadmod）
+          # 已存在则按哨兵跳过；打不上仅告警，不阻断构建。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_decoder_registrations.py" .. || echo "WARN: decoder-reg inject"
+          # MediaFoundation byte stream handler：默认优先 GStreamer（上游行为），
+          # 可用环境变量 WINE_USE_DMO=1 强制退回 winedmo/FFmpeg。已注入则跳过。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_priority.py" .. || echo "WARN: gst-priority inject"
 
           ../configure \
             --enable-win64 \
