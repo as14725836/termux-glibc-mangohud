@@ -556,19 +556,30 @@ jobs:
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_epoll_pwait2.py" .. || echo "WARN: no-epoll2 inject"
 
           # ====================================================
-          # ★ 修复 WoW64 preloader 误判（子进程创建失败 / c0000135 的真正原因）
+          # ★ 方案B：修复 x86_64 Wine on box64 上 32 位进程起不来 / syswow64 为空
           # ====================================================
-          # Proton 给 dlls/ntdll/unix/loader.c 的 preloader_exec() 加了
-          # WoW64-on-ARM64 分支：当 machine==AMD64 时把 wineloader 换成
-          # <prefix>/lib/wine/i386-unix/wine64。它用编译期 __aarch64__ 判断宿主，
-          # 但 dwproton 的 Wine 本体是 x86_64 二进制（跑在 box64 上），
-          # __aarch64__ 未定义 -> 这段被编入 -> 运行时把 wineloader 指向
-          # 不存在的 i386-unix/wine64 -> 两次 execv 都失败 -> _exit(1)：
-          #   get_new_process_info() = 0 { success=0, exit_code=1 }
-          #   err:environ:run_wineboot failed to start wineboot 1
-          #   wine: could not load kernel32.dll, status c0000135
-          # 9.0/10.0 的 preloader_exec() 没有这段，所以老包正常。
-          # 这里把编译期常量改成运行时探测：只有 i386-unix/wine64 真存在才切换。
+          # 根因（详见 patches/wow64/inject_preloader_wow64_guard.py 顶部注释）：
+          # dwproton 的双架构包 (--enable-archs=i386,x86_64) 会生成
+          #   lib/wine/i386-unix/wine      —— 真·32 位宿主 wine loader
+          # server/registry.c 在 __x86_64__ 下把 I386 当作 alternate machine，
+          # 于是 exec_wineloader(I386) 时 get_alternate_wineloader() 返回
+          #   <prefix>/lib/wine/i386-unix/wine
+          # box64 未编 BOX32/无 box86 时无法 exec 这个 32 位 ELF ->
+          #   CreateProcessW(syswow64\rundll32.exe) 立即失败 (err=2) ->
+          #   Wow64Install 步骤不执行 -> syswow64/ 为空。
+          # 单架构包 (--enable-archs=x86_64，无 i386-unix/) 反而正常：两次 execv
+          # 失败后落回 64 位 wineloader，由 64 位 Wine 的内部 WoW64 跑 32 位 PE。
+          #
+          # 另叠加病灶：Proton 给 preloader_exec() 加了 machine==AMD64 时切到
+          # i386-unix/wine64 的分支，用 remove_tail(argv[1],"x86_64-unix/wine")
+          # 判定 —— 那恰是 64 位宿主的 wineloader，在 box64 上会误切到
+          # i386-unix/wine64（靠 dlopen 64 位 .so，box64 下必失）。
+          #
+          # 修法：引入运行期判定 host_is_foreign_arch()（编译为 x86_64 但
+          # uname().machine 非 x86_64，即 box64/FEX），此时
+          #   1) get_alternate_wineloader(I386) 返回 NULL -> 走内部 WoW64；
+          #   2) preloader_exec 的 AMD64->i386-unix/wine64 切换加 !is_win64 前置。
+          # 原生 x86_64 与原生 aarch64 行为均不变。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"
 
           # ====================================================
@@ -2072,19 +2083,30 @@ jobs:
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_epoll_pwait2.py" .. || echo "WARN: no-epoll2 inject"
 
           # ====================================================
-          # ★ 修复 WoW64 preloader 误判（子进程创建失败 / c0000135 的真正原因）
+          # ★ 方案B：修复 x86_64 Wine on box64 上 32 位进程起不来 / syswow64 为空
           # ====================================================
-          # Proton 给 dlls/ntdll/unix/loader.c 的 preloader_exec() 加了
-          # WoW64-on-ARM64 分支：当 machine==AMD64 时把 wineloader 换成
-          # <prefix>/lib/wine/i386-unix/wine64。它用编译期 __aarch64__ 判断宿主，
-          # 但 dwproton 的 Wine 本体是 x86_64 二进制（跑在 box64 上），
-          # __aarch64__ 未定义 -> 这段被编入 -> 运行时把 wineloader 指向
-          # 不存在的 i386-unix/wine64 -> 两次 execv 都失败 -> _exit(1)：
-          #   get_new_process_info() = 0 { success=0, exit_code=1 }
-          #   err:environ:run_wineboot failed to start wineboot 1
-          #   wine: could not load kernel32.dll, status c0000135
-          # 9.0/10.0 的 preloader_exec() 没有这段，所以老包正常。
-          # 这里把编译期常量改成运行时探测：只有 i386-unix/wine64 真存在才切换。
+          # 根因（详见 patches/wow64/inject_preloader_wow64_guard.py 顶部注释）：
+          # dwproton 的双架构包 (--enable-archs=i386,x86_64) 会生成
+          #   lib/wine/i386-unix/wine      —— 真·32 位宿主 wine loader
+          # server/registry.c 在 __x86_64__ 下把 I386 当作 alternate machine，
+          # 于是 exec_wineloader(I386) 时 get_alternate_wineloader() 返回
+          #   <prefix>/lib/wine/i386-unix/wine
+          # box64 未编 BOX32/无 box86 时无法 exec 这个 32 位 ELF ->
+          #   CreateProcessW(syswow64\rundll32.exe) 立即失败 (err=2) ->
+          #   Wow64Install 步骤不执行 -> syswow64/ 为空。
+          # 单架构包 (--enable-archs=x86_64，无 i386-unix/) 反而正常：两次 execv
+          # 失败后落回 64 位 wineloader，由 64 位 Wine 的内部 WoW64 跑 32 位 PE。
+          #
+          # 另叠加病灶：Proton 给 preloader_exec() 加了 machine==AMD64 时切到
+          # i386-unix/wine64 的分支，用 remove_tail(argv[1],"x86_64-unix/wine")
+          # 判定 —— 那恰是 64 位宿主的 wineloader，在 box64 上会误切到
+          # i386-unix/wine64（靠 dlopen 64 位 .so，box64 下必失）。
+          #
+          # 修法：引入运行期判定 host_is_foreign_arch()（编译为 x86_64 但
+          # uname().machine 非 x86_64，即 box64/FEX），此时
+          #   1) get_alternate_wineloader(I386) 返回 NULL -> 走内部 WoW64；
+          #   2) preloader_exec 的 AMD64->i386-unix/wine64 切换加 !is_win64 前置。
+          # 原生 x86_64 与原生 aarch64 行为均不变。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"
           # syswow64 为空修复：Wow64Install 循环与 PreInstall 解耦（见 proton 段说明）
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_wineboot_wow64_decouple.py" .. || echo "WARN: wineboot-wow64 decouple inject"

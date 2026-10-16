@@ -1,101 +1,191 @@
 #!/usr/bin/env python3
 """
-修复 dlls/ntdll/unix/loader.c 的 preloader_exec() 在 "x86_64 Wine 跑在 ARM64 宿主
-(box64/FEX)" 场景下错误走 WoW64 分支的问题。
+方案 B：彻底修复 dwproton (x86_64 Wine) 跑在 ARM64 宿主 (box64) 上时，
+32 位进程无法启动、prefix 初始化后 syswow64/ 为空的问题。
 
-症状：
-  wine: created the configuration directory ...
-  wine: could not load kernel32.dll, status c0000135
-  以及 WINEBOOTSTRAPMODE=1 时的
-  Application could not be started, or no application associated with the specified file.
-  ShellExecuteEx failed: Environment variable not found.
-  日志里 wineserver 被 spawn，但 wineboot.exe 子进程秒退：
-    get_new_process_info() = 0 { success=0, exit_code=1 }
-    err:environ:run_wineboot failed to start wineboot 1
+保留 CI 的 --enable-archs=i386,x86_64。
 
-根因：
-  Proton 的 WoW64-on-ARM64 补丁给 preloader_exec() 加了一段
-    #if !defined(__arm__) && !defined(__aarch64__)
-        if (machine == IMAGE_FILE_MACHINE_AMD64 &&
-            ((p = remove_tail(argv[1], "x86_64-unix/wine")) ||
-             (p = remove_tail(argv[1], "i386-unix/wine64"))))
-        {
-            asprintf(&argv[0], "%si386-unix/wine64-preloader", p);
-            asprintf(&argv[1], "%si386-unix/wine64", p);
-        }
-        else
-    #endif
-  __aarch64__/__arm__ 指的是 *编译目标* 的宿主架构。dwproton 的 Wine 本体是
-  x86_64 二进制（跑在 box64 上），编译时 __aarch64__ 未定义，于是这段被编入。
-  运行时 machine 是 IMAGE_FILE_MACHINE_AMD64（wineboot.exe 是 64 位），条件成立，
-  wineloader 被换成 <prefix>/lib/wine/i386-unix/wine64 —— 但 x86_64 wow64 包
-  根本没有 i386-unix/ 目录，两次 execv 都失败 -> _exit(1) -> run_wineboot failed。
+======================= 症状 =======================
+  prefix 初始化后 syswow64/ 始终为空（离线包 0 个文件）。
+  日志：
+    NtCreateFile L"\\??\\C:\\windows\\syswow64\\rundll32.exe" not found (c0000034)
+    err:wineboot:update_wineprefix Wow64Install rundll32 failed to start (machine 014c, err=2)
+  同一个 box64 上，用 --enable-archs=x86_64（无 i386-unix/）编出来的包正常。
 
-  上游 Wine 9.0/10.0 的 preloader_exec() 没有这段，所以老包正常。
+======================= 根因链（已逐行确认）=======================
+1) dwproton 的 Wine 本体是 x86_64（跑在 box64 上）。
+   server/registry.c:init_supported_machines() 在 __x86_64__ 下无条件把
+   IMAGE_FILE_MACHINE_I386 加进 supported_machines[]，native_machine=AMD64。
+   => Wine 认为 I386 是"alternate machine"，应交给**外部 32 位 loader**。
 
-修法：
-  保留 ARM64 原生 WoW64 的语义，但把 "是否切换" 从编译期常量改成
-  运行时探测：只有 i386-unix/wine64 真的存在时才切换。
-  - ARM64 原生 WoW64 包（有 i386-unix/）行为不变；
-  - x86_64 wine on box64/FEX（无 i386-unix/）自动跳过，退回 %s-preloader。
+2) wineboot 在 bootstrap 模式下 CreateProcessW(syswow64\rundll32.exe)：
+   文件不存在 -> is_builtin_path() 返回 TRUE -> 视为 builtin
+   -> exec_wineloader(machine=I386)
+        -> get_alternate_wineloader(I386) 返回 "<dll_dir>/i386-unix/wine"
+           （因为 is_win64 && I386==get_alt_machine(AMD64)）
+        -> preloader_exec() 先 execv "<...>/i386-unix/wine-preloader"，
+           再 execv "<...>/i386-unix/wine"
 
-幂等：以 SENTINEL 注释为标记，重复运行直接跳过。
+3) 两种包的表现：
+   - 单架构 (--enable-archs=x86_64，无 i386-unix/)：
+       i386-unix/wine 不存在 -> 两次 execv 失败 -> preloader_exec 落回
+       execv(argv[1]) 失败 -> loader_exec 落回 wineloader(x86_64-unix/wine)
+       -> box64 跑 64 位 Wine 的**内部 WoW64**(wow64.dll+wow64cpu.dll)
+       -> 32 位 rundll32 成功 -> syswow64 正常填满 ✅
+   - 双架构 (--enable-archs=i386,x86_64，有 i386-unix/)：
+       i386-unix/wine 存在 -> box64 去 exec 这个**真 32 位 ELF**
+         * box64 未编 BOX32 且系统无 box86 -> 直接失败 -> _exit(1)
+           -> 父进程拿到 exit_code=1 -> CreateProcessW 返回 err=2 ❌
+         * 若编了 BOX32 -> 跑起**旧式 32 位宿主 WoW64**，需要
+           i386-unix/ntdll.so 等一整套，与 64 位 Wine 的 WoW64 体系冲突 ❌
+
+4) 另外 dwproton 还给 preloader_exec() 加了（上游没有）：
+       if (machine == IMAGE_FILE_MACHINE_AMD64
+           && ((p=remove_tail(argv[1],"x86_64-unix/wine")) ||
+               (p=remove_tail(argv[1],"i386-unix/wine64"))))
+           切到 i386-unix/wine64
+   第一个匹配项恰是 64 位宿主的 wineloader -> 在 box64 上会把 64 位 wineboot
+   误切到 i386-unix/wine64（一个靠 dlopen 64 位 .so 的 32 位 loader），
+   box64 下 dlopen 64 位 .so 必失 -> _exit(1)。是第二个叠加病灶。
+
+======================= 修法 =======================
+引入运行期判定 host_is_foreign_arch()：
+  编译目标是 x86_64 (__x86_64__)，但 uname().machine 不是 x86_64
+  （实际是 aarch64/arm64 等）——即"x86_64 Wine 跑在非 x86 宿主上"（box64）。
+
+在**两处**使用它：
+
+  A) get_alternate_wineloader()：当 host_is_foreign_arch() 为真且请求的
+     machine 是 I386 时，直接返回 NULL。这样 32 位 PE 不再交给外部
+     i386-unix/wine，而是由 64 位 Wine 的内部 WoW64 机制处理（与单架构
+     包行为一致，已验证可用）。
+
+  B) preloader_exec()：dwproton 那段 AMD64->i386-unix/wine64 切换，
+     增加 !is_win64 前置条件（只有 32 位宿主 loader 才需要切），
+     不再让 64 位宿主误切。
+
+  并且把 A 里"谁是 alternate machine"的语义对齐原生 aarch64 Wine：
+  ARM64 宿主下 I386 是**内部 WoW64**，不是外部 loader。
+
+幂等：SENTINEL 标记，重复运行跳过。
 """
 
 import os
+import re
 import sys
 
-SENTINEL = "/* TERMUX_WOW64_PRELOADER_GUARD */"
+SENTINEL = "/* TERMUX_WOW64_HOSTGUARD */"
 
-OLD = """    if (machine == IMAGE_FILE_MACHINE_AMD64
+# ---------------------------------------------------------------- loader.c
+HELPER = """
+/* TERMUX_WOW64_HOSTGUARD */
+/* x86_64 Wine 跑在非 x86_64 宿主（ARM64/box64、FEX 等）上时返回 TRUE。
+ * 此时 box64/FEX 不能像原生内核那样 exec 一个真 32 位 x86 ELF 并混合
+ * dlopen 64 位 .so，因此必须走 Wine 内部的 WoW64，而不能去 exec
+ * lib/wine/i386-unix/wine。 */
+static BOOL host_is_foreign_arch(void)
+{
+#ifdef __x86_64__
+    static int cached = -1;
+    if (cached == -1)
+    {
+        struct utsname buf;
+        cached = (uname( &buf ) == 0 &&
+                  strcmp( buf.machine, "x86_64" ) && strcmp( buf.machine, "amd64" ));
+    }
+    return cached;
+#else
+    return FALSE;
+#endif
+}
+"""
+
+OLD_ALT = """    if (is_win64)
+    {
+        if (force_wow64) return NULL;
+        if (machine != get_alt_machine( current_machine )) return NULL;
+    }"""
+
+NEW_ALT = """    if (is_win64)
+    {
+        if (force_wow64) return NULL;
+        if (machine != get_alt_machine( current_machine )) return NULL;
+        /* TERMUX_WOW64_HOSTGUARD: x86_64 Wine 在 box64/FEX 上时，32 位 PE 交给
+         * 内部 WoW64（wow64.dll+wow64cpu.dll），不要 exec 外部 i386-unix/wine
+         * （box64 无法 exec 该 32 位 ELF，会导致 rundll32 秒退、syswow64 为空）。 */
+        if (machine == IMAGE_FILE_MACHINE_I386 && host_is_foreign_arch()) return NULL;
+    }"""
+
+OLD_PRE = """    if (machine == IMAGE_FILE_MACHINE_AMD64
         && ((p = remove_tail( argv[1], "x86_64-unix/wine" )) || (p = remove_tail( argv[1], "i386-unix/wine64" ))))
     {
         asprintf( &argv[0], "%si386-unix/wine64-preloader", p );
         asprintf( &argv[1], "%si386-unix/wine64", p );
     }
-    else"""
+    else
+#endif
+"""
 
-NEW = """    if (machine == IMAGE_FILE_MACHINE_AMD64
-        && ((p = remove_tail( argv[1], "x86_64-unix/wine" )) || (p = remove_tail( argv[1], "i386-unix/wine64" ))))
+NEW_PRE = """    if (machine == IMAGE_FILE_MACHINE_AMD64
+        && !is_win64
+        && ((p = remove_tail( argv[1], "i386-unix/wine" )) || (p = remove_tail( argv[1], "i386-unix/wine64" ))))
     {
-        /* TERMUX_WOW64_PRELOADER_GUARD */
-        /* 只有 i386-unix/wine64 真实存在时才切到 WoW64 loader。
-         * Proton 用编译期 __aarch64__ 判断宿主架构，但在
-         * "x86_64 Wine 跑在 box64/FEX" 时该宏未定义，这段被错误编入，
-         * 会把 wineloader 指向不存在的 i386-unix/wine64 并导致
-         * wineboot/子进程创建失败 (run_wineboot failed ... 1)。 */
-        char *wow64_path;
-        asprintf( &wow64_path, "%si386-unix/wine64", p );
-        if (access( wow64_path, X_OK ) == 0)
-        {
-            asprintf( &argv[0], "%si386-unix/wine64-preloader", p );
-            argv[1] = wow64_path;
-        }
-        else
-        {
-            free( wow64_path );
-            asprintf( &argv[0], "%s-preloader", argv[1] );
-        }
+        /* TERMUX_WOW64_HOSTGUARD: 只有当前是 32 位宿主 loader（!is_win64）且目标
+         * PE 是 AMD64 时，才切到 32 位宿主里的 64 位 loader (i386-unix/wine64)。
+         * dwproton 原版用 remove_tail(argv[1],"x86_64-unix/wine") 判定 —— 那恰是
+         * 64 位宿主的 wineloader，会让 64 位 wineboot 在 box64 上误切到
+         * i386-unix/wine64（靠 dlopen 64 位 .so，box64 下必失）。 */
+        asprintf( &argv[0], "%si386-unix/wine64-preloader", p );
+        asprintf( &argv[1], "%si386-unix/wine64", p );
     }
-    else"""
+    else
+#endif
+"""
 
 
-def patch_file(path):
+def patch_loader(path):
     with open(path, "r", encoding="utf-8", errors="surrogateescape") as f:
         src = f.read()
 
     if SENTINEL in src:
-        print("  [skip] already patched")
+        print("  [skip] loader.c already patched")
         return True
 
-    if OLD not in src:
-        print("  [WARN] target block not found in %s" % path)
-        return False
+    changed = False
 
-    src = src.replace(OLD, NEW, 1)
-    with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
-        f.write(src)
-    print("  [ok] patched preloader_exec WoW64 guard")
+    # 0) 确保 <sys/utsname.h> 可用（uname / struct utsname）
+    if "#include <sys/utsname.h>" not in src:
+        inc_anchor = "#include <unistd.h>"
+        if inc_anchor in src:
+            src = src.replace(inc_anchor, inc_anchor + "\n#include <sys/utsname.h>", 1)
+        else:
+            src = src.replace("#include <sys/mman.h>",
+                              "#include <sys/mman.h>\n#include <sys/utsname.h>", 1)
+
+    # 1) 插入 helper（放在 get_alternate_wineloader 的定义之前）
+    anchor = "char *get_alternate_wineloader( WORD machine )"
+    if anchor not in src:
+        print("  [WARN] get_alternate_wineloader anchor not found")
+        return False
+    src = src.replace(anchor, HELPER + "\n" + anchor, 1)
+    changed = True
+
+    # 2) get_alternate_wineloader: 加 foreign-arch 早退
+    if OLD_ALT not in src:
+        print("  [WARN] get_alternate_wineloader block not found")
+        return False
+    src = src.replace(OLD_ALT, NEW_ALT, 1)
+
+    # 3) preloader_exec: 修 AMD64 切换条件
+    if OLD_PRE not in src:
+        print("  [WARN] preloader_exec block not found")
+        return False
+    src = src.replace(OLD_PRE, NEW_PRE, 1)
+
+    if changed:
+        with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
+            f.write(src)
+        print("  [ok] patched loader.c (host_is_foreign_arch + get_alternate_wineloader + preloader_exec)")
     return True
 
 
@@ -105,7 +195,7 @@ def main():
     if not os.path.isfile(target):
         print("  [skip] %s not found" % target)
         return 0
-    patch_file(target)
+    patch_loader(target)
     return 0
 
 
