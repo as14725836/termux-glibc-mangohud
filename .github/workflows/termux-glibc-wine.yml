@@ -705,8 +705,12 @@ jobs:
                 patch -p1 --batch --forward --no-backup-if-mismatch < "$_u" >/dev/null 2>&1 && echo "OK: $_up" || echo "SKIP: $_up 失败"
               done
               _fs=/tmp/wine-termux/inject_fshack_fsr.py
-              [ -s "$_fs" ] || curl -fsSL --retry 2 -o "$_fs" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/inject_fshack_fsr.py" || true
-              [ -s "$_fs" ] && FSHACK_PATCH="${GITHUB_WORKSPACE:-$PWD}/0001-fshack-Implement-AMD-FSR-upscaler-for-fullscreen-hac.patch" python3 "$_fs" "$(pwd)" || true
+              mkdir -p /tmp/wine-termux
+              [ -s "$_fs" ] || curl -fsSL --retry 2 -o "$_fs" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/inject_fshack_fsr.py" \
+                || wget -q -O "$_fs" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/inject_fshack_fsr.py" || true
+              [ -s "$_fs" ] || _fs="${GITHUB_WORKSPACE:-$PWD}/patches/inject_fshack_fsr.py"
+              FSHACK_PATCH="${GITHUB_WORKSPACE:-$PWD}/0001-fshack-Implement-AMD-FSR-upscaler-for-fullscreen-hac.patch" \
+                python3 "$_fs" "$(pwd)" || true
             )
           else
             echo "SKIP: 未找到 wine 源码树"
