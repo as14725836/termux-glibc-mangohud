@@ -1062,6 +1062,23 @@ jobs:
           if find . -name '*.rej' | head -1 | grep -q .; then echo 'WARN: 存在 .rej 文件:'; find . -name '*.rej' | head -5; fi
 
       # ============================================================
+      # fshack AMD FSR 补丁（自适应：仅对结构兼容的源码树生效，否则跳过）
+      # ============================================================
+      - name: fshack AMD FSR patch (adaptive)
+        shell: bash
+        run: |
+          cd "${WINE_SOURCE_DIR}/source" || { echo "no wine source dir"; exit 0; }
+          _P="/tmp/wine-termux/inject_fshack_fsr.py"
+          mkdir -p /tmp/wine-termux
+          if [ ! -s "$_P" ]; then
+            curl -fsSL --retry 2 -o "$_P" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/inject_fshack_fsr.py" \
+              || wget -q -O "$_P" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/inject_fshack_fsr.py" || true
+          fi
+          [ -s "$_P" ] || _P="${GITHUB_WORKSPACE:-$PWD}/patches/inject_fshack_fsr.py"
+          FSHACK_PATCH="${GITHUB_WORKSPACE:-$PWD}/0001-fshack-Implement-AMD-FSR-upscaler-for-fullscreen-hac.patch" \
+            python3 "$_P" "$(pwd)" || echo "WARN: fshack fsr 注入跳过（不阻断构建）"
+
+      # ============================================================
       # 7.5 mfplat 补丁（wine_do_not_create_dxgi_device_manager2，仅 staging）
       # ============================================================
       - name: Apply mfplat DXGI / MPEG4 handler patch (staging only)
