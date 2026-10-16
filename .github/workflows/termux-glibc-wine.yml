@@ -837,15 +837,11 @@ jobs:
 
           echo "PROTON_VERSION=$PROTON_VERSION" >> "$GITHUB_ENV"
 
-          # 分支名可能含 '/'（如 dwproton/11.0-14），GitHub artifact 名
-          # 禁止斜杠 —— 生成安全版本供 artifact / 包名使用。
+          # artifact 名禁止斜杠，生成安全分支名供包名/标签复用
           SAFE_PROTON_BRANCH="$(printf '%s' "$PROTON_BRANCH" | tr '/' '-')"
           echo "SAFE_PROTON_BRANCH=$SAFE_PROTON_BRANCH" >> "$GITHUB_ENV"
-          echo "artifact 安全分支名: $SAFE_PROTON_BRANCH"
-          # 压缩包名与 artifact 名保持同一格式：Proton-<分支>-WoW64
-          # BUILD_NAME 同时决定归档内目录名 / *.tar.xz 文件名 / Release 资产名
+          # 压缩包名与 artifact 名统一：Proton-<分支>-WoW64
           echo "BUILD_NAME=Proton-${SAFE_PROTON_BRANCH}-WoW64" >> "$GITHUB_ENV"
-          echo "构建名称: $BUILD_NAME (branch=$SAFE_PROTON_BRANCH build=$PROTON_VERSION)"
 
       # --------------------------------------------------------
       # Proton 瘦身
