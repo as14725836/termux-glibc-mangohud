@@ -577,7 +577,9 @@ jobs:
           #
           # 修法：引入运行期判定 host_is_foreign_arch()（编译为 x86_64 但
           # uname().machine 非 x86_64，即 box64/FEX），此时
-          #   1) get_alternate_wineloader(I386) 返回 NULL -> 走内部 WoW64；
+          #   1) loader_exec(I386) 跳过外部 i386-unix/wine，直接用 64 位
+          #      wineloader，由内部 WoW64 跑 32 位 PE（与单架构包一致）；
+          #      get_alternate_wineloader 本体不动，env.c:1972 仍走 start.exe 路由；
           #   2) preloader_exec 的 AMD64->i386-unix/wine64 切换加 !is_win64 前置。
           # 原生 x86_64 与原生 aarch64 行为均不变。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"
@@ -2104,7 +2106,9 @@ jobs:
           #
           # 修法：引入运行期判定 host_is_foreign_arch()（编译为 x86_64 但
           # uname().machine 非 x86_64，即 box64/FEX），此时
-          #   1) get_alternate_wineloader(I386) 返回 NULL -> 走内部 WoW64；
+          #   1) loader_exec(I386) 跳过外部 i386-unix/wine，直接用 64 位
+          #      wineloader，由内部 WoW64 跑 32 位 PE（与单架构包一致）；
+          #      get_alternate_wineloader 本体不动，env.c:1972 仍走 start.exe 路由；
           #   2) preloader_exec 的 AMD64->i386-unix/wine64 切换加 !is_win64 前置。
           # 原生 x86_64 与原生 aarch64 行为均不变。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"

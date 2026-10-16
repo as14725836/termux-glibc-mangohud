@@ -55,10 +55,12 @@
 
 在**两处**使用它：
 
-  A) get_alternate_wineloader()：当 host_is_foreign_arch() 为真且请求的
-     machine 是 I386 时，直接返回 NULL。这样 32 位 PE 不再交给外部
-     i386-unix/wine，而是由 64 位 Wine 的内部 WoW64 机制处理（与单架构
-     包行为一致，已验证可用）。
+  A) loader_exec()：当 host_is_foreign_arch() 为真且 machine 是 I386 时，
+     跳过外部 loader 尝试（get_alternate_wineloader 返回的
+     <dll_dir>/i386-unix/wine），直接落到 64 位 wineloader，由 Wine 内部
+     WoW64 机制处理 32 位 PE —— 与单架构包行为一致（已验证可用）。
+     注意：**不改** get_alternate_wineloader 本体，因为 env.c:1972 依赖它
+     返回非 NULL 来走 "start.exe /exec" 路由（那也是单架构包正常工作的路径）。
 
   B) preloader_exec()：dwproton 那段 AMD64->i386-unix/wine64 切换，
      增加 !is_win64 前置条件（只有 32 位宿主 loader 才需要切），
@@ -100,21 +102,26 @@ static BOOL host_is_foreign_arch(void)
 }
 """
 
-OLD_ALT = """    if (is_win64)
-    {
-        if (force_wow64) return NULL;
-        if (machine != get_alt_machine( current_machine )) return NULL;
-    }"""
+# get_alternate_wineloader 本体不动：env.c:1972 依赖它返回非 NULL 来走
+# "start.exe /exec" 路由（那是单架构包已验证可行的路径）。foreign-arch 的
+# 跳过逻辑放在 loader_exec() 里，只影响"实际 spawn 子进程"这一步。
 
-NEW_ALT = """    if (is_win64)
+OLD_EXEC = """    if (((argv[1] = get_alternate_wineloader( machine )))) preloader_exec( argv, machine );
+
+    argv[1] = strdup( wineloader );"""
+
+NEW_EXEC = """    /* TERMUX_WOW64_HOSTGUARD: x86_64 Wine 在 box64/FEX 上时，不能 exec 外部
+     * 32 位 loader（lib/wine/i386-unix/wine）—— box64 未编 BOX32/无 box86 时
+     * 无法执行该 32 位 ELF，会导致 wineboot 起 syswow64\\rundll32.exe 时
+     * CreateProcessW 立即失败 (err=2)，Wow64Install 不执行，syswow64/ 为空。
+     * 此时跳过 external loader，直接用 64 位 wineloader，由 Wine 内部 WoW64
+     * （wow64.dll + wow64cpu.dll）处理 32 位 PE —— 与单架构包行为一致。 */
+    if (!(machine == IMAGE_FILE_MACHINE_I386 && host_is_foreign_arch()))
     {
-        if (force_wow64) return NULL;
-        if (machine != get_alt_machine( current_machine )) return NULL;
-        /* TERMUX_WOW64_HOSTGUARD: x86_64 Wine 在 box64/FEX 上时，32 位 PE 交给
-         * 内部 WoW64（wow64.dll+wow64cpu.dll），不要 exec 外部 i386-unix/wine
-         * （box64 无法 exec 该 32 位 ELF，会导致 rundll32 秒退、syswow64 为空）。 */
-        if (machine == IMAGE_FILE_MACHINE_I386 && host_is_foreign_arch()) return NULL;
-    }"""
+        if (((argv[1] = get_alternate_wineloader( machine )))) preloader_exec( argv, machine );
+    }
+
+    argv[1] = strdup( wineloader );"""
 
 OLD_PRE = """    if (machine == IMAGE_FILE_MACHINE_AMD64
         && ((p = remove_tail( argv[1], "x86_64-unix/wine" )) || (p = remove_tail( argv[1], "i386-unix/wine64" ))))
@@ -170,11 +177,11 @@ def patch_loader(path):
     src = src.replace(anchor, HELPER + "\n" + anchor, 1)
     changed = True
 
-    # 2) get_alternate_wineloader: 加 foreign-arch 早退
-    if OLD_ALT not in src:
-        print("  [WARN] get_alternate_wineloader block not found")
+    # 2) loader_exec: foreign-arch 宿主上跳过外部 32 位 loader
+    if OLD_EXEC not in src:
+        print("  [WARN] loader_exec block not found")
         return False
-    src = src.replace(OLD_ALT, NEW_ALT, 1)
+    src = src.replace(OLD_EXEC, NEW_EXEC, 1)
 
     # 3) preloader_exec: 修 AMD64 切换条件
     if OLD_PRE not in src:
@@ -185,7 +192,7 @@ def patch_loader(path):
     if changed:
         with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
             f.write(src)
-        print("  [ok] patched loader.c (host_is_foreign_arch + get_alternate_wineloader + preloader_exec)")
+        print("  [ok] patched loader.c (host_is_foreign_arch + loader_exec + preloader_exec)")
     return True
 
 
