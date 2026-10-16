@@ -166,6 +166,16 @@ jobs:
           
 
 
+          # ---- fshack AMD FSR（自适应：不兼容则跳过）----
+          _P="/tmp/wine-termux/inject_fshack_fsr.py"
+          mkdir -p /tmp/wine-termux
+          if [ ! -s "$_P" ]; then
+            curl -fsSL --retry 2 -o "$_P" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/inject_fshack_fsr.py" \
+              || wget -q -O "$_P" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/inject_fshack_fsr.py" || true
+          fi
+          [ -s "$_P" ] || _P="${GITHUB_WORKSPACE:-$PWD}/patches/inject_fshack_fsr.py"
+          FSHACK_PATCH="${GITHUB_WORKSPACE:-$PWD}/0001-fshack-Implement-AMD-FSR-upscaler-for-fullscreen-hac.patch" \
+            python3 "$_P" "$(pwd)" || echo "WARN: fshack fsr 注入跳过（不阻断构建）"
           echo "生成 configure 脚本..."
           ./autogen.sh
           # 创建构建目录并配置
