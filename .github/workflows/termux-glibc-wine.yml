@@ -47,6 +47,7 @@ on:
         default: 'staging'
         type: choice
         options:
+          - ge-proton
           - vanilla
           - staging
           - staging-tkg
@@ -1527,6 +1528,67 @@ jobs:
               fi
 
             fi
+
+          elif [ "$WINE_BRANCH" = "ge-proton" ]; then
+
+            # ======================================================
+            # GE-Proton 方式：复刻 gloriouseggroll/proton-ge-custom 的
+            # wine 源码准备过程（ValveSoftware/wine pin + wine-staging pin
+            # + GE 的 wine-hotfixes 补丁集），然后走本 workflow 原有的
+            # configure / make / 打包 / 反检测流程。
+            #
+            # 真正的准备工作在 patches/ge/prepare_ge_wine.sh 里做：
+            #   - ValveSoftware/wine @ GE .gitmodules pin
+            #   - 恢复 Valve 删掉的 configure / include/config.h.in
+            #   - wine-staging @ pin，按 GE 的 -W 禁用列表打补丁
+            #   - GE patches/wine-hotfixes 手工补丁组
+            #   - 默认跳过 Wayland 补丁组（设备侧走 X11）
+            # ======================================================
+
+            echo "处理 GE-Proton（gloriouseggroll/proton-ge-custom 方式）"
+
+            # autogen.sh（autoreconf）需要 automake/libtool；
+            # 只在本分支装，不影响其它分支的依赖集。
+            if ! command -v automake >/dev/null 2>&1 || \
+               ! command -v libtoolize >/dev/null 2>&1; then
+              sudo apt-get install -y -qq automake libtool libtool-bin \
+                >/dev/null 2>&1 || echo "WARN: automake/libtool 安装失败（autogen 可能退回 autoconf）"
+            fi
+
+            # 沿用户选项：wine_version=latest 表示跟随 GE 的 pin；
+            # 显式给出 sha/branch 时覆盖 GE_WINE_PIN。
+            if [ "$WINE_VERSION" != "latest" ]; then
+
+              case "$WINE_VERSION" in
+                [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+                  export GE_WINE_PIN="$WINE_VERSION"
+                  echo "Wine pin 被 wine_version 覆盖: $GE_WINE_PIN"
+                  ;;
+                *)
+                  echo "WARN: GE-Proton 方式需要 sha，wine_version=$WINE_VERSION 忽略，用 GE pin"
+                  ;;
+              esac
+
+            fi
+
+            bash "${GITHUB_WORKSPACE}/patches/ge/prepare_ge_wine.sh"
+
+            SOURCE_DIR="wine"
+
+            cd "$BUILD_DIR/$SOURCE_DIR"
+
+            WINE_VERSION_ACTUAL="$(
+              sed 's/^Wine version //' VERSION 2>/dev/null || echo "ge-pin"
+            )"
+
+            COMMIT_HASH="$(
+              git rev-parse --short HEAD
+            )"
+
+            BUILD_NAME="wine-${WINE_VERSION_ACTUAL}-ge-${COMMIT_HASH}-wow64"
+
+            echo "GE pin commit: $COMMIT_HASH"
+            echo "GE wine 版本: $WINE_VERSION_ACTUAL"
 
           elif [ "$WINE_BRANCH" = "vanilla" ]; then
 
