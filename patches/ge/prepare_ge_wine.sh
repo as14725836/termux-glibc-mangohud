@@ -211,8 +211,17 @@ apply_one() {
   fi
 
   # git apply 是原子的：只要有一个文件 hunk 对不上就整份不上。
-  # 这种情况下退到 GNU patch（GE 自己用的就是 patch -Np1），它允许部分
-  # 应用。多轮重复整个目录时，后一轮可以用前一轮补全的上下文补上剩余 hunk。
+  # APPLY_STRICT=1 时不再回退到 GNU patch：GNU patch 会**部分应用**，
+  # 对 ge-video-rework 这种整份替换/重命名的大补丁会把 Makefile.in 写成
+  # 半成品，makedep 随后报 error: open : No such file or directory。
+  if [ "${APPLY_STRICT:-0}" = "1" ]; then
+    PATCH_FAILED=$((PATCH_FAILED + 1))
+    log "    WARN: $rel 未能完整应用（strict，已跳过）"
+    if [ "${PATCH_DEBUG:-0}" = "1" ]; then
+      echo "$gerr" | head -n 8 | sed "s/^/        [git] /" || true
+    fi
+    return 0
+  fi
   local out
   out="$(patch -Np1 --batch --forward --no-backup-if-mismatch <"$p" 2>&1)" || true
   if [ -n "$out" ] && echo "$out" | grep -qE 'FAILED|hunk ignored|Reversed|can.t find file'; then
@@ -408,6 +417,7 @@ fi
 # dlls/winedmo，0002+ 再在其上迭代。任何一份因上下文漂移未完全应用，
 # 都会让后面的连锁失败。先跑一遍，再用「已应用就跳过」补跑几轮，
 # 让后一轮利用前一轮补全的上下文把剩余 hunk 补上。
+APPLY_STRICT=1
 for _round in 1 2 3; do
   _before=$PATCH_FAILED
   apply_dir "$GF/ge-video-rework" "ge-video-rework(r$_round)"
@@ -417,6 +427,40 @@ for _round in 1 2 3; do
   fi
 done
 
+APPLY_STRICT=0
+# Makefile.in 完整性修复：任何一次部分应用都可能把续行尾部截断，留下悬空
+# 反斜杠。makedep 解析 SOURCES 时会因此拿到空文件名，报：
+#   error: open : No such file or directory
+#   config.status: error: could not create Makefile
+# 这里统一清掉悬空反斜杠，并把被修的文件打进日志，便于下一轮定位。
+python3 - <<'MKFIX' > /tmp/mkfix.list 2>/dev/null || true
+import glob
+fixed = []
+for f in glob.glob('**/Makefile.in', recursive=True):
+    L = open(f, encoding='utf-8', errors='replace').read().split('
+')
+    out, ch = [], False
+    for i, l in enumerate(L):
+        t = l.rstrip('')
+        if t.rstrip().endswith('\'):
+            nxt = L[i + 1] if i + 1 < len(L) else ''
+            if nxt.strip() == '' or nxt.strip() == '\':
+                t = t.rstrip()[:-1].rstrip()
+                ch = True
+        out.append(t)
+    if ch:
+        open(f, 'w').write('
+'.join(out))
+        fixed.append(f)
+print('
+'.join(fixed))
+MKFIX
+if [ -s /tmp/mkfix.list ]; then
+  log "  Makefile.in 续行修复: $(wc -l < /tmp/mkfix.list) 个文件"
+  sed 's/^/        /' /tmp/mkfix.list | head -n 20
+else
+  log "  Makefile.in 续行检查通过"
+fi
 # ge-video-rework 是 winedmo 能被 FFmpeg 8 编过的前提，必须完整生效。
 # 判据：dlls/winedmo/Makefile.in 里应当出现 winedmo_classes.idl
 # （只有在重写后的 SOURCES 列表里才有）。
