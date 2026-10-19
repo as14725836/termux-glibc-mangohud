@@ -432,6 +432,30 @@ for _round in 1 2 3; do
   fi
 done
 
+# --------------------------------------------------------------
+# 6.7 proton-ds5-haptic 组（GE 顺序：紧跟 ge-video-rework 之后）
+# --------------------------------------------------------------
+# GE 的 protonprep-valve-staging.sh 在 apply_all_in_dir ../patches/ge-video-rework/
+# 之后紧接着打 ../patches/proton-ds5-haptic/*.patch。
+# 这一组提供 ge-video-rework/0005 里已经在调用的 pulse_stream_ready /
+# pulse_stream_haptic 的定义；缺了它，dlls/winepulse.drv 会在链接期报：
+#   undefined reference to pulse_stream_ready
+# （winepulse.so 用 -Wl,-z,defs 链接，未定义符号直接失败）
+# 所以顺序不能变：先 ge-video-rework，再 proton-ds5-haptic。
+apply_dir "$GF/proton-ds5-haptic" "proton-ds5-haptic"
+
+# 声音驱动符号兜底：ds5-haptic 组里定义这两个辅助函数的那几份一旦被 strict
+# 跳过，pulse.c 就只剩调用没有定义，链接 winepulse.so 会因 -Wl,-z,defs 失败。
+# 具体检测与注入实现放在同目录的 fix_pulse_symbols.py（避免在 bash 里
+# 嵌套 heredoc 的转义问题）。
+GE_SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+if [ -f dlls/winepulse.drv/pulse.c ] && [ -f "$GE_SCRIPT_DIR/fix_pulse_symbols.py" ]; then
+  if _pout="$(python3 "$GE_SCRIPT_DIR/fix_pulse_symbols.py" 2>&1)"; then
+    log "  pulse.c 符号检查：$_pout"
+  else
+    log "  WARN: pulse.c 符号兜底失败：$_pout"
+  fi
+fi
 # Makefile.in 完整性修复：任何一次部分应用都可能把续行尾部截断，留下悬空
 # 反斜杠。makedep 解析 SOURCES 时会因此拿到空文件名，报：
 #   error: open : No such file or directory
