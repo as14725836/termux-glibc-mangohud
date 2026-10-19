@@ -433,29 +433,35 @@ APPLY_STRICT=0
 #   error: open : No such file or directory
 #   config.status: error: could not create Makefile
 # 这里统一清掉悬空反斜杠，并把被修的文件打进日志，便于下一轮定位。
-python3 - <<'MKFIX' > /tmp/mkfix.list 2>/dev/null || true
-import glob
+python3 - <<'MKFIX' > /tmp/mkfix.list 2>/tmp/mkfix.err
+import glob, sys
+NL = chr(10)
 fixed = []
 for f in glob.glob('**/Makefile.in', recursive=True):
-    L = open(f, encoding='utf-8', errors='replace').read().split('
-')
+    try:
+        raw = open(f, encoding='utf-8', errors='replace').read()
+    except Exception:
+        continue
+    L = raw.split(NL)
     out, ch = [], False
     for i, l in enumerate(L):
-        t = l.rstrip('
-')
-        if t.rstrip().endswith('\'):
+        t = l
+        if t.rstrip().endswith('\\'):
             nxt = L[i + 1] if i + 1 < len(L) else ''
-            if nxt.strip() == '' or nxt.strip() == '\':
+            if nxt.strip() == '' or nxt.strip() == '\\':
                 t = t.rstrip()[:-1].rstrip()
                 ch = True
         out.append(t)
     if ch:
-        open(f, 'w').write('
-'.join(out))
+        open(f, 'w').write(NL.join(out))
         fixed.append(f)
-print('
-'.join(fixed))
+sys.stdout.write(NL.join(fixed) + (NL if fixed else ''))
 MKFIX
+_mfrc=$?
+if [ "$_mfrc" != "0" ]; then
+  log "  WARN: Makefile.in 续行修复脚本执行失败（rc=$_mfrc）："
+  tail -n 5 /tmp/mkfix.err 2>/dev/null | sed 's/^/        /' || true
+fi
 if [ -s /tmp/mkfix.list ]; then
   log "  Makefile.in 续行修复: $(wc -l < /tmp/mkfix.list) 个文件"
   sed 's/^/        /' /tmp/mkfix.list | head -n 20
@@ -496,14 +502,15 @@ fi
 # `executing Makefile commands` 这一步）。这里通体清理：目录不存在或
 # Makefile.in 缺失的 WINE_CONFIG_MAKEFILE 条目全部注释掉。
 if [ -f configure.ac ]; then
-  python3 - > /tmp/mkent.log 2>/dev/null <<'MKENT' || true
-import re, os
+  python3 - /tmp/mkent.log /tmp/mkent.err <<'MKENT'
+import re, os, sys
+out_path, err_path = sys.argv[1], sys.argv[2]
 p = 'configure.ac'
 s = open(p, encoding='utf-8', errors='replace').read()
-pat = re.compile(r'^\s*WINE_CONFIG_MAKEFILE\(\s*([^)\s]+)\s*\)\s*$', re.M)
+pat = re.compile(r'^([ \t]*)WINE_CONFIG_MAKEFILE\(\s*([^)\s]+)\s*\)[ \t]*(?:dnl.*|#.*)?$', re.M)
 bad = []
 def repl(m):
-    d = m.group(1)
+    d = m.group(2)
     if os.path.isfile(os.path.join(d, 'Makefile.in')):
         return m.group(0)
     bad.append(d)
@@ -511,26 +518,20 @@ def repl(m):
 s2 = pat.sub(repl, s)
 if bad:
     open(p, 'w').write(s2)
-print('
-'.join(bad))
+open(out_path, 'w').write('\n'.join(bad) + ('\n' if bad else ''))
 MKENT
-  if [ -s /tmp/mkent.log ]; then
+  _mrc=$?
+  if [ "$_mrc" != "0" ]; then
+    log "  WARN: configure.ac 条目清理脚本执行失败（rc=$_mrc），错误尾部："
+    tail -n 5 /tmp/mkent.err 2>/dev/null | sed 's/^/        /' || true
+  elif [ -s /tmp/mkent.log ]; then
     log "  WARN: configure.ac 中有 $(wc -l < /tmp/mkent.log) 个 WINE_CONFIG_MAKEFILE 指向缺失的 Makefile.in，已注释："
     sed 's/^/        /' /tmp/mkent.log | head -n 20
   else
     log "  OK: configure.ac 的 WINE_CONFIG_MAKEFILE 条目全部有对应 Makefile.in"
   fi
 fi
-# ---------- 环境快照（用于定位 makedep 报错） ----------
-log "  [snap] configure.ac 中的 winegstreamer/winedmo 条目："
-grep -n 'winegstreamer\|winedmo' configure.ac 2>/dev/null | sed 's/^/        /' || true
-log "  [snap] dlls/winegstreamer 目录内容："
-ls -1 dlls/winegstreamer 2>/dev/null | sed 's/^/        /' || echo "        <不存在>"
-log "  [snap] dlls/winedmo/Makefile.in: $(ls -l dlls/winedmo/Makefile.in 2>/dev/null || echo 缺失)"
-log "  [snap] dlls 下缺 Makefile.in 的子目录："
-for _d in dlls/*/ ; do
-  [ -f "$_d/Makefile.in" ] || echo "        $_d"
-done
+
 # ge-video-rework 是 winedmo 能被 FFmpeg 8 编过的前提，必须完整生效。
 # 判据：dlls/winedmo/Makefile.in 里应当出现 winedmo_classes.idl
 # （只有在重写后的 SOURCES 列表里才有）。
