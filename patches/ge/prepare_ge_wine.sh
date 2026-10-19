@@ -462,24 +462,75 @@ if [ -s /tmp/mkfix.list ]; then
 else
   log "  Makefile.in 续行检查通过"
 fi
-# makedep 诊断：`error: open : No such file or directory` 的空文件名无法定位
-# 到目录。给 tools/makedep.c 打一个小补丁，把 make->obj_dir 一并打印出来，
-# 并把空文件名标成 <empty>，这样下一轮日志能直接看出是哪个子目录。
+# makedep 诊断：`error: open : No such file or directory` 不带文件名，
+# 因为 tools/tools.h 的 fatal_perror 只打印 msg 再 perror(" ")；
+# makedep.c:1740 open_input_makefile 的 fatal_perror("open") 因此看不出是哪个 Makefile.in。
+# 这里把 1740 行换成带路径的输出，并在 1485 行也加目录。
 if [ -f tools/makedep.c ] && ! grep -q 'ge-wine-diag' tools/makedep.c; then
   python3 - <<'MKD' || true
 p='tools/makedep.c'
 s=open(p,encoding='utf-8',errors='replace').read()
-old='if (!file) fatal_perror( "open %s", pFile->name );'
-new=('if (!file) fatal_perror( "open [%s] in dir [%s] /* ge-wine-diag */", '
-     'pFile->name && *pFile->name ? pFile->name : "<empty>", '
-     'make->obj_dir ? make->obj_dir : "<top>" );')
-if old in s:
-    s=s.replace(old,new,1)
+old1='if (!(ret = fopen( input_file_name, "r" ))) fatal_perror( "open" );'
+new1=('if (!(ret = fopen( input_file_name, "r" ))) fatal_perror( '
+      '"open [%s] /* ge-wine-diag */", input_file_name ? input_file_name : "<null>" );')
+old2='if (!file) fatal_perror( "open %s", pFile->name );'
+new2=('if (!file) fatal_perror( "open [%s] in dir [%s] /* ge-wine-diag */", '
+      'pFile->name && *pFile->name ? pFile->name : "<empty>", '
+      'make->obj_dir ? make->obj_dir : "<top>" );')
+n=0
+if old1 in s:
+    s=s.replace(old1,new1,1); n+=1
+if old2 in s:
+    s=s.replace(old2,new2,1); n+=1
+if n:
     open(p,'w').write(s)
-    print('diagnosed')
+print('diagnosed',n)
 MKD
-  log "  tools/makedep.c 已加诊断（open 失败会打印目录）"
+  log "  tools/makedep.c 已加诊断（open_input_makefile 会打印完整路径）"
 fi
+
+# 预检：SUBDIRS 里的每个目录必须有 Makefile.in。GE 的 0001 把
+# dlls/winegstreamer 整个目录 rename 到 dlls/winedmo 并删掉 Makefile.in，但
+# configure.ac 里的 WINE_CONFIG_MAKEFILE 条目可能没被同步删掉，
+# 导致 makedep 去打开不存在的 Makefile.in 而报错（戳在
+# `executing Makefile commands` 这一步）。这里通体清理：目录不存在或
+# Makefile.in 缺失的 WINE_CONFIG_MAKEFILE 条目全部注释掉。
+if [ -f configure.ac ]; then
+  python3 - > /tmp/mkent.log 2>/dev/null <<'MKENT' || true
+import re, os
+p = 'configure.ac'
+s = open(p, encoding='utf-8', errors='replace').read()
+pat = re.compile(r'^\s*WINE_CONFIG_MAKEFILE\(\s*([^)\s]+)\s*\)\s*$', re.M)
+bad = []
+def repl(m):
+    d = m.group(1)
+    if os.path.isfile(os.path.join(d, 'Makefile.in')):
+        return m.group(0)
+    bad.append(d)
+    return 'dnl [ge-wine-skip] ' + m.group(0).strip()
+s2 = pat.sub(repl, s)
+if bad:
+    open(p, 'w').write(s2)
+print('
+'.join(bad))
+MKENT
+  if [ -s /tmp/mkent.log ]; then
+    log "  WARN: configure.ac 中有 $(wc -l < /tmp/mkent.log) 个 WINE_CONFIG_MAKEFILE 指向缺失的 Makefile.in，已注释："
+    sed 's/^/        /' /tmp/mkent.log | head -n 20
+  else
+    log "  OK: configure.ac 的 WINE_CONFIG_MAKEFILE 条目全部有对应 Makefile.in"
+  fi
+fi
+# ---------- 环境快照（用于定位 makedep 报错） ----------
+log "  [snap] configure.ac 中的 winegstreamer/winedmo 条目："
+grep -n 'winegstreamer\|winedmo' configure.ac 2>/dev/null | sed 's/^/        /' || true
+log "  [snap] dlls/winegstreamer 目录内容："
+ls -1 dlls/winegstreamer 2>/dev/null | sed 's/^/        /' || echo "        <不存在>"
+log "  [snap] dlls/winedmo/Makefile.in: $(ls -l dlls/winedmo/Makefile.in 2>/dev/null || echo 缺失)"
+log "  [snap] dlls 下缺 Makefile.in 的子目录："
+for _d in dlls/*/ ; do
+  [ -f "$_d/Makefile.in" ] || echo "        $_d"
+done
 # ge-video-rework 是 winedmo 能被 FFmpeg 8 编过的前提，必须完整生效。
 # 判据：dlls/winedmo/Makefile.in 里应当出现 winedmo_classes.idl
 # （只有在重写后的 SOURCES 列表里才有）。
