@@ -433,21 +433,30 @@ for _round in 1 2 3; do
 done
 
 # --------------------------------------------------------------
-# 6.7 proton-ds5-haptic 组（GE 顺序：紧跟 ge-video-rework 之后）
+# 6.7 proton-ds5-haptic 组（默认跳过）
 # --------------------------------------------------------------
-# GE 的 protonprep-valve-staging.sh 在 apply_all_in_dir ../patches/ge-video-rework/
-# 之后紧接着打 ../patches/proton-ds5-haptic/*.patch。
-# 这一组提供 ge-video-rework/0005 里已经在调用的 pulse_stream_ready /
-# pulse_stream_haptic 的定义；缺了它，dlls/winepulse.drv 会在链接期报：
-#   undefined reference to pulse_stream_ready
-# （winepulse.so 用 -Wl,-z,defs 链接，未定义符号直接失败）
-# 所以顺序不能变：先 ge-video-rework，再 proton-ds5-haptic。
-apply_dir "$GF/proton-ds5-haptic" "proton-ds5-haptic"
+# 这一组 199 份补丁是对 GE 自家 wine 基线的前向 diff，套到 Valve pin
+# c53678a 上有 60 份 strict 失败（含 0116/0117/0118/0120/0138，这些正是
+# 定义与声明 pulse_retarget_dualsense_haptic_streams 的补丁）。GNU patch
+# 部分应用后留下「调用了但既没声明也没定义」的断枝，pulse.c 直接编译失败：
+#   error: conflicting types for find_dualsense_haptic_alsa_path
+# 且每修一层就前移到下一层，无法收敛。
+# 本仓库目标是 X11 + Termux/glibc，DualSense 原生触觉（hidraw/ALSA 直通）
+# 在 Android 宿主上用不到，因此整组跳过，保持 wine 源码自洽。
+# 唯一副作用：ge-video-rework/0005 会调用 pulse_stream_ready /
+# pulse_stream_haptic，这两个 helper 由下面的 fix_pulse_symbols.py 注入
+# 最小实现（不依赖 ds5 组的 struct 字段）。
+# 需要重新尝试该组时：GE_APPLY_DS5_HAPTIC=1
+if [ "${GE_APPLY_DS5_HAPTIC:-0}" = "1" ]; then
+  apply_dir "$GF/proton-ds5-haptic" "proton-ds5-haptic"
+else
+  log "  跳过 proton-ds5-haptic 组（60/199 份在 pin c53678a 上 strict 失败，只留断枝；GE_APPLY_DS5_HAPTIC=1 可开启）"
+fi
 
-# 声音驱动符号兜底：ds5-haptic 组里定义这两个辅助函数的那几份一旦被 strict
-# 跳过，pulse.c 就只剩调用没有定义，链接 winepulse.so 会因 -Wl,-z,defs 失败。
-# 具体检测与注入实现放在同目录的 fix_pulse_symbols.py（避免在 bash 里
-# 嵌套 heredoc 的转义问题）。
+# 声音驱动符号兜底：ge-video-rework/0005 调用的 pulse_stream_ready /
+# pulse_stream_haptic 现在由本脚本注入最小实现；winepulse.so 用 -Wl,-z,defs
+# 链接，缺定义会直接失败。检测与注入实现在同目录的 fix_pulse_symbols.py
+# （幂等，已有定义时打印 nothing to patch）。
 GE_SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 if [ -f dlls/winepulse.drv/pulse.c ] && [ -f "$GE_SCRIPT_DIR/fix_pulse_symbols.py" ]; then
   if _pout="$(python3 "$GE_SCRIPT_DIR/fix_pulse_symbols.py" 2>&1)"; then
