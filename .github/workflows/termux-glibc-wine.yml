@@ -340,30 +340,21 @@ jobs:
 
       - name: 构建 Proton WOW64
         run: |
-
           set -e
-
           echo "=========================================="
           echo "开始构建 Proton WOW64"
           echo "=========================================="
-
           export LANG=zh_CN.UTF-8
           export LC_ALL=zh_CN.UTF-8
           export LANGUAGE=zh_CN:zh:en_US:en
-
           rm -rf "$BUILD_DIR/proton"
-
           mkdir -p "$BUILD_DIR/proton"
-
           cd "$BUILD_DIR/proton"
-
           # ----------------------------------------------------
           # Clone
           # ----------------------------------------------------
-
           PROTON_REPO="${{ github.event.inputs.proton_repo || 'WinNative-Emu/proton-wine' }}"
           echo "Proton 源码仓库: ${PROTON_REPO}"
-
           # ---- 自动判定 host：非 GitHub 仓库（如 dawn.wine / GitLab）走裸 URL ----
           case "$PROTON_REPO" in
             http://*|https://*)  CLONE_URL="$PROTON_REPO" ;;
@@ -372,7 +363,6 @@ jobs:
             *)                   CLONE_URL="https://github.com/${PROTON_REPO}.git" ;;
           esac
           echo "Clone URL: ${CLONE_URL}"
-
           # dwproton 的 wine 子模块仓库（wine-dwproton）本身就是完整 Wine 树，
           # 不含任何 git submodule；深度 1 克隆以省时间。
           case "$PROTON_REPO" in
@@ -387,20 +377,15 @@ jobs:
               git clone "$CLONE_URL" wine
               ;;
           esac
-
           cd wine
-
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
-
           echo "Proton 分支: $PROTON_BRANCH"
-
           # 浅克隆已 checkout 到目标分支；全量克隆才需要显式 checkout
           if ! git rev-parse --verify -q HEAD >/dev/null; then
             git checkout "$PROTON_BRANCH"
           else
             echo "当前 HEAD: $(git rev-parse --short HEAD) ($(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached))"
           fi
-
           # 无 submodule 的仓库（如 wine-dwproton）跳过，避免无谓报错
           if [ -f .gitmodules ]; then
             git submodule update --init --recursive
@@ -414,13 +399,10 @@ jobs:
             command -v python3 >/dev/null 2>&1 || PY=python
             "${PY}" "$GITHUB_WORKSPACE/patches/termux-env/termux_env_tweaks.py" "$PWD" || true
           fi
-
           # ----------------------------------------------------
           # Termux / Android /tmp 路径修复
           # ----------------------------------------------------
-
           echo "修复 Termux 路径问题..."
-
           find . \
             -type f \
             \( \
@@ -432,50 +414,36 @@ jobs:
             -exec grep -l "/tmp" {} \; \
             | xargs -r sed -i \
               's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
-
           find server \
             -type f \
             \( -name "*.c" -o -name "*.h" \) \
             -exec sed -i \
               's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-
           find . \
             -name "file.c" \
             -exec sed -i \
               's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-
           find . \
             -name "loader.c" \
             -exec sed -i \
               's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-
           find . \
             -name "server.c" \
             -exec sed -i \
               's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-
           # ----------------------------------------------------
           # 自定义补丁
           # ----------------------------------------------------
-
           PATCH_FILE="$GITHUB_WORKSPACE/0001-ohos-default-to-grayscale-font-antialiasing.patch"
-
           if [ -f "$PATCH_FILE" ]; then
-
             echo "Applying $PATCH_FILE..."
-
             patch -p1 < "$PATCH_FILE"
-
           else
-
             echo "Warning: Patch file not found"
-
           fi
-
           # ----------------------------------------------------
           # Autogen
           # ----------------------------------------------------
-
           # ---------------- 冲突标记守卫（任何补丁冲突都不许带进编译）----------------
           MARKERS=$(grep -rl -E '^<<<<<<< ' --include=*.c --include=*.h --include=*.in --include=*.ac . 2>/dev/null | head -60)
           if [ -n "${MARKERS}" ]; then
@@ -488,7 +456,6 @@ jobs:
           else
             echo "✔ 无冲突标记"
           fi
-
           if [ -x ./autogen.sh ]; then
             echo "使用仓库自带 autogen.sh"
             ./autogen.sh
@@ -499,15 +466,11 @@ jobs:
             echo "既无 autogen.sh 也无 configure，尝试 autoreconf -fiv"
             autoreconf -fiv || true
           fi
-
           # ----------------------------------------------------
           # Build directory
           # ----------------------------------------------------
-
           mkdir -p build-wow64
-
           cd build-wow64
-
           # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
           # 导致 SID 退化、系统 UUID 全 FF；改指 Termux glibc 路径。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
@@ -542,7 +505,6 @@ jobs:
           # 已有 return TRUE 或已注入 WINE_USE_DMO 则自动跳过。
           # 运行时 WINE_USE_DMO=1 可强制退回 winedmo/FFmpeg。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_gst_priority.py" .. || echo "WARN: gst-priority inject"
-
           # Proton/dwproton 在 server/request.c 的 accept_new_client() 里用
           # SO_PEERCRED + /proc/<pid>/status 反查客户端父进程（Steam 进程树）。
           # box64 下 SO_PEERCRED 的 struct ucred 与 PPid 都不可靠，会让
@@ -550,7 +512,6 @@ jobs:
           #   wineserver crashed / recvmsg: Connection reset by peer
           # 这里整体编译期剔除，退回上游 Wine 行为。非 Proton 树自动跳过。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_peercred.py" .. || echo "WARN: no-peercred inject"
-
           # Proton/dwproton 在 server/ 里带了一套上游没有的 inproc_sync/ntsync
           # 框架（server/inproc_sync.c + server/ntsync_tmp.h）。即使运行时设了
           # PROTON_NO_NTSYNC=1，真实现代码仍被编入并在 thread/alert 路径上被
@@ -561,7 +522,6 @@ jobs:
           # 这套框架，都能正常启动。这里在编译期注释掉 NTSYNC_IOC_EVENT_READ，
           # 让 inproc_sync.c 选中最末尾那套安全 stub 实现（等价上游行为）。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_ntsync.py" .. || echo "WARN: no-ntsync inject"
-
           # ★ 真正的崩溃根因：Wine 10.x 起 server/fd.c 的 main_loop_epoll()
           # 会用 epoll_pwait2( -1, ... ) 探测内核是否支持该 syscall。
           # box64 v0.4.5 的 epoll_pwait2 wrapper 在 fd=-1 时解引用空指针：
@@ -570,84 +530,40 @@ jobs:
           #   -> wine client error:0: recvmsg: Connection reset by peer
           # 直接把 use_epoll_pwait2 置 0，退回 epoll_wait（所有内核都支持）。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_epoll_pwait2.py" .. || echo "WARN: no-epoll2 inject"
-
           # ====================================================
-          # ★ 方案B：修复 x86_64 Wine on box64 上 32 位进程起不来 / syswow64 为空
-          # ====================================================
-          # 根因（详见 patches/wow64/inject_preloader_wow64_guard.py 顶部注释）：
-          # dwproton 的双架构包 (--enable-archs=i386,x86_64) 会生成
-          #   lib/wine/i386-unix/wine      —— 真·32 位宿主 wine loader
-          # server/registry.c 在 __x86_64__ 下把 I386 当作 alternate machine，
-          # 于是 exec_wineloader(I386) 时 get_alternate_wineloader() 返回
-          #   <prefix>/lib/wine/i386-unix/wine
-          # box64 未编 BOX32/无 box86 时无法 exec 这个 32 位 ELF ->
-          #   CreateProcessW(syswow64\rundll32.exe) 立即失败 (err=2) ->
-          #   Wow64Install 步骤不执行 -> syswow64/ 为空。
-          # 单架构包 (--enable-archs=x86_64，无 i386-unix/) 反而正常：两次 execv
-          # 失败后落回 64 位 wineloader，由 64 位 Wine 的内部 WoW64 跑 32 位 PE。
-          #
-          # 另叠加病灶：Proton 给 preloader_exec() 加了 machine==AMD64 时切到
-          # i386-unix/wine64 的分支，用 remove_tail(argv[1],"x86_64-unix/wine")
-          # 判定 —— 那恰是 64 位宿主的 wineloader，在 box64 上会误切到
-          # i386-unix/wine64（靠 dlopen 64 位 .so，box64 下必失）。
-          #
-          # 修法：引入运行期判定 host_is_foreign_arch()（编译为 x86_64 但
-          # uname().machine 非 x86_64，即 box64/FEX），此时
-          #   1) loader_exec(I386) 跳过外部 i386-unix/wine，直接用 64 位
-          #      wineloader，由内部 WoW64 跑 32 位 PE（与单架构包一致）；
-          #      get_alternate_wineloader 本体不动，env.c:1972 仍走 start.exe 路由；
-          #   2) preloader_exec 的 AMD64->i386-unix/wine64 切换加 !is_win64 前置。
-          # 原生 x86_64 与原生 aarch64 行为均不变。
+          # ★ 方案B：x86_64 Wine on box64 上 32 位进程起不来 / syswow64 为空
+          # 根因：双架构包生成 lib/wine/i386-unix/wine（真 32 位宿主 loader），
+          # registry.c 把 I386 视为 alternate machine，preloader_exec 直接 execv 它；
+          # box64 未编 BOX32 即 exec 失败 -> CreateProcessW(syswow64\rundll32) err=2
+          # -> Wow64Install 被连带跳过。单架构包（无 i386-unix/）因此反而正常。
+          # 修法：host_is_foreign_arch() 判定 box64/FEX 时跳过外部 i386-unix/wine，
+          # 改由 64 位 wineloader 的内部 WoW64 跑 32 位 PE；原生平台行为不变。
+          # 逐行根因链与 preloader_exec 细节见 patches/wow64/inject_preloader_wow64_guard.py
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"
-
-          # ====================================================
-          # ★ 修复 syswow64 为空（Wow64Install 被 PreInstall 失败连带跳过）
-          # ====================================================
-          # dwproton 的 wine.inf 把 syswow64 的填充放在 [Wow64Install.ntx86]
-          # （Needs=BaseWow64Install -> WineFakeDlls=FakeDllsWin32,FakeDllsWow64），
-          # 该段由 wineboot 起 32 位 rundll32 进程执行 —— 只有 32 位上下文里
-          # setupapi 的 DIRID 11 才解析成 syswow64，[FakeDllsWin32] 的 11,,\* 通配
-          # 才会把 lib/wine/i386-windows/ 下的真·32 位 PE 拷进 syswow64。
-          # 但 update_wineprefix() 把整个循环嵌在
-          #   if ((process = start_rundll32(PreInstall))) { for(;;){ ...Wow64Install... } }
-          # 里：PreInstall 的 CreateProcessW 一旦失败，Wow64Install 永不执行 ->
-          # syswow64 为空，而 .update-timestamp 仍被写入 -> 之后 wineboot -u 也不再重试。
-          # （对照：wine-proton-9.0 的 [Wow64Install.ntx86] 直接内联 WineFakeDlls=，
-          #  不依赖 32 位进程，所以老包在同一个 box64 上 syswow64 正常。）
-          # 这里把 Wow64Install 循环从 PreInstall 成功判断里解耦，并给每步失败补 ERR 日志。
+          # ★ syswow64 为空：wineboot 把 Wow64Install 循环嵌在 PreInstall 成功判断内，
+          # PreInstall 的 CreateProcessW 一失败，Wow64Install 永不执行且 .update-timestamp
+          # 仍被写入，wineboot -u 也不再重试。此处解耦并给每步失败补 ERR 日志。
+          # 详见 patches/wow64/inject_wineboot_wow64_decouple.py
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_wineboot_wow64_decouple.py" .. || echo "WARN: wineboot-wow64 decouple inject"
-          # ---- 反检测：SMBIOS / 硬件指纹伪装（Proton 侧）----
-          if [ "${{ github.event.inputs.enable_anti_detect || 'true' }}" = "true" ] &&
-             [ -f ../dlls/ntdll/unix/system.c ] && ! grep -q 'wine_hwid_spoof' ../dlls/ntdll/unix/system.c; then
-            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_anti_detect.py" .. || echo "WARN: proton SMBIOS 伪装注入失败"
-          fi
-          # ---- 反检测：注册表根键改名（Proton 侧）----
-          if [ "${{ github.event.inputs.enable_registry_stealth || 'false' }}" = "true" ] &&
-             [ -f ../dlls/ntdll/version.c ]; then
-            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_registry_stealth.py" .. || echo "WARN: proton 注册表改名失败"
-          fi
-
-
+          # 反检测：SMBIOS 指纹 + 注册表根键改名（子脚本幂等，失败不阻断）
+          python3 "$GITHUB_WORKSPACE/patches/wow64/apply_stealth.py" .. \
+            "${{ github.event.inputs.enable_anti_detect || 'true' }}" \
+            "${{ github.event.inputs.enable_registry_stealth || 'false' }}" || true
           # ====================================================
           # 编译优化
           # ====================================================
-
           export CC="ccache gcc"
           export CXX="ccache g++"
-
           export CROSSCC="ccache x86_64-w64-mingw32-gcc"
           export CROSSCXX="ccache x86_64-w64-mingw32-g++"
-
           # GStreamer 编译依赖走所选 decoders 版本（Cflags=sysroot 头文件；Libs=apt x86_64 同 SONAME 桩）
           export GST_SYSROOT="${GST_SYSROOT:-/opt/gst-sysroot}"
           export PKG_CONFIG_PATH="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
-
           # ----------------------------------------------------
           # Unix compiler
           # ----------------------------------------------------
-
           export CFLAGS="\
           -march=x86-64 \
           -msse3 \
@@ -662,13 +578,10 @@ jobs:
           -fdata-sections \
           -fmerge-all-constants \
           -fno-ident"
-
           export CXXFLAGS="$CFLAGS"
-
           # ----------------------------------------------------
           # PE compiler
           # ----------------------------------------------------
-
           export CROSSCFLAGS="\
           -march=x86-64 \
           -msse3 \
@@ -681,19 +594,15 @@ jobs:
           -fdata-sections \
           -fmerge-all-constants \
           -fno-ident"
-
           export CROSSCXXFLAGS="$CROSSCFLAGS"
-
           # ----------------------------------------------------
           # Linker
           # ----------------------------------------------------
-
           export LDFLAGS="\
           -Wl,-O2 \
           -Wl,--as-needed \
           -Wl,--gc-sections \
           -Wl,--build-id=none"
-
           echo "=========================================="
           echo "CFLAGS:"
           echo "$CFLAGS"
@@ -701,11 +610,9 @@ jobs:
           echo "LDFLAGS:"
           echo "$LDFLAGS"
           echo "=========================================="
-
           # ====================================================
           # Configure
           # ====================================================
-
           # ---- adapted-11.18 补丁 + fshack FSR（自适应，不改 cwd）----
           _wsrc=""
           for _d in . .. wine wine/source source; do
@@ -741,7 +648,6 @@ jobs:
           else
             echo "SKIP: 未找到 wine 源码树"
           fi
-
           ../configure \
             --enable-win64 \
             --enable-archs=i386,x86_64 \
@@ -775,17 +681,12 @@ jobs:
             --without-usb \
             --without-v4l2 \
             --without-wayland
-
           # ====================================================
           # Build
           # ====================================================
-
           echo "开始构建 Proton WOW64..."
-
           make -j"$(nproc)"
-
           make install
-
           # --------------------------------------------------------
           # 修复 bin/ 下的 symlink：dwproton 用新式 loader（tools/wine/wine.c），
           # wine 二进制靠 get_bindir() 推导路径；在 box64 下该推导退回编译期
@@ -796,9 +697,7 @@ jobs:
           # 脚本用 $0 所在目录定位 wine，完全不依赖编译期路径。
           # （这与旧式 loader 构建产物 bin/* 的 shell 脚本行为一致）
           # --------------------------------------------------------
-
           echo "=== 修复 bin/ 符号链接为自包含包装脚本 ==="
-
           for _d in /tmp/wine-install-proton/bin; do
             [ -d "$_d" ] || continue
             for _link in "$_d"/*; do
@@ -835,44 +734,33 @@ jobs:
               echo "  已替换: $_name"
             done
           done
-
           echo "=== bin/ 修复后，剩余 symlink（应为空）==="
           find /tmp/wine-install-proton/bin -maxdepth 1 -type l -printf '  %f -> %l\n' 2>/dev/null || true
           echo "=== bin/ 内容 ==="
           ls -la /tmp/wine-install-proton/bin/ | head -30
-
-
           # ====================================================
           # 版本信息
           # ====================================================
-
           cd ../..
-
           VERSION_PROTON=$(
             cd wine
             git describe --tags --abbrev=0 2>/dev/null \
               || echo "$PROTON_BRANCH"
           )
-
           COMMIT_HASH=$(
             cd wine
             git rev-parse --short HEAD
           )
-
           PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
-
           echo "PROTON_VERSION=$PROTON_VERSION" >> "$GITHUB_ENV"
-
           # artifact 名禁止斜杠，生成安全分支名供包名/标签复用
           SAFE_PROTON_BRANCH="$(printf '%s' "$PROTON_BRANCH" | tr '/' '-')"
           echo "SAFE_PROTON_BRANCH=$SAFE_PROTON_BRANCH" >> "$GITHUB_ENV"
           # 压缩包名与 artifact 名统一：Proton-<分支>-WoW64
           echo "BUILD_NAME=Proton-${SAFE_PROTON_BRANCH}-WoW64" >> "$GITHUB_ENV"
-
       # --------------------------------------------------------
       # Proton 瘦身
       # --------------------------------------------------------
-
       - name: Proton 安装包瘦身
         run: |
 
