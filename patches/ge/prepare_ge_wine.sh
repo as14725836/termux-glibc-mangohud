@@ -205,20 +205,25 @@ apply_one() {
   [ -f "$p" ] || { log "    缺失: $rel"; PATCH_FAILED=$((PATCH_FAILED + 1)); return 0; }
   PATCH_TOTAL=$((PATCH_TOTAL + 1))
 
-  if git apply --whitespace=nowarn -p1 "$p" 2>/dev/null; then
+  local gerr
+  if gerr="$(git apply --whitespace=nowarn -p1 "$p" 2>&1)"; then
     return 0
   fi
-  # 回退：先 dry-run，能干净打上才真打，避免留下半成品与 .rej
+
+  # git apply 是原子的：只要有一个文件 hunk 对不上就整份不上。
+  # 这种情况下退到 GNU patch（GE 自己用的就是 patch -Np1），它允许部分
+  # 应用。多轮重复整个目录时，后一轮可以用前一轮补全的上下文补上剩余 hunk。
   local out
-  out="$(patch -Np1 --batch --forward --dry-run --no-backup-if-mismatch <"$p" 2>&1)" || true
-  if [ -z "$out" ] || ! echo "$out" | grep -qE 'FAILED|hunk ignored|Reversed|can.t find file'; then
-    if patch -Np1 --batch --forward --no-backup-if-mismatch <"$p" >/dev/null 2>&1; then
-      return 0
+  out="$(patch -Np1 --batch --forward --no-backup-if-mismatch <"$p" 2>&1)" || true
+  if [ -n "$out" ] && echo "$out" | grep -qE 'FAILED|hunk ignored|Reversed|can.t find file'; then
+    PATCH_FAILED=$((PATCH_FAILED + 1))
+    log "    WARN: $rel 未能完整应用（继续）"
+    # 只在 PATCH_DEBUG=1 时输出细节，避免刷屏
+    if [ "${PATCH_DEBUG:-0}" = "1" ]; then
+      echo "$gerr" | head -n 8 | sed "s/^/        [git] /" || true
+      echo "$out" | grep -E 'FAILED|hunk ignored|can.t find file' | head -n 8         | sed "s/^/        [patch] /" || true
     fi
   fi
-
-  PATCH_FAILED=$((PATCH_FAILED + 1))
-  log "    WARN: $rel 打不上（继续）"
 }
 
 apply_dir() {
@@ -383,7 +388,34 @@ done
 
 # ---- 6.6 ge-video-rework（必须，否则 winedmo 编译失败）----
 log "应用 ge-video-rework 组（winedmo / mf 媒体重写）"
-apply_dir "$GF/ge-video-rework" "ge-video-rework"
+
+# ---- 基线对齐（关键）----
+# Valve pin 的 dlls/winegstreamer/unixlib.c 比 GE 补丁的基线多一行：
+#     setenv( "GST_GL_WINDOW", "x11", 1 );
+# GE 的 ge-video-rework/0001 这一整份是把 unixlib.c 删除（@@ -1,369
+# +0,0 @@），多这一行就导致整份 0001 被 git apply 拒绝，后续 52 份
+# 依赖它的补丁连锁失败。
+# 本仓库 .github/workflows/wine.yml 里早有同样的处理：
+#     sed -i '/setenv("GST_GL_WINDOW"/d' dlls/winegstreamer/unixlib.c
+# 这里对齐同一基线，只删这一行，不涉及别的改动。
+if [ -f dlls/winegstreamer/unixlib.c ]; then
+  if grep -q 'GST_GL_WINDOW' dlls/winegstreamer/unixlib.c; then
+    sed -i '/setenv("GST_GL_WINDOW"/d' dlls/winegstreamer/unixlib.c
+    log "  已删除 dlls/winegstreamer/unixlib.c 的 GST_GL_WINDOW 行（对齐 GE 基线）"
+  fi
+fi
+# 这组 99 份补丁是线性叠加的：0001 先把 dlls/winegstreamer 整体重命名进
+# dlls/winedmo，0002+ 再在其上迭代。任何一份因上下文漂移未完全应用，
+# 都会让后面的连锁失败。先跑一遍，再用「已应用就跳过」补跑几轮，
+# 让后一轮利用前一轮补全的上下文把剩余 hunk 补上。
+for _round in 1 2 3; do
+  _before=$PATCH_FAILED
+  apply_dir "$GF/ge-video-rework" "ge-video-rework(r$_round)"
+  if [ "$PATCH_FAILED" = "$_before" ]; then
+    log "  ge-video-rework 第 $_round 轮无新增失败，停止重试"
+    break
+  fi
+done
 
 # ge-video-rework 是 winedmo 能被 FFmpeg 8 编过的前提，必须完整生效。
 # 判据：dlls/winedmo/Makefile.in 里应当出现 winedmo_classes.idl
