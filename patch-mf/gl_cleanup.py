@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """GL cleanup for no-GL builds - idempotent."""
+import os, sys
+
+if len(sys.argv) > 1:
+    os.chdir(sys.argv[1])
+
 for path in ['dlls/winegstreamer/unixlib.c', 'dlls/winegstreamer/wg_parser.c']:
     if not os.path.exists(path):
         continue
