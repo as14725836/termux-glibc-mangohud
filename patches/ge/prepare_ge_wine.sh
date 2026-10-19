@@ -54,6 +54,11 @@ WINE_PIN="${GE_WINE_PIN:-c53678ab22a85f0fad3588dd34f0452a463bd015}"
 STAGING_PIN="${GE_STAGING_PIN:-6cc805ea57132eeaf44764e9213823c9b8d0d300}"
 GE_REPO="${GE_REPO:-gloriouseggroll/proton-ge-custom}"
 GE_ENABLE_WAYLAND="${GE_ENABLE_WAYLAND:-0}"
+# 默认对全部补丁集启用严格（原子）应用：git apply 失败即跳过，不回退 GNU patch。
+# 原因：GNU patch 会部分应用（Hunk #1 打上、#2 失败），对纯增量补丁会
+# 留下「用到了未声明的静态变量」这类只到编译阶段才暴露的断枝，例如
+# nascar25-protector 的 use_nascar25_hack。设 APPLY_STRICT=0 可恢复旧行为。
+APPLY_STRICT="${APPLY_STRICT:-1}"
 
 # e813ca57 就是 Valve 删掉 configure / config.h.in 的那个提交。
 CONFIGURE_DELETED_BY="e813ca5771658b00875924ab88d525322e50d39f"
@@ -417,7 +422,7 @@ fi
 # dlls/winedmo，0002+ 再在其上迭代。任何一份因上下文漂移未完全应用，
 # 都会让后面的连锁失败。先跑一遍，再用「已应用就跳过」补跑几轮，
 # 让后一轮利用前一轮补全的上下文把剩余 hunk 补上。
-APPLY_STRICT=1
+# APPLY_STRICT 已经是全局默认 1（见脚本头部），此处无需重设。
 for _round in 1 2 3; do
   _before=$PATCH_FAILED
   apply_dir "$GF/ge-video-rework" "ge-video-rework(r$_round)"
@@ -427,7 +432,6 @@ for _round in 1 2 3; do
   fi
 done
 
-APPLY_STRICT=0
 # Makefile.in 完整性修复：任何一次部分应用都可能把续行尾部截断，留下悬空
 # 反斜杠。makedep 解析 SOURCES 时会因此拿到空文件名，报：
 #   error: open : No such file or directory
