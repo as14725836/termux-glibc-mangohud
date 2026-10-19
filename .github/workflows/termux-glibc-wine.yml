@@ -683,6 +683,15 @@ jobs:
                     || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/wine-termux/main/$_up" \
                     || { echo "WARN: 跳过 $_up"; continue; }
                 fi
+                # 幂等保护：patch11.16/ 里已含同一份 termux-dns-fix.patch，
+                # 前面那一轮已经打过。这里再打一次会让 loader.c 出现
+                # 两个 static void init_dns_config()，PE 链接直接报
+                # "redefinition of 'init_dns_config'"。
+                if [ "$_up" = "termux-dns-fix.patch" ] && \
+                   grep -q 'static void init_dns_config' dlls/ntdll/unix/loader.c 2>/dev/null; then
+                  echo "SKIP: $_up 已存在 init_dns_config（patch11.16 已打过）→ 跳过"
+                  continue
+                fi
                 _out="$(patch -p1 --batch --dry-run --forward --no-backup-if-mismatch < "$_u" 2>&1)" || true
                 if echo "$_out" | grep -qE 'FAILED|hunk ignored|can.t find file'; then
                   echo "SKIP: $_up 不兼容"; continue
@@ -2050,6 +2059,15 @@ jobs:
                   curl -fsSL -o "$_u" "https://raw.githubusercontent.com/as14725836/wine-termux/main/$_up" \
                     || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/wine-termux/main/$_up" \
                     || { echo "WARN: adapted 补丁下载失败，跳过 $_up"; continue; }
+                fi
+                # 幂等保护：patch11.16/termux-dns-fix.patch 已在上面那一轮
+                # 应用过（日志会看到两次 "已应用"）。重复应用会让
+                # dlls/ntdll/unix/loader.c 出现两个 init_dns_config，
+                # 编译报 "redefinition of init_dns_config"，整个构建失败。
+                if [ "$_up" = "termux-dns-fix.patch" ] && \
+                   grep -q 'static void init_dns_config' dlls/ntdll/unix/loader.c 2>/dev/null; then
+                  echo "SKIP: $_up 已存在 init_dns_config（patch11.16 已打过）→ 跳过"
+                  continue
                 fi
                 _out="$(patch -p1 --batch --dry-run --forward --no-backup-if-mismatch < "$_u" 2>&1)" || true
                 if echo "$_out" | grep -qE 'FAILED|hunk ignored|can.t find file'; then
