@@ -144,11 +144,62 @@ def read_soname(path):
     return m.group(1) if m else None
 
 
-def read_needed(path):
+def read_dyn(path):
+    """返回 readelf -d 的原始输出（失败时返回空串并记录原因）。"""
     r = run(["readelf", "-d", path])
-    if r.returncode != 0:
-        return []
-    return re.findall(r"NEEDED\)\s+Shared library:\s+\[([^\]]+)\]", r.stdout)
+    return r.returncode, (r.stdout or "")
+
+
+def read_needed(path):
+    """解析 DT_NEEDED，readelf 失败时退回 objdump -p。"""
+    rc, out = read_dyn(path)
+    if rc == 0:
+        return re.findall(r"NEEDED\)\s+Shared library:\s+\[([^\]]+)\]", out)
+    r = run(["objdump", "-p", path])
+    return re.findall(r"NEEDED\s+(\S+)", r.stdout or "")
+
+
+def diagnose(path):
+    """打印 ELF 诊断信息，用于 readelf 读不到内容时定位原因。"""
+    log("    --- 诊断 %s ---" % path)
+    try:
+        log("      size=%d" % os.path.getsize(path))
+    except OSError as exc:
+        log("      stat 失败: %s" % exc)
+    for cmd in (["bash", "-lc", "file '%s' 2>&1 || true" % path],
+                ["readelf", "-h", path],
+                ["readelf", "-S", path]):
+        r = run(cmd)
+        for line in (r.stdout or "").splitlines():
+            log("      " + line[:200])
+    rc, out = read_dyn(path)
+    log("      readelf -d rc=%d，输出 %d 行" % (rc, len(out.splitlines())))
+    for line in out.splitlines()[:30]:
+        log("      " + line[:200])
+    r = run(["objdump", "-p", path])
+    log("      objdump -p rc=%d" % r.returncode)
+    for line in (r.stdout or "").splitlines()[:30]:
+        log("      " + line[:200])
+    # 找构建树里的原始 winedmo.so + config.h 的 HAVE_FFMPEG
+    ws = os.environ.get("GITHUB_WORKSPACE", "")
+    if ws:
+        r = run(["bash", "-lc",
+                 "find '%s' /tmp/build_wine -name config.h -path '*include*' "
+                 "2>/dev/null | head -3 | xargs -r grep -H 'HAVE_FFMPEG' || true"
+                 % ws])
+        for line in (r.stdout or "").splitlines():
+            log("      config.h: " + line[:200])
+        r = run(["bash", "-lc",
+                 "find /tmp/build_wine -path '*dlls/winedmo/winedmo.so' "
+                 "2>/dev/null | head -2"])
+        for line in (r.stdout or "").splitlines():
+            if not line.strip():
+                continue
+            log("      构建树原始文件: " + line)
+            rc2, out2 = read_dyn(line.strip())
+            log("        rc=%d 行数=%d" % (rc2, len(out2.splitlines())))
+            for ln in out2.splitlines()[:20]:
+                log("        " + ln[:200])
 
 
 def is_seed(name):
@@ -420,9 +471,15 @@ def main():
             wd = os.path.join(d, "winedmo.so")
             if not os.path.isfile(wd):
                 continue
+            before = read_needed(wd)
+            log("  改前 %s/winedmo.so: %d 条 DT_NEEDED %s"
+                % (os.path.basename(d), len(before),
+                   (" ".join(before))[:160]))
             if set_rpath_keep(wd):
-                log("  winedmo.so rpath=$ORIGIN... OK (%s)"
-                    % os.path.basename(d))
+                after = read_needed(wd)
+                log("  改后 %s/winedmo.so: %d 条 DT_NEEDED %s"
+                    % (os.path.basename(d), len(after),
+                       (" ".join(after))[:160]))
             else:
                 log("  WARN: winedmo.so 设 rpath 失败 (%s)"
                     % os.path.basename(d))
@@ -438,19 +495,21 @@ def main():
             continue
         needed = read_needed(wd)
         av = [n for n in needed if n.startswith("libav")]
-        log("  %s/winedmo.so: %d 条 DT_NEEDED"
-            % (os.path.basename(d), len(needed)))
+        size = os.path.getsize(wd)
+        log("  %s/winedmo.so: %d 条 DT_NEEDED，大小 %d bytes"
+            % (os.path.basename(d), len(needed), size))
         log("    含 libav*: %s" % (" ".join(av) if av else "(无)"))
+        if not needed:
+            # readelf 都没解出任何 DT_NEEDED，先打印诊断再判定
+            diagnose(wd)
+        if size < 4096:
+            log("  FATAL: winedmo.so 体积异常小，疑似空壳")
+            ok = False
         if not av:
             log("  FATAL: winedmo.so 未链接任何 libav* —— "
                 "configure 时 FFMPEG_LIBS 为空，winedmo 是空壳")
             ok = False
             continue
-        size = os.path.getsize(wd)
-        log("    大小: %d bytes" % size)
-        if size < 4096:
-            log("  FATAL: winedmo.so 体积异常小，疑似空壳")
-            ok = False
 
         # 检查 rpath 是否含 $ORIGIN
         rd = run(["bash", "-lc",
