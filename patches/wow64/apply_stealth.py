@@ -53,17 +53,20 @@ def run(script, src):
 
 
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
+    args = sys.argv[1:]
+    src = args[0] if len(args) > 0 and args[0] else os.getcwd()
     if not os.path.isdir(src):
         print('WARN: 源码目录不存在: %s' % src)
         return 0
-    # 缺头文件信息（便于日志中确认注入环境）
+    # 布尔开关：优先取命令行位置参数（argv[2]/argv[3]），其次环境变量
+    a = args[1].strip().lower() if len(args) > 1 else None
+    r = args[2].strip().lower() if len(args) > 2 else None
     print('--- stealth patches on %s ---' % os.path.abspath(src))
-    if flag('A', 'ANTI_DETECT', 'ENABLE_ANTI_DETECT', default='true'):
+    if (a == 'true') if a is not None else flag('A', 'ANTI_DETECT', 'ENABLE_ANTI_DETECT', default='true'):
         run('inject_anti_detect.py', src)
     else:
         print('skip anti-detect (A=false)')
-    if flag('R', 'REGISTRY_STEALTH', 'ENABLE_REGISTRY_STEALTH', default='false'):
+    if (r == 'true') if r is not None else flag('R', 'REGISTRY_STEALTH', 'ENABLE_REGISTRY_STEALTH', default='false'):
         run('inject_registry_stealth.py', src)
     else:
         print('skip registry-stealth (R=false)')
