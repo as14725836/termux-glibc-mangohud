@@ -123,9 +123,28 @@ on:
         default: 'as14725836/termux-glibc-GStreamer'
         type: string
 
+      enable_winedmo:
+        description: '启用 winedmo（Wine 的 DMO 解复用器，需 FFmpeg libav*；等价于 configure --with-ffmpeg 且能链接到 libavutil/libavformat/libavcodec）'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+      ffmpeg_version:
+        description: 'FFmpeg 依赖版本（按 GE-Proton 方式自编最小化 shared 库并随包分发）'
+        required: false
+        default: '8.1.1'
+        type: string
+
 env:
   USE_CCACHE: true
   BUILD_DIR: /tmp/build_wine
+  # winedmo / FFmpeg（按 GE-Proton 方式自编 8.1.1 并随包分发）
+  ENABLE_WINEDMO: ${{ github.event.inputs.enable_winedmo || 'true' }}
+  FFMPEG_PREFIX: /tmp/ffmpeg
+  FFMPEG_VER: ${{ github.event.inputs.ffmpeg_version || '8.1.1' }}
 
 permissions:
   contents: write
@@ -333,6 +352,21 @@ jobs:
         with:
           key: ${{ github.job }}-${{ github.ref }}
           max-size: 5G
+
+      # ========================================================
+      # FFmpeg（winedmo 依赖）
+      # ========================================================
+      # Wine 的 dlls/winedmo 没有独立的 --enable-winedmo 开关，它的
+      # Makefile.in 只有 UNIX_CFLAGS=$(FFMPEG_CFLAGS) / UNIX_LIBS=$(FFMPEG_LIBS)。
+      # 所以「启用 winedmo」= configure --with-ffmpeg 且能链接到 libav*。
+      # GE-Proton 的做法是自编一套最小化 shared FFmpeg 并随包分发，这里沿用。
+
+      - name: 构建 FFmpeg ${{ github.event.inputs.ffmpeg_version || '8.1.1' }}（GE-Proton 方式）
+        if: ${{ (github.event.inputs.enable_winedmo || 'true') == 'true' }}
+        env:
+          FFMPEG_VERSION: ${{ github.event.inputs.ffmpeg_version || '8.1.1' }}
+          FFMPEG_PREFIX: /tmp/ffmpeg
+        run: bash "${GITHUB_WORKSPACE}/patches/build_ffmpeg_ge.sh"
 
       # --------------------------------------------------------
       # Proton Build
@@ -562,6 +596,23 @@ jobs:
           export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
           # ----------------------------------------------------
+          # winedmo / FFmpeg 8.1.1（GE-Proton 方式，见 patches/build_ffmpeg_ge.sh）
+          #   dlls/winedmo 无独立开关，configure --with-ffmpeg 找到 libav* 即启用。
+          # ----------------------------------------------------
+          if [ "${ENABLE_WINEDMO:-true}" = "true" ] && [ -f "${FFMPEG_PREFIX:-/tmp/ffmpeg}/lib/pkgconfig/libavformat.pc" ]; then
+            export PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+            export PKG_CONFIG_LIBDIR="${FFMPEG_PREFIX}/lib/pkgconfig:${PKG_CONFIG_LIBDIR}"
+            export FFMPEG_CFLAGS="$(pkg-config --cflags libavutil libavformat libavcodec)"
+            export FFMPEG_LIBS="$(pkg-config --libs libavutil libavformat libavcodec)"
+            export LD_LIBRARY_PATH="${FFMPEG_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+            WINE_FFMPEG_ARG="--with-ffmpeg"
+            echo "winedmo: FFmpeg ${FFMPEG_VER:-8.1.1} (libavformat ABI $(pkg-config --modversion libavformat)) @ ${FFMPEG_PREFIX}"
+            echo "  FFMPEG_LIBS=${FFMPEG_LIBS}"
+          else
+            WINE_FFMPEG_ARG="--without-ffmpeg"
+            echo "winedmo: 未启用（ENABLE_WINEDMO=${ENABLE_WINEDMO:-true}）"
+          fi
+          # ----------------------------------------------------
           # Unix compiler
           # ----------------------------------------------------
           export CFLAGS="\
@@ -652,6 +703,7 @@ jobs:
             --enable-win64 \
             --enable-archs=i386,x86_64 \
             --prefix=/tmp/wine-install-proton \
+            $WINE_FFMPEG_ARG \
             --with-x \
             --with-vulkan \
             --with-alsa \
@@ -882,6 +934,12 @@ jobs:
       # --------------------------------------------------------
       # Proton 检查
       # --------------------------------------------------------
+
+      - name: 分发 winedmo 依赖（FFmpeg 8.1.1）
+        if: ${{ (github.event.inputs.enable_winedmo || 'true') == 'true' }}
+        env:
+          FFMPEG_PREFIX: /tmp/ffmpeg
+        run: python3 "${GITHUB_WORKSPACE}/patches/pack_winedmo_ffmpeg.py" /tmp/wine-install-proton "$FFMPEG_PREFIX"
 
       - name: 检查 Proton 运行时
         run: |
@@ -1267,6 +1325,19 @@ jobs:
         with:
           key: ${{ github.job }}-${{ github.ref }}
           max-size: 5G
+
+      # ========================================================
+      # FFmpeg（winedmo 依赖）
+      # ========================================================
+      # dlls/winedmo 没有 --enable-winedmo 开关，靠 --with-ffmpeg 提供的
+      # FFMPEG_CFLAGS/FFMPEG_LIBS 才能编出可用的 winedmo.so。
+
+      - name: 构建 FFmpeg ${{ github.event.inputs.ffmpeg_version || '8.1.1' }}（GE-Proton 方式）
+        if: ${{ (github.event.inputs.enable_winedmo || 'true') == 'true' }}
+        env:
+          FFMPEG_VERSION: ${{ github.event.inputs.ffmpeg_version || '8.1.1' }}
+          FFMPEG_PREFIX: /tmp/ffmpeg
+        run: bash "${GITHUB_WORKSPACE}/patches/build_ffmpeg_ge.sh"
 
       # ========================================================
       # Wine Build
@@ -1827,10 +1898,25 @@ jobs:
           export GST_SYSROOT="${GST_SYSROOT:-/opt/gst-sysroot}"
           export PKG_CONFIG_PATH="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+
           echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
 
-          # CFLAGS
+          # winedmo / FFmpeg 8.1.1（GE-Proton 方式）
+          #   dlls/winedmo 无独立开关，--with-ffmpeg + libav* 即可编出 winedmo.so。
+          if [ "${ENABLE_WINEDMO:-true}" = "true" ] && [ -f "${FFMPEG_PREFIX:-/tmp/ffmpeg}/lib/pkgconfig/libavformat.pc" ]; then
+            export PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+            export PKG_CONFIG_LIBDIR="${FFMPEG_PREFIX}/lib/pkgconfig:${PKG_CONFIG_LIBDIR}"
+            export FFMPEG_CFLAGS="$(pkg-config --cflags libavutil libavformat libavcodec)"
+            export FFMPEG_LIBS="$(pkg-config --libs libavutil libavformat libavcodec)"
+            export LD_LIBRARY_PATH="${FFMPEG_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+            WINE_FFMPEG_ARG="--with-ffmpeg"
+            echo "winedmo: FFmpeg ${FFMPEG_VER:-8.1.1} (libavformat ABI $(pkg-config --modversion libavformat)) @ ${FFMPEG_PREFIX}"
+          else
+            WINE_FFMPEG_ARG="--without-ffmpeg"
+            echo "winedmo: 未启用（ENABLE_WINEDMO=${ENABLE_WINEDMO:-true}）"
+          fi
 
+          # CFLAGS
           export CFLAGS="\
           -march=x86-64 \
           -msse3 \
@@ -2103,7 +2189,7 @@ jobs:
             --without-wayland \
             --disable-winemenubuilder \
             --disable-win16 \
-            --without-ffmpeg \
+            $WINE_FFMPEG_ARG \
             --disable-tests \
             --without-ldap \
             --without-capi \
@@ -2298,6 +2384,12 @@ jobs:
       # ========================================================
       # Runtime check
       # ========================================================
+
+      - name: 分发 winedmo 依赖（FFmpeg 8.1.1）
+        if: ${{ (github.event.inputs.enable_winedmo || 'true') == 'true' }}
+        env:
+          FFMPEG_PREFIX: /tmp/ffmpeg
+        run: python3 "${GITHUB_WORKSPACE}/patches/pack_winedmo_ffmpeg.py" /tmp/wine-install-wow64 "$FFMPEG_PREFIX"
 
       - name: 检查 Wine 运行时
         run: |
