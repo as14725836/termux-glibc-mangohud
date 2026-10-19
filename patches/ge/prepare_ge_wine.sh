@@ -441,7 +441,8 @@ for f in glob.glob('**/Makefile.in', recursive=True):
 ')
     out, ch = [], False
     for i, l in enumerate(L):
-        t = l.rstrip('')
+        t = l.rstrip('
+')
         if t.rstrip().endswith('\'):
             nxt = L[i + 1] if i + 1 < len(L) else ''
             if nxt.strip() == '' or nxt.strip() == '\':
@@ -460,6 +461,24 @@ if [ -s /tmp/mkfix.list ]; then
   sed 's/^/        /' /tmp/mkfix.list | head -n 20
 else
   log "  Makefile.in 续行检查通过"
+fi
+# makedep 诊断：`error: open : No such file or directory` 的空文件名无法定位
+# 到目录。给 tools/makedep.c 打一个小补丁，把 make->obj_dir 一并打印出来，
+# 并把空文件名标成 <empty>，这样下一轮日志能直接看出是哪个子目录。
+if [ -f tools/makedep.c ] && ! grep -q 'ge-wine-diag' tools/makedep.c; then
+  python3 - <<'MKD' || true
+p='tools/makedep.c'
+s=open(p,encoding='utf-8',errors='replace').read()
+old='if (!file) fatal_perror( "open %s", pFile->name );'
+new=('if (!file) fatal_perror( "open [%s] in dir [%s] /* ge-wine-diag */", '
+     'pFile->name && *pFile->name ? pFile->name : "<empty>", '
+     'make->obj_dir ? make->obj_dir : "<top>" );')
+if old in s:
+    s=s.replace(old,new,1)
+    open(p,'w').write(s)
+    print('diagnosed')
+MKD
+  log "  tools/makedep.c 已加诊断（open 失败会打印目录）"
 fi
 # ge-video-rework 是 winedmo 能被 FFmpeg 8 编过的前提，必须完整生效。
 # 判据：dlls/winedmo/Makefile.in 里应当出现 winedmo_classes.idl
