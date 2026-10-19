@@ -48,10 +48,13 @@ import shutil
 import subprocess
 import sys
 
-# 种子根：只从 winedmo 真正链接的三个库出发，避免把空壳的
+# 种子根：从 winedmo.so 真正 DT_NEEDED 的库出发，避免把空壳的
 # libavdevice / libavfilter 也打进包里（BFS 会沿 DT_NEEDED 自动补齐
 # libswresample 等真正被依赖的库）。
-SEED_PREFIXES = ("libavutil", "libavformat", "libavcodec")
+# libswscale 必须显式做种子：winedmo.so 直接 NEEDED 它，但
+# libavcodec/libavformat 并不依赖 swscale，光靠 BFS 永远收不到，
+# 校验阶段会报 libswscale.so.9 => not found。
+SEED_PREFIXES = ("libavutil", "libavformat", "libavcodec", "libswscale")
 
 # 第一梯队：FFmpeg 本体
 AV_PREFIXES = (
@@ -580,3 +583,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
