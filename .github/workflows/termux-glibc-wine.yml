@@ -84,6 +84,22 @@ on:
         options:
           - 'true'
           - 'false'
+      enable_anti_detect:
+        description: '反检测：SMBIOS/硬件指纹伪装（BIOS/整机/机箱/主板换成合法台式机值，序列号按 machine-id 派生；WINE_HWID_SPOOF=0 可运行时关闭）'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      enable_registry_stealth:
+        description: '反检测：把 Wine 注册表根键 Software\Wine 改名为 Software\WinAppCompat（winetricks 会读不到配置，默认关）'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
       proton_repo:
         description: 'Proton 源码仓库（proton_branch 必须存在于该仓库）'
         required: false
@@ -600,6 +616,16 @@ jobs:
           #  不依赖 32 位进程，所以老包在同一个 box64 上 syswow64 正常。）
           # 这里把 Wow64Install 循环从 PreInstall 成功判断里解耦，并给每步失败补 ERR 日志。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_wineboot_wow64_decouple.py" .. || echo "WARN: wineboot-wow64 decouple inject"
+          # ---- 反检测：SMBIOS / 硬件指纹伪装（Proton 侧）----
+          if [ "${{ github.event.inputs.enable_anti_detect || 'true' }}" = "true" ] &&
+             [ -f ../dlls/ntdll/unix/system.c ] && ! grep -q 'wine_hwid_spoof' ../dlls/ntdll/unix/system.c; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_anti_detect.py" .. || echo "WARN: proton SMBIOS 伪装注入失败"
+          fi
+          # ---- 反检测：注册表根键改名（Proton 侧）----
+          if [ "${{ github.event.inputs.enable_registry_stealth || 'false' }}" = "true" ] &&
+             [ -f ../dlls/ntdll/version.c ]; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_registry_stealth.py" .. || echo "WARN: proton 注册表改名失败"
+          fi
 
 
           # ====================================================
@@ -2042,11 +2068,32 @@ jobs:
               || { echo "FATAL: 环境变量开关缺失"; exit 1; }
 
             echo "OK: box64 icache 补丁已注入"
-
           else
-
             echo "box64 icache 补丁已禁用"
-
+          fi
+          # ---- 反检测：SMBIOS / 硬件指纹伪装 ----
+          if [ "${{ github.event.inputs.enable_anti_detect || 'true' }}" = "true" ] &&
+             [ -f ../dlls/ntdll/unix/system.c ] && ! grep -q 'wine_hwid_spoof' ../dlls/ntdll/unix/system.c; then
+            echo "=========================================="
+            echo "注入反检测 SMBIOS / 硬件指纹伪装"
+            echo "=========================================="
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_anti_detect.py" .. \
+              || echo "WARN: SMBIOS 伪装注入失败（不阻断构建）"
+            grep -n 'wine_hwid_spoof' ../dlls/ntdll/unix/system.c || true
+          else
+            echo "SMBIOS 伪装：已注入或已禁用"
+          fi
+          # ---- 反检测：Wine 注册表根键改名 ----
+          if [ "${{ github.event.inputs.enable_registry_stealth || 'false' }}" = "true" ] &&
+             [ -f ../dlls/ntdll/version.c ]; then
+            echo "=========================================="
+            echo "反检测：Software\\\\Wine -> Software\\\\WinAppCompat"
+            echo "=========================================="
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_registry_stealth.py" .. \
+              || echo "WARN: 注册表改名失败（不阻断构建）"
+            grep -rn 'Software\\\\WinAppCompat' ../dlls/ntdll/version.c 2>/dev/null | head -3 || true
+          else
+            echo "注册表改名：已禁用"
           fi
 
           # Termux /tmp 修复：wineserver 用 /tmp/.wine-<uid>，Android 上不可写

@@ -69,6 +69,26 @@ on:
         required: false
         default: true
         type: boolean
+      apply_box64_icache_patch:
+        description: 'box64 指令缓存失效补丁（加壳程序自解密后能刷新 box64 JIT 缓存；WINE_BOX64_ICACHE_BOUNCE=0 可运行时关闭）'
+        required: false
+        default: true
+        type: boolean
+      enable_anti_detect:
+        description: '反检测：SMBIOS/硬件指纹伪装（BIOS/整机/机箱/主板换成合法台式机值，序列号按 machine-id 派生；WINE_HWID_SPOOF=0 可运行时关闭）'
+        required: false
+        default: true
+        type: boolean
+      enable_registry_stealth:
+        description: '反检测：把 Wine 自有注册表根键 Software\Wine 改名为 Software\WinAppCompat（加壳程序按原名探测会落空）；注意 winetricks/protontricks 会读不到配置'
+        required: false
+        default: false
+        type: boolean
+      enable_termux_env_tweaks:
+        description: 'Termux 环境优化（D:->/sdcard、Z:->Termux 前缀、preloader 低 64k 判定）'
+        required: false
+        default: true
+        type: boolean
       enable_wayland:
         description: '启用 Wayland'
         required: false
@@ -1317,7 +1337,128 @@ jobs:
             grep -n 'machine-id' server/token.c 2>/dev/null | head -3 || true
             grep -n 'machine-id' dlls/ntdll/unix/system.c 2>/dev/null | head -3 || true
           fi
-
+      # ============================================================
+      # 8.5 box64 指令缓存失效补丁（加壳自解密后需要刷新 JIT）
+      # ============================================================
+      - name: box64 指令缓存失效补丁 (NtFlushInstructionCache bounce)
+        shell: bash
+        run: |
+          set -eux
+          if [ "${{ inputs.apply_box64_icache_patch }}" != "true" ]; then
+            echo "skip box64 icache patch (apply_box64_icache_patch=false)"
+            exit 0
+          fi
+          cd "${WINE_SOURCE_DIR}/source" || { echo 'no wine source dir'; exit 0; }
+          if grep -q 'box64_icache_bounce' dlls/ntdll/unix/virtual.c 2>/dev/null; then
+            echo "OK(already): virtual.c 已含 box64_icache_bounce"
+            exit 0
+          fi
+          _u="/tmp/wine-termux/inject_box64_icache.py"
+          mkdir -p /tmp/wine-termux
+          curl -fsSL --retry 2 -o "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/inject_box64_icache.py" \
+            || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/inject_box64_icache.py" \
+            || true
+          if [ ! -s "$_u" ]; then
+            _u="${GITHUB_WORKSPACE:-$PWD}/patches/wow64/inject_box64_icache.py"
+            [ -f "$_u" ] || { echo "WARN: inject_box64_icache.py 不可用，跳过（不阻断构建）"; exit 0; }
+          fi
+          python3 "$_u" "$(pwd)" || { echo "WARN: box64 icache 注入失败（不阻断构建）"; exit 0; }
+          echo "--- 注入结果 ---"
+          grep -n 'box64_icache_bounce' dlls/ntdll/unix/virtual.c || true
+          test "$(grep -c 'box64_icache_bounce' dlls/ntdll/unix/virtual.c || echo 0)" -ge 2 \
+            || { echo "WARN: 注入点不足 2 处"; exit 0; }
+          grep -q 'WINE_BOX64_ICACHE_BOUNCE' dlls/ntdll/unix/virtual.c \
+            || { echo "WARN: 环境变量开关缺失"; exit 0; }
+          echo "OK: box64 icache 补丁已注入"
+      # ============================================================
+      # 8.6 反检测：SMBIOS / 硬件指纹伪装
+      # ============================================================
+      - name: 反检测 SMBIOS / 硬件指纹伪装
+        shell: bash
+        run: |
+          set -eux
+          if [ "${{ inputs.enable_anti_detect }}" != "true" ]; then
+            echo "skip anti-detect (enable_anti_detect=false)"
+            exit 0
+          fi
+          cd "${WINE_SOURCE_DIR}/source" || { echo 'no wine source dir'; exit 0; }
+          if grep -q 'wine_hwid_spoof' dlls/ntdll/unix/system.c 2>/dev/null; then
+            echo "OK(already): system.c 已含 wine_hwid_spoof"
+            exit 0
+          fi
+          _u="/tmp/wine-termux/inject_anti_detect.py"
+          mkdir -p /tmp/wine-termux
+          curl -fsSL --retry 2 -o "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/inject_anti_detect.py" \
+            || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/inject_anti_detect.py" \
+            || true
+          if [ ! -s "$_u" ]; then
+            _u="${GITHUB_WORKSPACE:-$PWD}/patches/wow64/inject_anti_detect.py"
+            [ -f "$_u" ] || { echo "WARN: inject_anti_detect.py 不可用，跳过（不阻断构建）"; exit 0; }
+          fi
+          python3 "$_u" "$(pwd)" || { echo "WARN: SMBIOS 伪装注入失败（不阻断构建）"; exit 0; }
+          echo "--- 注入结果 ---"
+          grep -n 'wine_hwid_spoof' dlls/ntdll/unix/system.c || true
+          grep -q 'WINE_HWID_SPOOF' dlls/ntdll/unix/system.c \
+            || { echo "WARN: 环境变量开关缺失"; exit 0; }
+          echo "OK: SMBIOS 伪装已注入（运行时可关: WINE_HWID_SPOOF=0）"
+      # ============================================================
+      # 8.7 Termux 环境优化（盘符映射 / preloader 判定）
+      # ============================================================
+      - name: Termux 环境优化 (盘符映射 + preloader)
+        shell: bash
+        run: |
+          set -eux
+          if [ "${{ inputs.enable_termux_env_tweaks }}" != "true" ]; then
+            echo "skip termux env tweaks (enable_termux_env_tweaks=false)"
+            exit 0
+          fi
+          cd "${WINE_SOURCE_DIR}/source" || { echo 'no wine source dir'; exit 0; }
+          _u="/tmp/wine-termux/termux_env_tweaks.py"
+          mkdir -p /tmp/wine-termux
+          curl -fsSL --retry 2 -o "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/termux-env/termux_env_tweaks.py" \
+            || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/termux-env/termux_env_tweaks.py" \
+            || true
+          if [ ! -s "$_u" ]; then
+            _u="${GITHUB_WORKSPACE:-$PWD}/patches/termux-env/termux_env_tweaks.py"
+            [ -f "$_u" ] || { echo "WARN: termux_env_tweaks.py 不可用，跳过（不阻断构建）"; exit 0; }
+          fi
+          python3 "$_u" "$(pwd)" || { echo "WARN: termux env tweaks 部分失败（不阻断构建）"; exit 0; }
+          echo "--- 自检 ---"
+          grep -n 'dosdevices/d:' dlls/ntdll/unix/server.c || true
+          grep -n 'dosdevices/z:' dlls/ntdll/unix/server.c || true
+          grep -n 'preload_info\[i\]\.addr < (void \*)0x7fffffffff' loader/preloader.c | head -3 || true
+      # ============================================================
+      # 8.8 反检测：Wine 注册表根键改名
+      # ============================================================
+      - name: 反检测 Wine 注册表根键改名
+        shell: bash
+        run: |
+          set -eux
+          if [ "${{ inputs.enable_registry_stealth }}" != "true" ]; then
+            echo "skip registry stealth (enable_registry_stealth=false)"
+            exit 0
+          fi
+          cd "${WINE_SOURCE_DIR}/source" || { echo 'no wine source dir'; exit 0; }
+          if [ -f dlls/ntdll/version.c ] && ! grep -q 'Software\\\\Wine' dlls/ntdll/version.c; then
+            echo "OK(already): 树内已无 Software\\Wine，跳过"
+            exit 0
+          fi
+          _u="/tmp/wine-termux/inject_registry_stealth.py"
+          mkdir -p /tmp/wine-termux
+          curl -fsSL --retry 2 -o "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/inject_registry_stealth.py" \
+            || wget -q -O "$_u" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/inject_registry_stealth.py" \
+            || true
+          if [ ! -s "$_u" ]; then
+            _u="${GITHUB_WORKSPACE:-$PWD}/patches/wow64/inject_registry_stealth.py"
+            [ -f "$_u" ] || { echo "WARN: inject_registry_stealth.py 不可用，跳过（不阻断构建）"; exit 0; }
+          fi
+          python3 "$_u" "$(pwd)" || { echo "WARN: 注册表改名失败（不阻断构建）"; exit 0; }
+          echo "--- 自检：树内应只剩 WinAppCompat ---"
+          grep -rn 'Software\\\\WinAppCompat' dlls/ntdll/version.c loader/wine.inf.in 2>/dev/null | head -5 || true
+          if grep -rq 'Software\\\\Wine' --include=*.c --include=*.h --exclude-dir=tests dlls loader 2>/dev/null || \
+             grep -q 'Software\\Wine' loader/wine.inf.in 2>/dev/null; then
+            echo "WARN: 仍有残留 Software\\Wine 引用（tests/ 目录已排除，非阻断）"
+          fi
       # ============================================================
       - name: ARM64 39-bit VA + noexec 兼容适配
         run: |
