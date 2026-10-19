@@ -120,6 +120,12 @@ def log(msg):
 
 
 def run(cmd, **kw):
+    # 强制 C locale：CI 里 LANG=zh_CN.UTF-8 时 readelf/objdump 会输出中文
+    # （"共享库：[libz.so.1]"），按英文正则解析会得到 0 条 DT_NEEDED。
+    env = dict(os.environ)
+    env["LC_ALL"] = "C"
+    env["LANG"] = "C"
+    kw.setdefault("env", env)
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           text=True, **kw)
 
@@ -150,11 +156,20 @@ def read_dyn(path):
     return r.returncode, (r.stdout or "")
 
 
+NEEDED_RE = re.compile(r"NEEDED\)\s+Shared library:\s+\[([^\]]+)\]")
+NEEDED_LOOSE_RE = re.compile(r"\(NEEDED\)[^\n]*\[([^\]]+)\]")
+
+
 def read_needed(path):
-    """解析 DT_NEEDED，readelf 失败时退回 objdump -p。"""
+    """解析 DT_NEEDED；readelf 解析为空时强制回退 objdump -p。"""
     rc, out = read_dyn(path)
     if rc == 0:
-        return re.findall(r"NEEDED\)\s+Shared library:\s+\[([^\]]+)\]", out)
+        libs = NEEDED_RE.findall(out)
+        if not libs:
+            # 非英文 locale 或格式差异时用宽松正则兜底
+            libs = NEEDED_LOOSE_RE.findall(out)
+        if libs:
+            return libs
     r = run(["objdump", "-p", path])
     return re.findall(r"NEEDED\s+(\S+)", r.stdout or "")
 
@@ -522,6 +537,8 @@ def main():
 
         env = dict(os.environ)
         env["LD_LIBRARY_PATH"] = d
+        env["LC_ALL"] = "C"
+        env["LANG"] = "C"
         r = run(["bash", "-lc",
                  "ldd %s 2>&1 | grep -E 'not found' || true" % wd], env=env)
         miss = (r.stdout or "").strip()
