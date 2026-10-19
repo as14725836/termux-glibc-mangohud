@@ -68,14 +68,12 @@ def tweak_preloader():
     if t is None:
         skip.append('preloader.c(缺文件)')
         return
-    pat = re.compile(r'#ifdef __aarch64__([ \t]*(\\?)[ \t]*\n[ \t]*&&[ \t]*'
+    pat = re.compile(r'#ifdef __aarch64__([ \t]*\n[ \t]*&&[ \t]*'
                      r'preload_info\[i\]\.addr < \(void \*\)0x7fffffffff)')
     m = pat.search(t)
     if m:
-        # 只有原文带续行反斜杠时才能安全改成 #if 1（否则 #if 1 与下一行 && 不构成同一表达式）
-        if m.group(2) != '\\':
-            skip.append('preloader.c(条件跨行无续行符，拒绝改写以免产出非法 C)')
-            return
+        # #ifdef 是预处理指令，跨行续写 && 不需要反斜杠；整条指令被移除后
+        # 剩下的 if(...) 仍然合法，因此这里可以安全地换成 #if 1。
         save(p, t[:m.start()] + '#if 1' + m.group(1) + t[m.end():])
         done.append('preloader 低64k判定改为 #if 1')
     elif '0x7fffffffff' not in t:
