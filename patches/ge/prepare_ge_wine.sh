@@ -192,15 +192,33 @@ cd "$BUILD_DIR/wine"
 GF="$BUILD_DIR/ge-src/patches"
 ST="$BUILD_DIR/wine-staging/patches"
 
+# GE 的补丁是 git format-patch 产物，带 rename from/to 等 git 扩展信息。
+# GNU patch 不支持 rename，且**会部分应用**（成功的 hunk 照写、失败的留
+# .rej），对 ge-video-rework 这种「整份替换 dlls/winedmo」的大补丁来说，
+# 部分应用会把 Makefile.in 改成半成品，后续 makedep 报：
+#   error: open : No such file or directory
+#   config.status: error: could not create Makefile
+# 因此优先用 git apply 原子应用（要么全上，要么全不上），失败再回退 patch。
 apply_one() {
   local p="$1"
   local rel="$2"
   [ -f "$p" ] || { log "    缺失: $rel"; PATCH_FAILED=$((PATCH_FAILED + 1)); return 0; }
   PATCH_TOTAL=$((PATCH_TOTAL + 1))
-  if ! patch -Np1 --batch --forward --no-backup-if-mismatch <"$p" >/dev/null 2>&1; then
-    PATCH_FAILED=$((PATCH_FAILED + 1))
-    log "    WARN: $rel 打不上（继续）"
+
+  if git apply --whitespace=nowarn -p1 "$p" 2>/dev/null; then
+    return 0
   fi
+  # 回退：先 dry-run，能干净打上才真打，避免留下半成品与 .rej
+  local out
+  out="$(patch -Np1 --batch --forward --dry-run --no-backup-if-mismatch <"$p" 2>&1)" || true
+  if [ -z "$out" ] || ! echo "$out" | grep -qE 'FAILED|hunk ignored|Reversed|can.t find file'; then
+    if patch -Np1 --batch --forward --no-backup-if-mismatch <"$p" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  PATCH_FAILED=$((PATCH_FAILED + 1))
+  log "    WARN: $rel 打不上（继续）"
 }
 
 apply_dir() {
@@ -366,6 +384,16 @@ done
 # ---- 6.6 ge-video-rework（必须，否则 winedmo 编译失败）----
 log "应用 ge-video-rework 组（winedmo / mf 媒体重写）"
 apply_dir "$GF/ge-video-rework" "ge-video-rework"
+
+# ge-video-rework 是 winedmo 能被 FFmpeg 8 编过的前提，必须完整生效。
+# 判据：dlls/winedmo/Makefile.in 里应当出现 winedmo_classes.idl
+# （只有在重写后的 SOURCES 列表里才有）。
+if [ -f dlls/winedmo/Makefile.in ]; then
+  if ! grep -q 'winedmo_classes.idl' dlls/winedmo/Makefile.in; then
+    die "ge-video-rework 未完整生效：dlls/winedmo/Makefile.in 缺 winedmo_classes.idl"
+  fi
+  log "  OK: dlls/winedmo/Makefile.in 已是 ge-video-rework 版本"
+fi
 
 # --------------------------------------------------------------
 # 7) 生成 configure / include/config.h.in
