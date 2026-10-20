@@ -538,19 +538,48 @@ def main():
         else:
             log("    WARN: winedmo.so rpath=%s（缺少 $ORIGIN）" % (rp or "<none>"))
 
+        # 3a) 静态 DT_NEEDED 闭包校验（不依赖构建机能否加载库）。
+        # 预编译包是 glibc 2.44 编的，runner 只有 2.39，ldd 必然报
+        # "version `GLIBC_2.44' not found"；那是构建机 glibc 太旧，
+        # 不是打包缺失，所以真正判定交给 readelf -d。
+        missing = []
+        seen = set([wd])
+        queue = [wd]
+        while queue:
+            cur = queue.pop()
+            for dep in read_needed(cur):
+                if dep in seen:
+                    continue
+                seen.add(dep)
+                if skipped(dep) or not wanted(dep):
+                    continue
+                p = os.path.join(d, dep)
+                if os.path.lexists(p):
+                    queue.append(p)
+                else:
+                    missing.append("%s -> %s" % (os.path.basename(cur), dep))
+        if missing:
+            log("  FATAL: DT_NEEDED 闭包缺库:")
+            for m in missing:
+                log("    " + m)
+            ok = False
+        else:
+            log("    DT_NEEDED 闭包: 全部命中（%d 个 soname）" % len(seen))
+
         env = dict(os.environ)
         env["LD_LIBRARY_PATH"] = d
         env["LC_ALL"] = "C"
         env["LANG"] = "C"
         r = run(["bash", "-lc",
-                 "ldd %s 2>&1 | grep -E 'not found' || true" % wd], env=env)
+                 "ldd %s 2>&1 | grep -E 'not found' | grep -v 'version ' || true"
+                 % wd], env=env)
         miss = (r.stdout or "").strip()
         if miss:
             log("  FATAL: winedmo.so 仍有未解析依赖:")
             log("    " + miss.replace("\n", "\n    "))
             ok = False
         else:
-            log("    ldd: 全部依赖可解析 OK")
+            log("    ldd: 无缺失依赖（构建机 glibc 版本差异不计）")
 
         # glibc 符号版本报告（不作失败条件）
         gmax = max_glibc_ver(wd)

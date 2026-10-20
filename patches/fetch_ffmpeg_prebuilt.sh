@@ -75,10 +75,23 @@ mkdir -p "$PREFIX/lib" "$PREFIX/include" || die "无法创建 $PREFIX"
 cp -a "$ROOT/lib/." "$PREFIX/lib/" || die "拷贝 lib 失败"
 cp -a "$ROOT/include/." "$PREFIX/include/" || die "拷贝 include 失败"
 
-# .pc 里的 prefix 是设备路径，全部改写成本次构建的 prefix
+# .pc 里的 prefix 是设备路径，全部改写成本次构建的 prefix；
+# 同时给 Libs 加 -Wl,--allow-shlib-undefined。
+#
+# 为什么必须加：这批包是照 glibc 2.44 编的（libavutil.so.60 里有
+# sinh@GLIBC_2.44 / cosh@GLIBC_2.44），而构建 runner 是 Ubuntu 24.04
+# （glibc 2.39）。链接可执行文件时 ld 会尝试从 runner 的 libc 解析
+# 这些版本符号，必然失败，于是 Wine configure 报
+#   checking for av_log_set_callback in -lavutil... no
+#   configure: error: FFmpeg 64-bit development files not found.
+# 放行共享库的未定义符号后，链接期不再追这部分；运行时由设备侧
+# （Termux glibc >= 2.44）提供。
 for pc in "$PREFIX"/lib/pkgconfig/*.pc; do
   [ -f "$pc" ] || continue
   sed -i "s#$TERMUX_GLIBC#$PREFIX#g" "$pc"
+  if ! grep -q -- '--allow-shlib-undefined' "$pc"; then
+    sed -i -E 's|^(Libs:.*)$|\1 -Wl,--allow-shlib-undefined|' "$pc"
+  fi
 done
 # .la 是 libtool 产物，Wine 用不到，还会把绝对路径钉死
 rm -f "$PREFIX"/lib/*.la
