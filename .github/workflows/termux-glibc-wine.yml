@@ -1691,6 +1691,31 @@ jobs:
           # 面向新 Wine 的补丁被硬套到旧源码上而中断整个构建
           # （proton-9.0-x86_64 是 Wine 9.0，自带了更高版本才引入的
           # LAA / quartz 色彩滤镜 / qasf ASF 等功能）。
+          # === 已适配 GE 11.0 的补丁集（patch11.16-ge11.0/）===
+          # patch11.16/ 里的补丁按 Wine 11.16 行号写，套当前树经常整份被 SKIP。
+          # 典型：termux-wine-full-11.16.patch 的 server/mapping.c 一处 hunk
+          # 因 free_map_addr -> free_available_high_map_addr 改名而 FAILED，
+          # 整份补丁被跳过 -> /tmp 修复没进包 -> 设备上
+          #   wineserver: mkdir /tmp/.wine-10521: Permission denied
+          # 这里先打「按当前源码重新生成」的版本，同样先 dry-run 预检、失败跳过。
+          if [ -d "$GITHUB_WORKSPACE/patch11.16-ge11.0" ]; then
+            for _ap in "$GITHUB_WORKSPACE"/patch11.16-ge11.0/*.patch; do
+              [ -f "$_ap" ] || continue
+              _an="$(basename "$_ap")"
+              _aout="$(patch -p1 --batch --dry-run --forward \
+                         --no-backup-if-mismatch < "$_ap" 2>&1)" || true
+              if echo "$_aout" | grep -qE 'FAILED|hunk ignored|can.t find file|Reversed'; then
+                echo "SKIP(adapted): $_an 与当前源码不兼容 → $(echo "$_aout" | grep -E 'FAILED|Reversed' | head -1)"
+              elif patch -p1 --batch --forward --no-backup-if-mismatch \
+                     < "$_ap" >/dev/null 2>&1; then
+                echo "OK (adapted): $_an 已应用"
+              else
+                echo "SKIP(adapted): $_an 应用失败"
+              fi
+            done
+            find . -name '*.rej' -delete 2>/dev/null || true
+            find . -name '*.orig' -delete 2>/dev/null || true
+          fi
           for patch in "$GITHUB_WORKSPACE"/patch11.16/*.patch; do
 
             if [ -f "$patch" ]; then
