@@ -87,6 +87,21 @@ DEP_PREFIXES = (
     "libzstd",
 )
 
+# 第三梯队：编码器库。仓库自己编的 FFmpeg 是精简配置（--disable-everything），
+# 而 glibc-packages 的预编译包是全功能版，libavcodec.so.62 的 DT_NEEDED
+# 里直接就有 libvpx/libx264/libx265/libxvidcore/libtheora/libwebp/libwebpmux。
+# 不放进白名单会被 BFS 无声跳过，ldd 校验阶段才报 not found。
+CODEC_PREFIXES = (
+    "libvpx",
+    "libx264",
+    "libx265",
+    "libxvidcore",
+    "libtheora",      # 同时覆盖 libtheoraenc / libtheoradec
+    "libwebp",        # 同时覆盖 libwebpmux / libwebpdemux
+    "libsharpyuv",    # libwebp 的 DT_NEEDED
+    "libogg",         # libtheora 的 DT_NEEDED
+)
+
 # 绝对不能带走的系统基础库（glibc / libstdc++，设备侧有自己的）
 SKIP_PREFIXES = (
     "libc.so",
@@ -101,6 +116,7 @@ SKIP_PREFIXES = (
     "libstdc++",
     "libatomic",
     "libgomp",
+    "libmvec",      # glibc 的 SIMD 数学库，libx265 需要它；必须用设备自带版本
 )
 
 # 依赖闭包 BFS 的搜索目录（按优先级）。除了 FFmpeg 自己的 lib，还要能
@@ -226,7 +242,8 @@ def is_seed(name):
 
 def wanted(name):
     return (any(name.startswith(p) for p in AV_PREFIXES)
-            or any(name.startswith(p) for p in DEP_PREFIXES))
+            or any(name.startswith(p) for p in DEP_PREFIXES)
+            or any(name.startswith(p) for p in CODEC_PREFIXES))
 
 
 def skipped(name):
