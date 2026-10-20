@@ -392,9 +392,7 @@ jobs:
           rm -rf "$BUILD_DIR/proton"
           mkdir -p "$BUILD_DIR/proton"
           cd "$BUILD_DIR/proton"
-          # ----------------------------------------------------
           # Clone
-          # ----------------------------------------------------
           PROTON_REPO="${{ github.event.inputs.proton_repo || 'WinNative-Emu/proton-wine' }}"
           echo "Proton 源码仓库: ${PROTON_REPO}"
           # ---- 自动判定 host：非 GitHub 仓库（如 dawn.wine / GitLab）走裸 URL ----
@@ -441,9 +439,7 @@ jobs:
             command -v python3 >/dev/null 2>&1 || PY=python
             "${PY}" "$GITHUB_WORKSPACE/patches/termux-env/termux_env_tweaks.py" "$PWD" || true
           fi
-          # ----------------------------------------------------
           # Termux / Android /tmp 路径修复
-          # ----------------------------------------------------
           echo "修复 Termux 路径问题..."
           find . \
             -type f \
@@ -473,9 +469,7 @@ jobs:
             -name "server.c" \
             -exec sed -i \
               's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-          # ----------------------------------------------------
           # 自定义补丁
-          # ----------------------------------------------------
           PATCH_FILE="$GITHUB_WORKSPACE/0001-ohos-default-to-grayscale-font-antialiasing.patch"
           if [ -f "$PATCH_FILE" ]; then
             echo "Applying $PATCH_FILE..."
@@ -483,9 +477,7 @@ jobs:
           else
             echo "Warning: Patch file not found"
           fi
-          # ----------------------------------------------------
           # Autogen
-          # ----------------------------------------------------
           # ---------------- 冲突标记守卫（任何补丁冲突都不许带进编译）----------------
           MARKERS=$(grep -rl -E '^<<<<<<< ' --include=*.c --include=*.h --include=*.in --include=*.ac . 2>/dev/null | head -60)
           if [ -n "${MARKERS}" ]; then
@@ -508,9 +500,7 @@ jobs:
             echo "既无 autogen.sh 也无 configure，尝试 autoreconf -fiv"
             autoreconf -fiv || true
           fi
-          # ----------------------------------------------------
           # Build directory
-          # ----------------------------------------------------
           mkdir -p build-wow64
           cd build-wow64
           # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
@@ -576,7 +566,6 @@ jobs:
           #   -> wine client error:0: recvmsg: Connection reset by peer
           # 直接把 use_epoll_pwait2 置 0，退回 epoll_wait（所有内核都支持）。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_epoll_pwait2.py" .. || echo "WARN: no-epoll2 inject"
-          # ====================================================
           # ★ 方案B：x86_64 Wine on box64 上 32 位进程起不来 / syswow64 为空
           # 根因：双架构包生成 lib/wine/i386-unix/wine（真 32 位宿主 loader），
           # registry.c 把 I386 视为 alternate machine，preloader_exec 直接 execv 它；
@@ -595,9 +584,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/patches/wow64/apply_stealth.py" .. \
             "${{ github.event.inputs.enable_anti_detect || 'true' }}" \
             "${{ github.event.inputs.enable_registry_stealth || 'false' }}" || true
-          # ====================================================
           # 编译优化
-          # ====================================================
           export CC="ccache gcc"
           export CXX="ccache g++"
           export CROSSCC="ccache x86_64-w64-mingw32-gcc"
@@ -607,10 +594,8 @@ jobs:
           export PKG_CONFIG_PATH="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
-          # ----------------------------------------------------
           # winedmo / FFmpeg 8.1.1（glibc-packages 预编译包，见 patches/fetch_ffmpeg_prebuilt.sh）
           #   dlls/winedmo 无独立开关，configure --with-ffmpeg 找到 libav* 即启用。
-          # ----------------------------------------------------
           if [ "${ENABLE_WINEDMO:-true}" = "true" ] && [ -f "${FFMPEG_PREFIX:-/tmp/ffmpeg}/lib/pkgconfig/libavformat.pc" ]; then
             export PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
             export PKG_CONFIG_LIBDIR="${FFMPEG_PREFIX}/lib/pkgconfig:${PKG_CONFIG_LIBDIR}"
@@ -624,9 +609,7 @@ jobs:
             WINE_FFMPEG_ARG="--without-ffmpeg"
             echo "winedmo: 未启用（ENABLE_WINEDMO=${ENABLE_WINEDMO:-true}）"
           fi
-          # ----------------------------------------------------
           # Unix compiler
-          # ----------------------------------------------------
           export CFLAGS="\
           -march=x86-64 \
           -msse3 \
@@ -642,9 +625,7 @@ jobs:
           -fmerge-all-constants \
           -fno-ident"
           export CXXFLAGS="$CFLAGS"
-          # ----------------------------------------------------
           # PE compiler
-          # ----------------------------------------------------
           export CROSSCFLAGS="\
           -march=x86-64 \
           -msse3 \
@@ -658,9 +639,7 @@ jobs:
           -fmerge-all-constants \
           -fno-ident"
           export CROSSCXXFLAGS="$CROSSCFLAGS"
-          # ----------------------------------------------------
           # Linker
-          # ----------------------------------------------------
           export LDFLAGS="\
           -Wl,-O2 \
           -Wl,--as-needed \
@@ -673,9 +652,7 @@ jobs:
           echo "LDFLAGS:"
           echo "$LDFLAGS"
           echo "=========================================="
-          # ====================================================
           # Configure
-          # ====================================================
           # ---- adapted-11.18 补丁 + fshack FSR（自适应，不改 cwd）----
           _wsrc=""
           for _d in . .. wine wine/source source; do
@@ -754,13 +731,10 @@ jobs:
             --without-usb \
             --without-v4l2 \
             --without-wayland
-          # ====================================================
           # Build
-          # ====================================================
           echo "开始构建 Proton WOW64..."
           make -j"$(nproc)"
           make install
-          # --------------------------------------------------------
           # 修复 bin/ 下的 symlink：dwproton 用新式 loader（tools/wine/wine.c），
           # wine 二进制靠 get_bindir() 推导路径；在 box64 下该推导退回编译期
           # prefix /tmp/wine-install-proton（设备上不存在），于是找不到
@@ -769,7 +743,6 @@ jobs:
           # 解决：把 `xxx -> wine` 的符号链接替换成自包含包装脚本，
           # 脚本用 $0 所在目录定位 wine，完全不依赖编译期路径。
           # （这与旧式 loader 构建产物 bin/* 的 shell 脚本行为一致）
-          # --------------------------------------------------------
           echo "=== 修复 bin/ 符号链接为自包含包装脚本 ==="
           for _d in /tmp/wine-install-proton/bin; do
             [ -d "$_d" ] || continue
@@ -811,9 +784,7 @@ jobs:
           find /tmp/wine-install-proton/bin -maxdepth 1 -type l -printf '  %f -> %l\n' 2>/dev/null || true
           echo "=== bin/ 内容 ==="
           ls -la /tmp/wine-install-proton/bin/ | head -30
-          # ====================================================
           # 版本信息
-          # ====================================================
           cd ../..
           VERSION_PROTON=$(
             cd wine
@@ -2226,10 +2197,6 @@ jobs:
           # mfasfsrcsnk/mfh264enc/mfmp4srcsnk/msauddecmft/msmpeg2vdec/msvproc/resampledmo/wmadmod）
           # 已存在则按哨兵跳过；打不上仅告警，不阻断构建。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_decoder_registrations.py" .. || echo "WARN: decoder-reg inject"
-          # EVR/DXVA2 视频路径补口：播放视频“白屏有声音”（mixer 拒收
-          # MFT_MESSAGE_NOTIFY_START_OF_STREAM、RepaintVideo 返回 E_NOTIMPL、
-          # dxva2 缺 YUV->RGB32 转换）。脚本幂等，锚点不匹配只打印不阻断。
-          python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_evr_dxva2.py" .. || echo "WARN: evr-dxva2 inject"
           # MediaFoundation byte stream handler：默认优先 GStreamer（上游行为）。
           # 兼容 Proton(return FALSE) / 上游(return TRUE) / dwproton(PROTON_MEDIA_FORCE_GST) 三种树；
           # 已有 return TRUE 或已注入 WINE_USE_DMO 则自动跳过。
