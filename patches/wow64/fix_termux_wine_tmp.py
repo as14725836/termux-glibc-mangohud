@@ -131,16 +131,16 @@ def patch_unicode(path):
     src = _read(path)
     if TERMUX_GLIBC + "/share/wine/nls" in src:
         return "already"
+    # 注意：捕获组不要带引号，否则拼出来会变成 ""/usr/share/wine/nls""
     pat = re.compile(
-        r'(static const char \*nls_dirs\[\] = \{[^\n]*?)("/usr/share/wine/nls")')
-    if not pat.search(src):
+        r'^([ \t]*static const char \*nls_dirs\[\] = \{[^\n]*?)'
+        r'("/usr/share/wine/nls")([^\n]*)$', re.M)
+    m = pat.search(src)
+    if not m:
         return "anchor-miss"
-
-    def repl(m):
-        return '%s"%s", "%s/share/wine/nls", "%s/local/share/wine/nls"' % (
-            m.group(1), m.group(2), TERMUX_GLIBC, TERMUX_GLIBC)
-
-    src = pat.sub(repl, src, count=1)
+    add = (', "%s/local/share/wine/nls", "%s/share/wine/nls"'
+           % (TERMUX_GLIBC, TERMUX_GLIBC))
+    src = src[:m.start()] + m.group(1) + m.group(2) + add + m.group(3) + src[m.end():]
     _write(path, src)
     return "patched(+nls)"
 
