@@ -134,7 +134,7 @@ on:
           - 'false'
 
       ffmpeg_version:
-        description: 'FFmpeg 依赖版本（按 GE-Proton 方式自编最小化 shared 库并随包分发）'
+        description: 'FFmpeg 依赖版本（取 as14725836/glibc-packages 预编译包，libav* 随包分发）'
         required: false
         default: '8.1.1'
         type: string
@@ -142,7 +142,7 @@ on:
 env:
   USE_CCACHE: true
   BUILD_DIR: /tmp/build_wine
-  # winedmo / FFmpeg（按 GE-Proton 方式自编 8.1.1 并随包分发）
+  # winedmo / FFmpeg（as14725836/glibc-packages 预编译 8.1.1，libav* 随包分发）
   ENABLE_WINEDMO: ${{ github.event.inputs.enable_winedmo || 'true' }}
   FFMPEG_PREFIX: /tmp/ffmpeg
   FFMPEG_VER: ${{ github.event.inputs.ffmpeg_version || '8.1.1' }}
@@ -360,14 +360,21 @@ jobs:
       # Wine 的 dlls/winedmo 没有独立的 --enable-winedmo 开关，它的
       # Makefile.in 只有 UNIX_CFLAGS=$(FFMPEG_CFLAGS) / UNIX_LIBS=$(FFMPEG_LIBS)。
       # 所以「启用 winedmo」= configure --with-ffmpeg 且能链接到 libav*。
-      # GE-Proton 的做法是自编一套最小化 shared FFmpeg 并随包分发，这里沿用。
+      # 改为直接用 as14725836/glibc-packages 里的预编译包，产出与
+      # patches/build_ffmpeg_ge.sh 完全一致的布局（lib/、include/、pkgconfig/）。
+      # 注意架构：本 job 产物同样是 x86_64-unix（设备侧 box64 执行），
+      # 必须取 x86_64 包；aarch64 包只能在原生 ARM 构建里用，混用会报
+      # wrong ELF class（发行包里 lib/wine/x86_64-unix/ntdll.so 实测为 ELF 64-bit x86-64）。
 
-      - name: 构建 FFmpeg ${{ github.event.inputs.ffmpeg_version || '8.1.1' }}（GE-Proton 方式）
+      - name: 下载 FFmpeg ${{ github.event.inputs.ffmpeg_version || '8.1.1' }} 预编译包（glibc-packages）
         if: ${{ (github.event.inputs.enable_winedmo || 'true') == 'true' }}
         env:
           FFMPEG_VERSION: ${{ github.event.inputs.ffmpeg_version || '8.1.1' }}
           FFMPEG_PREFIX: /tmp/ffmpeg
-        run: bash "${GITHUB_WORKSPACE}/patches/build_ffmpeg_ge.sh"
+          # ffmpeg-glibc-8.1.1-1-x86_64.pkg.tar.xz（同一 Release 的 x86_64 包）
+          FFMPEG_PKG_RELEASE: packages-39239132896
+          FFMPEG_PKG_ARCH: x86_64
+        run: bash "${GITHUB_WORKSPACE}/patches/fetch_ffmpeg_prebuilt.sh"
 
       # --------------------------------------------------------
       # Proton Build
@@ -597,7 +604,7 @@ jobs:
           export PKG_CONFIG_LIBDIR="${GST_SYSROOT}/pc-gst:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           echo "GStreamer(sysroot): $(pkg-config --modversion gstreamer-1.0 2>/dev/null) @ $(pkg-config --variable=prefix gstreamer-1.0 2>/dev/null)"
           # ----------------------------------------------------
-          # winedmo / FFmpeg 8.1.1（GE-Proton 方式，见 patches/build_ffmpeg_ge.sh）
+          # winedmo / FFmpeg 8.1.1（glibc-packages 预编译包，见 patches/fetch_ffmpeg_prebuilt.sh）
           #   dlls/winedmo 无独立开关，configure --with-ffmpeg 找到 libav* 即启用。
           # ----------------------------------------------------
           if [ "${ENABLE_WINEDMO:-true}" = "true" ] && [ -f "${FFMPEG_PREFIX:-/tmp/ffmpeg}/lib/pkgconfig/libavformat.pc" ]; then
