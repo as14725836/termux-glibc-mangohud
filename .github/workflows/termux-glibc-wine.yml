@@ -40,7 +40,6 @@ on:
           - dwproton/11.0-16
           - dwproton/11.0-14
           - dwproton/11.0-13
-          - dwproton/10.0-26
 
       wine_branch:
         description: 'Wine 分支 (仅 Wine 构建)'
