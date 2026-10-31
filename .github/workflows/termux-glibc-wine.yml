@@ -381,15 +381,6 @@ jobs:
       # Proton Build
       # --------------------------------------------------------
 
-      # winedmo BSF 适配 FFmpeg 8.x ABI（幂等；无该文件自动 SKIP）
-      - name: 适配 winedmo ABI
-        if: ${{ (github.event.inputs.build_type || 'proton') == 'proton' }}
-        run: |
-          set -e
-          S="${BUILD_DIR}/proton/wine"
-          [ -d "$S" ] || { echo "SKIP: no srctree"; exit 0; }
-          python3 "${GITHUB_WORKSPACE}/patches/fix_winedmo_ffmpeg8.py" "$S" || echo "WARN: skip"
-
       - name: 构建 Proton WOW64
         run: |
           set -e
@@ -412,21 +403,18 @@ jobs:
             *)                   CLONE_URL="https://github.com/${PROTON_REPO}.git" ;;
           esac
           echo "Clone URL: ${CLONE_URL}"
-          case "$PROTON_REPO" in
-            *wine-dwproton*|*dwproton*)
-              PB="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
-              git clone --depth 1 --branch "$PB" "$CLONE_URL" wine || {
-                echo "浅克隆失败，回退全量克隆"; rm -rf wine
-                git clone "$CLONE_URL" wine
-                git -C wine checkout "$PB" || { echo "ERROR: 分支 $PB 不存在"; exit 1; }
-              }
-              [ "$(git -C wine rev-parse --abbrev-ref HEAD)" = "$PB" ] \
-                || { echo "ERROR: 非目标分支 $PB"; exit 1; }
-              ;;
-            *)
-              git clone "$CLONE_URL" wine
-              ;;
-          esac
+          PB="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
+          echo "目标分支: $PB"
+          if git clone --depth 1 --branch "$PB" "$CLONE_URL" wine 2>/dev/null; then
+            echo "浅克隆成功: $PB"
+          else
+            echo "浅克隆失败，回退全量克隆"; rm -rf wine
+            git clone "$CLONE_URL" wine || { echo "ERROR: 克隆失败"; exit 1; }
+            git -C wine checkout "$PB" 2>/dev/null \
+              || { echo "ERROR: 分支 $PB 不存在于 $CLONE_URL"; exit 1; }
+          fi
+          [ "$(git -C wine rev-parse --abbrev-ref HEAD)" = "$PB" ] \
+            || { echo "ERROR: 非目标分支，实际 $(git -C wine rev-parse --abbrev-ref HEAD)"; exit 1; }
           cd wine
           PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
           echo "Proton 分支: $PROTON_BRANCH"
@@ -442,6 +430,9 @@ jobs:
           else
             echo "无 .gitmodules —— 跳过 submodule 初始化"
           fi
+          # winedmo BSF 适配 FFmpeg 8.x ABI（幂等；无该文件自动 SKIP）
+          python3 "${GITHUB_WORKSPACE}/patches/fix_winedmo_ffmpeg8.py" . \
+            || echo "WARN: winedmo fix skipped"
           if [ "${{ github.event.inputs.enable_termux_env_tweaks || 'true' }}" = "true" ]; then
             echo "=== Termux 环境优化 ==="
             PY=python3
