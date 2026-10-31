@@ -408,11 +408,30 @@ jobs:
           # 不含任何 git submodule；深度 1 克隆以省时间。
           case "$PROTON_REPO" in
             *wine-dwproton*|*dwproton*)
-              git clone --depth 1 --branch "${{ github.event.inputs.proton_branch || 'dwproton/11.0-14' }}" \
-                "$CLONE_URL" wine || {
-                  echo "浅克隆失败，回退全量克隆"
-                  git clone "$CLONE_URL" wine
-                }
+              PROTON_BRANCH_TRY="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
+              echo "尝试浅克隆分支: ${PROTON_BRANCH_TRY}"
+              if git clone --depth 1 --branch "${PROTON_BRANCH_TRY}" "$CLONE_URL" wine; then
+                echo "浅克隆成功: ${PROTON_BRANCH_TRY}"
+              else
+                echo "浅克隆失败，回退全量克隆"
+                rm -rf wine
+                git clone "$CLONE_URL" wine
+                # 关键：全量克隆不带 --branch 会落到默认分支，
+                # 必须显式切回用户指定的分支，否则会静默编译错误的分支。
+                if ! git -C wine checkout "${PROTON_BRANCH_TRY}"; then
+                  echo "ERROR: 分支 '${PROTON_BRANCH_TRY}' 在 ${CLONE_URL} 中不存在"
+                  echo "       可用分支请执行: git ls-remote --heads ${CLONE_URL}"
+                  exit 1
+                fi
+              fi
+              # 二次校验：确认实际 HEAD 就是用户指定的分支，杜绝静默换分支
+              ACTUAL_BRANCH="$(git -C wine rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
+              if [ "${ACTUAL_BRANCH}" != "${PROTON_BRANCH_TRY}" ]; then
+                echo "ERROR: 期望分支 '${PROTON_BRANCH_TRY}'，实际 '$ACTUAL_BRANCH'"
+                echo "       已中止，避免编译错误的分支"
+                exit 1
+              fi
+
               ;;
             *)
               git clone "$CLONE_URL" wine
@@ -585,6 +604,16 @@ jobs:
           python3 "$GITHUB_WORKSPACE/patches/wow64/apply_stealth.py" .. \
             "${{ github.event.inputs.enable_anti_detect || 'true' }}" \
             "${{ github.event.inputs.enable_registry_stealth || 'false' }}" || true
+          # ★ winedmo BSF 与 FFmpeg 8.x 的 ABI 适配（幂等，源码树无该文件则跳过）
+          # 背景：dlls/winedmo/libavcodec/pcm_byte_order_reverse_bsf.c 按 FFmpeg <=6.x
+          # 内部实现编写，在 FFmpeg 8.x 下：
+          #   - AVBSFContext.internal 已删（改为 bsf.c 内部 FFBSFContext）
+          #   - AVBitStreamFilter.filter/init 已移入 FFBitStreamFilter，且要求
+          #     AVBitStreamFilter 为首成员；av_bsf_alloc 会按 FFBitStreamFilter* 解引用
+          #   - AVCodecParameters.channels -> ch_layout.nb_channels
+          # 仅 proton_11.0 一类树含该文件；dwproton 树不含，脚本自动 SKIP。
+          python3 "${GITHUB_WORKSPACE}/patches/fix_winedmo_ffmpeg8.py" .. \
+            || echo "WARN: winedmo-ffmpeg8 fix skipped"
           # 编译优化
           export CC="ccache gcc"
           export CXX="ccache g++"
