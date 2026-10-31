@@ -37,6 +37,7 @@ on:
           - bleeding-edge
           - main
           - master
+          - dwproton/11.0-16
           - dwproton/11.0-14
           - dwproton/11.0-13
           - dwproton/10.0-26
