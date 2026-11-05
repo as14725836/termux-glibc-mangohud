@@ -1618,64 +1618,120 @@ jobs:
           grep -n 'wg_task_pool_new\|gst_task_pool_new\|GType=%lu' "${FILE_PARSER}" | head -20 || echo "(无 task pool 诊断命中，属正常)"
 
       # ============================================================
-      - name: 去掉 winegstreamer 的 GstGL 依赖 (对齐 AndreRH)
+      - name: winegstreamer 支持运行时关闭 GstGL (WINE_GST_NO_GL)
         shell: bash
         run: |
           set -eux
 
           cd "${WINE_SOURCE_DIR}/source"
 
+          # 对齐 Pipetto-crypto/wine@76f6eab3 "winegstreamer: make opengl conditional"
+          # 与旧版"垫片阉割"方案的区别：
+          #   旧方案  sed 把 #include <gst/gl/gl.h> 换成空桩 + 从 configure.ac 删掉
+          #           gstreamer-gl-1.0 —— GL 能力被永久移除，无法恢复，且 winegstreamer
+          #           与 gst_gl 相关的符号全部失踪。
+          #   新方案  保留真实 GL 代码与 gstreamer-gl-1.0 依赖，新增 int wine_gst_no_gl
+          #           全局开关；默认 = -1（不干预，走 GL）；运行时 WINE_GST_NO_GL=1
+          #           则跳过 GstGL display/context 初始化，纯 CPU 软解。
+          # 幂等：已含 wine_gst_no_gl 的树直接跳过；无 GstGL 机制的新树也跳过。
+
+          if [ ! -d dlls/winegstreamer ]; then
+            echo "SKIP: 该树无 dlls/winegstreamer"
+            exit 0
+          fi
+
+          if grep -q 'wine_gst_no_gl' dlls/winegstreamer/unixlib.c 2>/dev/null; then
+            echo "SKIP: 已含 wine_gst_no_gl（Pipetto 76f6eab3 自带或已注入）"
+            exit 0
+          fi
+
+          if ! grep -q 'GstGLDisplay \*gl_display;' dlls/winegstreamer/unixlib.c 2>/dev/null; then
+            echo "SKIP: unixlib.c 无 GstGLDisplay *gl_display（上游已移除 GstGL 机制）"
+            exit 0
+          fi
+
           echo "=== 修改前 ==="
           grep -n 'GSTREAMER,\[' configure.ac || true
-          grep -n 'gst/gl/gl.h' dlls/winegstreamer/*.c || true
+          grep -n 'GstGLDisplay \*gl_display;' dlls/winegstreamer/unixlib.c || true
 
-          sed -i 's/gstreamer-tag-1\.0 gstreamer-gl-1\.0/gstreamer-tag-1.0/' configure.ac
+          # ---------- 1) unix_private.h: extern 声明 ----------
+          H="dlls/winegstreamer/unix_private.h"
+          if [ -f "${H}" ] && ! grep -q 'wine_gst_no_gl' "${H}"; then
+            perl -0pi -e 's{(extern NTSTATUS wg_init_gstreamer\(void \*args\);)}{$1\n\nextern int wine_gst_no_gl;}' "${H}"
+            echo "OK: ${H} extern 声明已注入"
+          fi
 
-          SHIM='typedef struct _GstGLDisplay GstGLDisplay;\ntypedef struct _GstGLContext GstGLContext;\n#define gst_gl_display_new() (NULL)\n#define gst_gl_display_create_context(d, c, o, e) (0)\n#define gst_gl_display_add_context(d, c) ((void)0)\n#define GST_GL_DISPLAY_CONTEXT_TYPE "gst.gl.GLDisplay"\n#define gst_context_set_gl_display(c, d) ((void)0)'
-          for f in dlls/winegstreamer/unixlib.c dlls/winegstreamer/wg_parser.c; do
-            if grep -q '#include <gst/gl/gl.h>' "${f}"; then
-              sed -i "s|#include <gst/gl/gl.h>|${SHIM}|" "${f}"
-              echo "OK: ${f} gst-gl 垫片已注入"
-            else
-              echo "WARN: ${f} 未见 gst/gl 头（可能上游已改）"
+          # ---------- 2) unixlib.c: 定义 + env 读取 + 跳过 GL 初始化 ----------
+          U="dlls/winegstreamer/unixlib.c"
+          perl -0pi -e 's{(GstGLDisplay \*gl_display;)}{$1\nint wine_gst_no_gl = -1;}' "${U}"
+
+          # 注意：\t / \n 必须由 perl 双引号字符串展开，不能走 $ENV（$ENV 不做转义）。
+          if grep -q 'media_converter_init' "${U}"; then
+            perl -0pi -e '
+              my $e = "\tif (wine_gst_no_gl == -1)\n\t\twine_gst_no_gl = getenv(\"WINE_GST_NO_GL\") && atoi(getenv(\"WINE_GST_NO_GL\"));\n\n";
+              my $b = "\tif (wine_gst_no_gl) {\n\t\tif (!media_converter_init())\n\t\t\treturn STATUS_UNSUCCESSFUL;\n\t\treturn STATUS_SUCCESS;\n\t}\n\t\n";
+              s{(    if \(!\(gl_display = gst_gl_display_new\(\)\)\))}{$e$b$1};
+            ' "${U}"
+            echo "OK: ${U} env 读取 + media_converter_init 短路分支已注入"
+          else
+            perl -0pi -e '
+              my $e = "\tif (wine_gst_no_gl == -1)\n\t\twine_gst_no_gl = getenv(\"WINE_GST_NO_GL\") && atoi(getenv(\"WINE_GST_NO_GL\"));\n\n";
+              my $b = "\tif (wine_gst_no_gl)\n\t\treturn STATUS_SUCCESS;\n\t\n";
+              s{(    if \(!\(gl_display = gst_gl_display_new\(\)\)\))}{$e$b$1};
+            ' "${U}"
+            echo "OK: ${U} env 读取 + 直接返回分支已注入（该树无 media_converter_init）"
+          fi
+
+          # ---------- 3) wg_parser.c: use_opengl 钩子 ----------
+          # 注意：is_kirikiri_game() 是 76f6eab3 自己引入的函数，多数基线树没有，
+          # 因此空指针防护只在"已存在该调用"时才打（与上游 inject_gst_no_gl.py 一致）。
+          P="dlls/winegstreamer/wg_parser.c"
+          if ! grep -q 'params->use_opengl' "${P}" 2>/dev/null; then
+            echo "WARN: ${P} 无 params->use_opengl（上游已改结构），跳过该文件"
+          else
+            # kirikiri 空指针防护（仅在锚点存在时）
+            if grep -q 'if (is_kirikiri_game(game_id))' "${P}"; then
+              perl -0pi -e 's{if \(is_kirikiri_game\(game_id\)\)(\s*\n\s*params->use_opengl = false;)}{if (game_id \&\& is_kirikiri_game(game_id))$1}' "${P}"
+              echo "OK: ${P} kirikiri 空指针防护已加"
             fi
-          done
-
-          sed -i '/setenv("GST_GL_WINDOW"/d' dlls/winegstreamer/unixlib.c || true
+            # use_opengl 钩子：插在 calloc 之后（锚点缺失则回退到 use_opengl 赋值处）
+            if grep -q 'if (!(parser = calloc(1, sizeof(\*parser))))' "${P}"; then
+              perl -0pi -e '
+                my $h = "\n    if (wine_gst_no_gl)\n        params->use_opengl = false;\n";
+                s{(    if \(!\(parser = calloc\(1, sizeof\(\*parser\)\)\)\)\n        return E_OUTOFMEMORY;\n)}{$1$h};
+              ' "${P}"
+              echo "OK: ${P} use_opengl 钩子已插入（calloc 之后）"
+            else
+              echo "WARN: ${P} 无 calloc 锚点，改用 use_opengl 赋值处兜底"
+              perl -0pi -e 's{(if \(\(parser->use_opengl = params->use_opengl && gl_display\)\))}{if (wine_gst_no_gl) params->use_opengl = false;\n    $1}' "${P}"
+              grep -q 'wine_gst_no_gl' "${P}" || { echo "FAIL: ${P} 钩子注入失败"; exit 1; }
+            fi
+          fi
 
           echo "=== 修改后自检 ==="
-          if grep -rn '#include <gst/gl/gl.h>' dlls/winegstreamer/; then
-            echo "FAIL: 仍有 gst-gl 头文件引用"
+          grep -q 'int wine_gst_no_gl = -1;' "${U}"             || { echo "FAIL: unixlib.c 缺变量定义"; exit 1; }
+          grep -q 'WINE_GST_NO_GL' "${U}"                       || { echo "FAIL: unixlib.c 缺 env 读取"; exit 1; }
+          grep -q 'wine_gst_no_gl' "${P}"                       || { echo "FAIL: wg_parser.c 缺 use_opengl 钩子"; exit 1; }
+          if [ -f "${H}" ]; then
+            grep -q 'extern int wine_gst_no_gl;' "${H}"         || { echo "FAIL: unix_private.h 缺 extern"; exit 1; }
+          fi
+
+          # 确认没有残留的旧垫片方案
+          if grep -rn 'gst_gl_display_new() (NULL)' dlls/winegstreamer/ 2>/dev/null; then
+            echo "FAIL: 仍有旧的 GstGL 空桩垫片，与本补丁冲突"
             exit 1
           fi
-          echo "OK: 已无 gst/gl/gl.h 引用"
 
-          echo "--- 源码里出现的所有 gst_gl_* 函数，必须全部被垫片覆盖 ---"
-          BAD=0
-          for id in $(grep -oh 'gst_gl_[a-z_]*' dlls/winegstreamer/*.c | sort -u); do
-            case "${id}" in
-              gst_gl_display_new|gst_gl_display_create_context|gst_gl_display_add_context)
-                echo "  OK   ${id} (垫片)" ;;
-              *)
-                echo "  MISS ${id} 未被垫片覆盖"
-                BAD=1 ;;
-            esac
-          done
-          [ "${BAD}" = "0" ] || { echo "FAIL: 存在未覆盖的 gst-gl 符号"; exit 1; }
+          # 防回归：不允许把 \t \n 当字面量写进 C 源码
+          if grep -n '\\tif (wine_gst_no_gl\|\\n    if (wine_gst_no_gl' "${U}" "${P}" 2>/dev/null; then
+            echo "FAIL: 检测到字面量 \\t/\\n 泄漏进源码（转义未展开）"
+            exit 1
+          fi
 
-          echo "--- 类型名检查 ---"
-          for t in $(grep -oh 'GstGL[A-Za-z]*' dlls/winegstreamer/*.c | sort -u); do
-            case "${t}" in
-              GstGLDisplay|GstGLContext) echo "  OK   ${t} (垫片 typedef)" ;;
-              *) echo "  MISS ${t} 未定义"; BAD=1 ;;
-            esac
-          done
-          [ "${BAD}" = "0" ] || { echo "FAIL: 存在未定义的 GstGL 类型"; exit 1; }
-
-          echo "--- 垫片注入后的样子 ---"
-          grep -n -A7 'typedef struct _GstGLDisplay' dlls/winegstreamer/unixlib.c || echo "  (诊断：未见 _GstGLDisplay 定义；该树可能本就无需垫片)"
+          echo "OK: 运行时开关 WINE_GST_NO_GL 已就绪（默认走 GL，设为 1 则纯软解）"
+          echo "--- 关键代码 ---"
+          grep -n 'wine_gst_no_gl\|WINE_GST_NO_GL' "${U}" "${P}" "${H}" 2>/dev/null || true
           grep -n 'GSTREAMER,\[' configure.ac || true
-          grep -c 'gstreamer-gl-1.0' configure.ac || echo "OK: configure.ac 已无 gstreamer-gl-1.0"
 
       # ============================================================
       # 8.1 【关键修复】esync 头文件缺失
@@ -2032,7 +2088,7 @@ jobs:
           PCGST="${DEST}/pc-gst"
           rm -rf "${PCGST}"
           mkdir -p "${PCGST}"
-          for pc in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0 gstreamer-pbutils-1.0 gstreamer-controller-1.0; do
+          for pc in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0 gstreamer-pbutils-1.0 gstreamer-controller-1.0 gstreamer-gl-1.0 gstreamer-allocators-1.0; do
             if [ -f "${DEST}/lib/pkgconfig/${pc}.pc" ]; then cp "${DEST}/lib/pkgconfig/${pc}.pc" "${PCGST}/${pc}.pc"; fi
           done
           sed -i "s|^prefix=.*|prefix=${DEST}|" "${PCGST}"/*.pc
@@ -2046,7 +2102,7 @@ jobs:
           echo "gstreamer-1.0.pc 版本 = ${GSTV}"
           [ "${GSTV}" = "${GST_TAG}" ] || { echo "FATAL: 版本 ${GSTV} != 期望 ${GST_TAG}"; exit 1; }
 
-          for p in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0; do
+          for p in gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0 gstreamer-gl-1.0; do
             PKG_CONFIG_LIBDIR="${PCGST}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
             PKG_CONFIG_PATH="${PCGST}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
             pkg-config --exists "$p" || { echo "FATAL: 缺 ${p}.pc"; exit 1; }
