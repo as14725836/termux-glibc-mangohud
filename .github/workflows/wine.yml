@@ -1337,6 +1337,35 @@ jobs:
             grep -n 'machine-id' server/token.c 2>/dev/null | head -3 || true
             grep -n 'machine-id' dlls/ntdll/unix/system.c 2>/dev/null | head -3 || true
           fi
+
+          # ------------------------------------------------------------
+          # zoneinfo：Wine 默认读 /usr/share/zoneinfo 与 /etc/localtime。
+          #   dlls/ntdll/unix/system.c  get_tz_info_from_zoneinfo_name()
+          #       default_tzinfo_dir[] = "/usr/share/zoneinfo"
+          #   dlls/ntdll/unix/system.c  get_system_config_tz_info()
+          #       realpath( "/etc/localtime", path )
+          # Termux 上两者都不存在，于是每次取时区都刷
+          #   warn:ntdll:get_tz_info_from_zoneinfo_name Could not open
+          #   "/usr/share/zoneinfo/Asia/Shanghai"
+          # 且 TZ 未设置时 get_system_config_tz_info() 直接 return FALSE。
+          # 改成 Termux glibc 路径。内容锚点注入（不依赖行号），幂等；
+          # Proton 10.0 树不用这条路径，会自动跳过。
+          # ------------------------------------------------------------
+          _z="/tmp/wine-termux/fix_termux_zoneinfo.py"
+          mkdir -p /tmp/wine-termux
+          curl -fsSL --retry 2 -o "$_z" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/fix_termux_zoneinfo.py" \
+            || wget -q -O "$_z" "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/fix_termux_zoneinfo.py" \
+            || true
+          if [ ! -s "$_z" ]; then
+            _z="${GITHUB_WORKSPACE:-$PWD}/patches/wow64/fix_termux_zoneinfo.py"
+            [ -f "$_z" ] || { echo "WARN: fix_termux_zoneinfo.py 不可用，跳过"; _z=""; }
+          fi
+
+          if [ -n "${_z:-}" ]; then
+            python3 "$_z" "$(pwd)" || echo "WARN: zoneinfo 修复部分失败（不阻断构建）"
+            echo "zoneinfo self-check:"
+            grep -n 'default_tzinfo_dir\[\]\|realpath' dlls/ntdll/unix/system.c 2>/dev/null | head -3 || true
+          fi
       # ============================================================
       # 8.5 box64 指令缓存失效补丁（加壳自解密后需要刷新 JIT）
       # ============================================================

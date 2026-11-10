@@ -515,6 +515,12 @@ jobs:
           # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
           # 导致 SID 退化、系统 UUID 全 FF；改指 Termux glibc 路径。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
+          # zoneinfo：Wine 默认读 /usr/share/zoneinfo 与 /etc/localtime，
+          # Termux 上两者都不存在，导致反复告警
+          #   warn:ntdll:get_tz_info_from_zoneinfo_name Could not open
+          #   "/usr/share/zoneinfo/Asia/Shanghai"
+          # 且 TZ 未设置时 get_system_config_tz_info() 直接失败；改指 glibc 路径。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_zoneinfo.py" ..
           # WINEVMEMMAXSIZE (Pipetto f9224d6b): idempotent anchor inject
           if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q WINEVMEMMAXSIZE ../dlls/ntdll/unix/virtual.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. || echo "WARN: vmem inject"
@@ -2163,6 +2169,12 @@ jobs:
           # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
           # 导致 SID 退化、系统 UUID 全 FF；改指 Termux glibc 路径。
           python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
+          # zoneinfo：Wine 默认读 /usr/share/zoneinfo 与 /etc/localtime，
+          # Termux 上两者都不存在，导致反复告警
+          #   warn:ntdll:get_tz_info_from_zoneinfo_name Could not open
+          #   "/usr/share/zoneinfo/Asia/Shanghai"
+          # 且 TZ 未设置时 get_system_config_tz_info() 直接失败；改指 glibc 路径。
+          python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_zoneinfo.py" ..
           # WINEVMEMMAXSIZE (Pipetto f9224d6b): idempotent anchor inject
           if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q WINEVMEMMAXSIZE ../dlls/ntdll/unix/virtual.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. || echo "WARN: vmem inject"
