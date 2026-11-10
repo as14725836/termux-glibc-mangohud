@@ -47,13 +47,19 @@
 =================== 修复 ===================
 A. 把 ff_pcm_byte_order_reverse_bsf 定义成 FFBitStreamFilter 布局，
    AVBitStreamFilter 作为第一个成员（.p），从而：
-     * 对 unix_private.h 的 extern const AVBitStreamFilter 声明仍然兼容
-       （首成员地址 == 结构体地址）；
-     * av_bsf_alloc 通过 ff_bsf() 上转型后能正确读到 priv_data_size/init/filter。
+     * av_bsf_alloc 通过 ff_bsf() 上转型后能正确读到 priv_data_size/init/filter；
+     * **必须同步改 unix_private.h 的 extern 声明**（见 E）。首成员地址 ==
+       结构体地址只在运行期成立，编译期仍是两个不同的 struct，不同步会触发
+       error: conflicting types for 'ff_pcm_byte_order_reverse_bsf'。
 B. 用 FFmpeg 8 的 FFBSFContext 布局复刻 ctx 私有区，取回 buffer_pkt / eof，
    从而恢复 ff_bsf_get_packet 的等价行为（不再依赖 ctx->internal）。
 C. channels -> ch_layout.nb_channels。
 D. 若源码树里 bsf_internal.h 可用（内部 API 头），优先直接用官方 ff_bsf_get_packet。
+
+E. 同步 unix_private.h 的 extern 声明为 FFBitStreamFilter（并把该 typedef
+   前移到头文件里，供 .c 与 .h 共用），否则 .c 内定义与 .h 内声明类型冲突。
+   同时把 unix_demuxer.c 里 av_bsf_alloc(&ff_...) 改成取首成员 &ff_....p，
+   避免 -Wincompatible-pointer-types 在 configure.ac 无条件的 -Werror 下失败。
 
 幂等：含标记 WINEDMO_FFMPEG8_FIX 则跳过。
 """
@@ -109,20 +115,11 @@ NEW_BODY = r'''/*
 
 /*
  * FFmpeg 8.x 的 FFBitStreamFilter（见 libavcodec/bsf_internal.h）。
- * 若该头可用则直接用官方定义，避免布局漂移。
+ * 该 typedef 已由 unix_private.h 统一提供（供 .c 与 .h 共用同一类型），
+ * 这里只在头文件未提供时兜底定义，避免重复定义。
  */
 #ifdef HAVE_LIBAVCODEC_BSF_INTERNAL_H
 # include <libavcodec/bsf_internal.h>
-#else
-typedef struct FFBitStreamFilter
-{
-    AVBitStreamFilter p;                /* 必须是首成员 */
-    int priv_data_size;
-    int (*init)( AVBSFContext *ctx );
-    int (*filter)( AVBSFContext *ctx, AVPacket *pkt );
-    void (*close)( AVBSFContext *ctx );
-    void (*flush)( AVBSFContext *ctx );
-} FFBitStreamFilter;
 #endif
 
 /*
@@ -268,9 +265,8 @@ static const enum AVCodecID codec_ids[] =
 /*
  * 按 FFBitStreamFilter 布局定义（AVBitStreamFilter 为首成员），
  * 这样 av_bsf_alloc() 通过 ff_bsf() 上转型读取 priv_data_size / init / filter
- * 才是正确的；对 unix_private.h 里
- *     extern const AVBitStreamFilter ff_pcm_byte_order_reverse_bsf;
- * 的声明依然成立（首成员地址 == 结构体地址）。
+ * 才是正确的。unix_private.h 的 extern 声明已同步为 FFBitStreamFilter，
+ * 两处类型一致，不会出现 conflicting types。
  */
 const FFBitStreamFilter ff_pcm_byte_order_reverse_bsf =
 {
@@ -290,6 +286,82 @@ const FFBitStreamFilter ff_pcm_byte_order_reverse_bsf =
 '''
 
 
+# unix_private.h 需要把 FFBitStreamFilter 的 typedef 提到 extern 声明之前，
+# 并把声明从 AVBitStreamFilter 换成 FFBitStreamFilter。
+HDR_REL = "dlls/winedmo/unix_private.h"
+DEMUXER_REL = "dlls/winedmo/unix_demuxer.c"
+
+HDR_OLD_DECL = "extern const AVBitStreamFilter ff_pcm_byte_order_reverse_bsf;"
+
+HDR_NEW_DECL = """#ifndef WINE_FF_BSF_DEFINED
+#define WINE_FF_BSF_DEFINED
+/* FFmpeg 8.x 把 filter/init/close 从 AVBitStreamFilter 移到了 FFBitStreamFilter，
+ * 且 av_bsf_alloc() 会把传入指针按 FFBitStreamFilter 解引用。本结构体别名用于
+ * 定义 ff_pcm_byte_order_reverse_bsf，AVBitStreamFilter 必须是首成员。 */
+typedef struct FFBitStreamFilter
+{
+    AVBitStreamFilter p;
+    int priv_data_size;
+    int (*init)( AVBSFContext *ctx );
+    int (*filter)( AVBSFContext *ctx, AVPacket *pkt );
+    void (*close)( AVBSFContext *ctx );
+    void (*flush)( AVBSFContext *ctx );
+} FFBitStreamFilter;
+#endif /* WINE_FF_BSF_DEFINED */
+extern const FFBitStreamFilter ff_pcm_byte_order_reverse_bsf;"""
+
+DEMUXER_OLD_CALL = "av_bsf_alloc( &ff_pcm_byte_order_reverse_bsf, &stream->filter )"
+DEMUXER_NEW_CALL = "av_bsf_alloc( &ff_pcm_byte_order_reverse_bsf.p, &stream->filter )"
+
+
+def _read(path):
+    return io.open(path, "r", encoding="utf-8", errors="replace").read()
+
+
+def _write(path, text):
+    io.open(path, "w", encoding="utf-8", newline="\n").write(text)
+
+
+def fix_header(root):
+    """把 unix_private.h 的 extern 声明同步成 FFBitStreamFilter。"""
+    path = os.path.join(root, HDR_REL)
+    if not os.path.isfile(path):
+        print("WARN: 未找到 %s，跳过" % path)
+        return 0
+
+    src = _read(path)
+    if HDR_NEW_DECL in src:
+        print("NOOP: unix_private.h 已同步")
+        return 0
+    if HDR_OLD_DECL not in src:
+        print("WARN: unix_private.h 未见原声明，跳过（上游结构可能已变）")
+        return 0
+
+    _write(path, src.replace(HDR_OLD_DECL, HDR_NEW_DECL, 1))
+    print("OK: 已同步 %s 的 extern 声明 -> FFBitStreamFilter" % path)
+    return 0
+
+
+def fix_demuxer(root):
+    """av_bsf_alloc 取首成员地址，规避 -Wincompatible-pointer-types。"""
+    path = os.path.join(root, DEMUXER_REL)
+    if not os.path.isfile(path):
+        print("WARN: 未找到 %s，跳过" % path)
+        return 0
+
+    src = _read(path)
+    if DEMUXER_NEW_CALL in src:
+        print("NOOP: unix_demuxer.c 已同步")
+        return 0
+    if DEMUXER_OLD_CALL not in src:
+        print("WARN: unix_demuxer.c 未见原调用，跳过")
+        return 0
+
+    _write(path, src.replace(DEMUXER_OLD_CALL, DEMUXER_NEW_CALL, 1))
+    print("OK: 已同步 %s 的 av_bsf_alloc 实参 -> &...bsf.p" % path)
+    return 0
+
+
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else "."
     path = os.path.join(root, TARGET_REL)
@@ -297,21 +369,25 @@ def main():
         print("SKIP: 未找到 %s" % path)
         return 0
 
-    src = io.open(path, "r", encoding="utf-8", errors="replace").read()
+    src = _read(path)
 
     if MARKER in src:
         print("NOOP: 已修复 -> %s" % path)
-        return 0
-
-    if "struct AVBSFInternal" not in src:
+        rc = 0
+    elif "struct AVBSFInternal" not in src:
         print("WARN: 未识别到原版 struct AVBSFInternal，放弃修改以策安全")
         print("      文件: %s" % path)
         return 0
+    else:
+        _write(path, NEW_BODY)
+        print("OK: 已修复 %s" % path)
+        print("    %d -> %d 字节" % (len(src), len(NEW_BODY)))
+        rc = 0
 
-    io.open(path, "w", encoding="utf-8", newline="\n").write(NEW_BODY)
-    print("OK: 已修复 %s" % path)
-    print("    %d -> %d 字节" % (len(src), len(NEW_BODY)))
-    return 0
+    # 声明与调用点必须一并同步，否则 -Werror 下编译失败
+    fix_header(root)
+    fix_demuxer(root)
+    return rc
 
 
 if __name__ == "__main__":
