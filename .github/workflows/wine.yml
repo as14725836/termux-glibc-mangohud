@@ -2703,6 +2703,54 @@ jobs:
           find "${TARGET}" -maxdepth 5 -iname '*fex*' | sort
 
       # ============================================================
+      # 18.6 构建并安装 FEX unixlib (.so)
+      # libarm64ecfex.dll 是 PE 侧；wine 还需要配套的
+      # lib/wine/aarch64-unix/libarm64ecfex.so 提供宿主服务
+      # （madvise / VMA 命名 / SHM stats）。缺了它，emulated 进程里
+      # load_builtin_unixlib 会失败 -> nodrv_CreateWindow -> 软件跑不起来。
+      # FEX 的 CMake 没有 add_subdirectory(UnixLib)，必须手动编译。
+      # ============================================================
+      - name: 构建并安装 FEX unixlib (.so)
+        shell: bash
+        run: |
+          set -eux
+          
+          TARGET="/tmp/wine-install-wow64"
+          DEST="${TARGET}/lib/wine/aarch64-unix"
+          SRC=/opt/fex-src/Source/Windows/UnixLib
+          
+          mkdir -p "${DEST}"
+          
+          if [ ! -f "${SRC}/FEXUnixLib.cpp" ]; then
+            echo "ERROR: 找不到 FEX UnixLib 源码: ${SRC}"
+            exit 1
+          fi
+          
+          CXX=""
+          for c in aarch64-linux-gnu-g++ aarch64-unknown-linux-gnu-g++ g++; do
+            if command -v "$c" >/dev/null 2>&1; then CXX="$c"; break; fi
+          done
+          if [ -z "$CXX" ]; then
+            echo "安装 aarch64 交叉 C++ 编译器"
+            apt-get update -qq || true
+            apt-get install -y --no-install-recommends g++-aarch64-linux-gnu || true
+            CXX=aarch64-linux-gnu-g++
+          fi
+          echo "CXX=$CXX"
+          "$CXX" --version | head -1
+          
+          "$CXX" -shared -fPIC -O2 -std=c++17 -o /tmp/libarm64ecfex.so "${SRC}/FEXUnixLib.cpp"
+          
+          install -m0755 /tmp/libarm64ecfex.so "${DEST}/libarm64ecfex.so"
+          install -m0755 /tmp/libarm64ecfex.so "${DEST}/libwow64fex.so"
+          
+          echo "=== unixlib 安装结果 ==="
+          file "${DEST}/libarm64ecfex.so" "${DEST}/libwow64fex.so"
+          readelf -h "${DEST}/libarm64ecfex.so" | grep Machine
+          readelf -d "${DEST}/libarm64ecfex.so" | grep NEEDED || true
+          nm -D "${DEST}/libarm64ecfex.so" | grep __wine_unix_call_funcs
+
+      # ============================================================
       # 19. Termux runtime path fix (patchelf)
       # ============================================================
       - name: 写入 Termux runtime path
