@@ -1934,6 +1934,80 @@ jobs:
           FSHACK_PATCH="${GITHUB_WORKSPACE:-$PWD}/0001-fshack-Implement-AMD-FSR-upscaler-for-fullscreen-hac.patch" \
             python3 "$_P" "$(pwd)" || echo "WARN: fshack fsr 注入跳过（不阻断构建）"
 
+      # ============================================================
+      # Android 39-bit + execmod 适配（与 wine.yml 一致）
+      # 1) 39-bit VA：压低地址空间上限（默认 0x7fffffff0000 在 39 位设备不可用）
+      # 2) wineserver 给 64 位 EXE 的默认基址 0x7ff6..0x7ff8 超出 39 位空间
+      # 3) Android SELinux 禁 execmod：PE 段重定位后变脏，mprotect(EXEC) 返回 EACCES,
+      #    上游 read() 兜底只覆盖 mmap 失败路径；强制 pread 让镜像落在匿名内存
+      # ============================================================
+      - name: Android 39-bit + execmod 适配
+        shell: bash
+        run: |
+          set -eux
+          
+          _SRC="$(cat /tmp/wine_srcdir.txt 2>/dev/null || echo wine)"
+          cd "$_SRC"
+          echo "  wine source: $(pwd)"
+          
+          echo "--- 1) 39-bit VA ---"
+          for F in dlls/ntdll/unix/virtual.c loader/preloader.c; do
+            [ -f "$F" ] || continue
+            perl -pi -e 's/0x7ffff0000000/0x7f00000000/g' "$F"
+            perl -pi -e 's/0x7ff000000000/0x7f00000000/g' "$F"
+            perl -pi -e 's/0x7ff600000000/0x7ffe000000/g' "$F"
+            perl -pi -e 's/0x7ffffe000000/0x7ffe000000/g' "$F"
+            perl -pi -e 's/0x7fffffff0000/0x7fffff0000/g' "$F"
+            echo "  39-bit: rewrote $F"
+          done
+          grep -q "0x7fffff0000" dlls/ntdll/unix/virtual.c
+          
+          echo "--- 2) wineserver EXE 镜像地址区间 ---"
+          if [ -f server/mapping.c ]; then
+            perl -pi -e 's/0x7ff600000000/0x7f00000000/g; s/0x7ff800000000/0x7f80000000/g' server/mapping.c
+            grep -n "0x7f00000000\|0x7f80000000" server/mapping.c
+            if grep -q "0x7ff600000000\|0x7ff800000000" server/mapping.c; then
+              echo "FATAL: server/mapping.c 仍有高地址常量"
+              exit 1
+            fi
+            echo "  server 39-bit: OK"
+          else
+            echo "  server/mapping.c 不存在，跳过"
+          fi
+          
+          echo "--- 3) Android execmod（PE 镜像强制 pread）---"
+          python3 - <<'PYEOF'
+          import io
+          p = 'dlls/ntdll/unix/virtual.c'
+          src = io.open(p, encoding='utf-8', errors='surrogateescape').read()
+          if 'android: force pread path' in src:
+              print('  execmod: already applied, skip')
+              raise SystemExit(0)
+          i = src.find('map_pe_header( void *ptr')
+          if i < 0:
+              print('  execmod: FATAL map_pe_header not found')
+              raise SystemExit(1)
+          NL = chr(10)
+          guard = None
+          for g in ('if (!*removable && map_size)', 'if (!removable && map_size)'):
+              j = src.find(g, i)
+              if j >= 0:
+                  guard = g
+                  break
+          if guard is None:
+              print('  execmod: FATAL guard not found')
+              raise SystemExit(1)
+          j = src.find(guard, i)
+          ls = src.rfind(NL, 0, j) + 1
+          ind = src[ls:j]
+          ins = ind + '/* android: force pread path */' + NL + ind + '*removable = TRUE;' + NL + NL
+          src = src[:ls] + ins + src[ls:]
+          io.open(p, 'w', encoding='utf-8', errors='surrogateescape').write(src)
+          print('  execmod: injected')
+          PYEOF
+          grep -q 'android: force pread path' dlls/ntdll/unix/virtual.c
+          echo "  execmod: OK"
+
       - name: 配置并编译 Wine WOW64
         run: |
 
