@@ -1599,6 +1599,32 @@ jobs:
 
 
       # ============================================================
+      # 7.55 Android 39-bit：wineserver 侧 EXE 镜像地址区间适配
+      # server/mapping.c assign_exe_map_address() 把 64 位 EXE 映射在
+      # 0x7ff600000000~0x7ff800000000（Windows 默认基址），39 位 VA 设备
+      # 无法映射该区域，重定位 delta 算飞 → execute 缺页 / kernel32 加载失败。
+      # ============================================================
+      - name: Android 39-bit 适配（wineserver EXE 镜像地址区间）
+        shell: bash
+        run: |
+          set -eux
+          
+          cd "${WINE_SOURCE_DIR}/source"
+          
+          F="server/mapping.c"
+          test -f "$F"
+          
+          perl -pi -e 's/0x7ff600000000/0x7f00000000/g; s/0x7ff800000000/0x7f80000000/g' "$F"
+          
+          echo "=== server/mapping.c 适配后 ==="
+          grep -n "0x7f00000000\|0x7f80000000\|0x7ff600000000\|0x7ff800000000" "$F" || true
+          
+          if grep -q "0x7ff600000000\|0x7ff800000000" "$F"; then
+            echo "FATAL: server/mapping.c 仍有未适配的高地址常量"
+            exit 1
+          fi
+          echo "  server 39-bit 适配: OK"
+      # ============================================================
       # 7.6 Android execmod 适配：PE 镜像强制 pread
       # Android SELinux untrusted_app 禁止 execmod（COW 脏页不可执行），
       # 只允许 execmem（匿名页可执行）。PE 段重定位后变脏，
