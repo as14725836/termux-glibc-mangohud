@@ -2753,6 +2753,45 @@ jobs:
       # ============================================================
       # 19. Termux runtime path fix (patchelf)
       # ============================================================
+
+      # ============================================================
+      # 18.7 PE 架构校验（防止 arm64ec 静默退化成纯 ARM64）
+      # mstorsjo llvm-mingw 的 -marm64x 不生成 ARM64X，产物全是纯 ARM64，
+      # x86_64 进程拿不到 winex11.drv/user32 -> nodrv_CreateWindow。
+      # ============================================================
+      - name: PE 架构校验（ARM64EC/ARM64X）
+        shell: bash
+        run: |
+          set -eux
+          
+          python3 - <<'PYEOF'
+          import os, struct, collections
+          root = '/tmp/wine-install-wow64/lib/wine'
+          names = {0x8664:'x86_64', 0xaa64:'ARM64', 0x14c:'i386', 0xa641:'ARM64EC', 0xa64e:'ARM64X'}
+          stats = collections.Counter()
+          for d in sorted(os.listdir(root)):
+              p = os.path.join(root, d)
+              if not os.path.isdir(p):
+                  continue
+              for f in os.listdir(p):
+                  if not f.lower().endswith(('.dll','.exe','.drv','.sys')):
+                      continue
+                  try:
+                      b = open(os.path.join(p, f), 'rb').read(4096)
+                      pe = struct.unpack_from('<I', b, 0x3c)[0]
+                      m = struct.unpack_from('<H', b, pe + 4)[0]
+                      stats[(d, names.get(m, hex(m)))] += 1
+                  except Exception:
+                      pass
+          for k, v in sorted(stats.items()):
+              print('  %-18s %-8s %d' % (k[0], k[1], v))
+          ec = sum(v for (d, n), v in stats.items() if n in ('ARM64EC','ARM64X'))
+          print('ARM64EC/ARM64X total =', ec)
+          if ec == 0:
+              print('WARNING: 没有任何 ARM64EC/ARM64X 模块')
+              print('         x86_64 进程会拿不到 winex11.drv/user32 -> nodrv_CreateWindow')
+              print('         请用 llvm_mingw_repo=bylaws/llvm-mingw 重新构建')
+          PYEOF
       - name: 写入 Termux runtime path
         shell: bash
         run: |
