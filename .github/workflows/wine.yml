@@ -1670,6 +1670,47 @@ jobs:
           
           grep -q 'android: force pread path' dlls/ntdll/unix/virtual.c
           echo "  execmod fix: verified"
+      # ============================================================
+      # Android GLX 像素格式容错
+      # win32u 的 formats_count 可能大于 winex11 的 nb_pixel_formats，
+      # 走到 glx_pixel_format_from_format() 直接 assert 中止。
+      # 上游 EGL 分支用 (format-1)%count 容错，这里给 GLX 分支补上。
+      # ============================================================
+      - name: Android GLX 像素格式容错
+        shell: bash
+        run: |
+          set -eux
+          
+          cd "${WINE_SOURCE_DIR}/source"
+          
+          python3 - <<'PYEOF'
+          import io
+          p = 'dlls/winex11.drv/opengl.c'
+          src = io.open(p, encoding='utf-8', errors='surrogateescape').read()
+          if 'android: clamp pixel format' in src:
+              print('  glx-clamp: already applied, skip')
+              raise SystemExit(0)
+          old = 'assert( format > 0 && format <= nb_pixel_formats );'
+          if old not in src:
+              print('  glx-clamp: FATAL assert anchor not found')
+              raise SystemExit(1)
+          new = (
+              '/* android: clamp pixel format */'
+              + 'if (format <= 0 || format > nb_pixel_formats)'
+              + '{'
+              + 'WARN("invalid pixel format %d, nb_pixel_formats %d, clamping", format, nb_pixel_formats);'
+              + 'if (!nb_pixel_formats) return &pixel_formats[0];'
+              + 'format = ((format > 0 ? format - 1 : 0) % nb_pixel_formats) + 1;'
+              + '}'
+              )
+          src = src.replace(old, new, 1)
+          io.open(p, 'w', encoding='utf-8', errors='surrogateescape').write(src)
+          print('  glx-clamp: injected')
+          PYEOF
+          
+          grep -q 'android: clamp pixel format' dlls/winex11.drv/opengl.c
+          echo "  glx-clamp: OK"
+
       - name: winegstreamer task pool 兜底 + 诊断打点
         shell: bash
         run: |
