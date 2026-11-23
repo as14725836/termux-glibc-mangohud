@@ -443,10 +443,6 @@ jobs:
           # winedmo BSF 适配 FFmpeg 8.x ABI（幂等；无该文件自动 SKIP）
           python3 "${GITHUB_WORKSPACE}/patches/fix_winedmo_ffmpeg8.py" . \
             || echo "WARN: winedmo fix skipped"
-          # dwproton esync/fsync/tgmux 补丁（须最先，早于 tweaks/sed）
-          if [ "$PROTON_REPO" = "dawn.wine/dawn-winery/wine-dwproton" ]; then
-            for _p in 01-esync 02-fsync 03-tgmux-shm-path 04-esync-integration 05-tgmux-integration; do _f="$GITHUB_WORKSPACE/patches/dwproton/$_p.patch"; [ -f "$_f" ] || continue; git apply -p1 "$_f" 2>/dev/null && echo "OK: $_p" || { patch -p1 --batch --forward --no-backup-if-mismatch < "$_f" >/dev/null 2>&1 && echo "OK: $_p" || echo "SKIP: $_p"; }; done
-          fi
           if [ "${{ github.event.inputs.enable_termux_env_tweaks || 'true' }}" = "true" ]; then
             echo "=== Termux 环境优化 ==="
             PY=python3
