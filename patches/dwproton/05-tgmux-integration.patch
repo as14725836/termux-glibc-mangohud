@@ -1,0 +1,451 @@
+diff --git a/server/request.c b/server/request.c
+index b42a16f..71326f2 100644
+--- a/server/request.c
++++ b/server/request.c
+@@ -43,6 +43,7 @@
+ #include <sys/un.h>
+ #endif
+ #include <unistd.h>
++#include "wine/tgmux_paths.h"
+ #include <poll.h>
+ #ifdef __APPLE__
+ # include <mach/mach_time.h>
+@@ -673,7 +674,7 @@ static char *create_server_dir( int force )
+     if (asprintf( &base_dir, "%s/.wineserver", config_dir ) == -1)
+         fatal_error( "out of memory\n" );
+ #else
+-    if (asprintf( &base_dir, "/tmp/.wine-%u", getuid() ) == -1)
++    if (asprintf( &base_dir, "%s/.wine-%u", tgmux_tmpdir(), getuid() ) == -1)
+         fatal_error( "out of memory\n" );
+ #endif
+     create_dir( base_dir, &st2 );
+diff --git a/server/mapping.c b/server/mapping.c
+index c3d13e5..d23995f 100644
+--- a/server/mapping.c
++++ b/server/mapping.c
+@@ -39,6 +39,7 @@
+ #include "windef.h"
+ #include "winternl.h"
+ #include "ddk/wdm.h"
++#include "wine/tgmux_emulator.h"
+ 
+ #include "file.h"
+ #include "handle.h"
+@@ -298,7 +299,8 @@ void init_memory(void)
+ {
+     host_page_mask = sysconf( _SC_PAGESIZE ) - 1;
+     free_map_addr( 0x60000000, 0x1c000000 );
+-    free_available_high_map_addr( 0x600000000000, 0x100000000000 );
++    if (wine_emulator_detected()) free_available_high_map_addr( 0x4000000000, 0x1000000000 );
++    else free_available_high_map_addr( 0x600000000000, 0x100000000000 );
+ }
+ 
+ static void ranges_dump( struct object *obj, int verbose )
+diff --git a/server/token.c b/server/token.c
+index 7d8983f..903cc90 100644
+--- a/server/token.c
++++ b/server/token.c
+@@ -33,6 +33,8 @@
+ #include <stdint.h>
+ #endif
+ 
++#include "wine/tgmux_paths.h"
++
+ #include "ntstatus.h"
+ #define WIN32_NO_STATUS
+ #include "windef.h"
+@@ -223,15 +225,16 @@ const struct sid *security_unix_uid_to_sid( uid_t uid )
+ 
+ void init_user_sid(void)
+ {
++    const char *machine_id_path = tgmux_machine_id();
+     char machine_id[17];
+     uint64_t id;
+     size_t n;
+     FILE *f;
+ 
+-    f = fopen( "/etc/machine-id", "r" );
++    f = fopen( machine_id_path, "r" );
+     if (!f)
+     {
+-        fprintf( stderr, "Failed to open /etc/machine-id, error %s.\n", strerror( errno ));
++        fprintf( stderr, "Failed to open %s, error %s.\n", machine_id_path, strerror( errno ));
+         return;
+     }
+ 
+@@ -240,7 +243,7 @@ void init_user_sid(void)
+ 
+     if (n != 16)
+     {
+-        fprintf( stderr, "Failed to read /etc/machine-id, error %s.\n", strerror( errno ));
++        fprintf( stderr, "Failed to read %s, error %s.\n", machine_id_path, strerror( errno ));
+         return;
+     }
+     machine_id[n] = 0;
+diff --git a/server/unicode.c b/server/unicode.c
+index bb39b55..51271cf 100644
+--- a/server/unicode.c
++++ b/server/unicode.c
+@@ -26,6 +26,7 @@
+ #include <stdarg.h>
+ #include <unistd.h>
+ #include <limits.h>
++#include "wine/tgmux_paths.h"
+ #ifdef HAVE_SYS_SYSCTL_H
+ # include <sys/sysctl.h>
+ #endif
+@@ -327,7 +328,9 @@ static char *get_nls_dir(void)
+ /* load the case mapping table */
+ struct fd *load_intl_file(void)
+ {
+-    static const char *nls_dirs[] = { NULL, DATADIR "/wine/nls", "/usr/local/share/wine/nls", "/usr/share/wine/nls" };
++    static const char *nls_dirs[] = { NULL, DATADIR "/wine/nls",
++                                      WINE_TGMUX_PATH( "/local/share/wine/nls" ),
++                                      WINE_TGMUX_PATH( "/share/wine/nls" ) };
+     static const WCHAR nt_pathW[] = {'C',':','\\','w','i','n','d','o','w','s','\\',
+         's','y','s','t','e','m','3','2','\\','l','_','i','n','t','l','.','n','l','s',0};
+     static const struct unicode_str nt_name = { nt_pathW, sizeof(nt_pathW) };
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index 30c7895..def6e10 100644
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -67,6 +67,7 @@
+ #include <sys/thr.h>
+ #endif
+ #include <unistd.h>
++#include "wine/tgmux_paths.h"
+ #ifdef __APPLE__
+ #include <crt_externs.h>
+ #include <spawn.h>
+@@ -85,6 +86,7 @@
+ #include "unix_private.h"
+ #include "ddk/wdm.h"
+ 
++#include "esync.h"
+ #include "fsync.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(server);
+@@ -1339,7 +1341,8 @@ static const char *init_server_dir( dev_t dev, ino_t ino )
+ #ifdef __ANDROID__  /* there's no /tmp dir on Android */
+     asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
+ #else
+-    asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
++    asprintf( &dir, "%s/.wine-%u/server-%llx-%llx", tgmux_tmpdir(), getuid(),
++              (unsigned long long)dev, (unsigned long long)ino );
+ #endif
+     return dir;
+ }
+@@ -1405,7 +1408,8 @@ static int setup_config_dir(void)
+         mkdir( "drive_c", 0777 );
+         set_case_insensitive( "drive_c" );
+         symlink( "../drive_c", "dosdevices/c:" );
+-        symlink( "/", "dosdevices/z:" );
++        /* Keep Z: inside the Termux private tree instead of exposing "/" to Windows apps. */
++        symlink( tgmux_zdrive_root(), "dosdevices/z:" );
+     }
+     else if (errno != EEXIST) fatal_perror( "cannot create %s/dosdevices", config_dir );
+ 
+@@ -1748,6 +1752,11 @@ size_t server_init_process(void)
+                 inproc_device_fd = FSYNC_USED_BY_SERVER;
+                 fsync_init( pid );
+             }
++            else if (reply->inproc_device == ESYNC_USED_BY_SERVER)
++            {
++                int shm_fd = wine_server_receive_fd( &handle );
++                esync_init( shm_fd );
++            }
+             else if (reply->inproc_device)
+             {
+                 inproc_device_fd = wine_server_receive_fd( &handle );
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index a63a769..a9c4b34 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -23,6 +23,7 @@
+ #endif
+ 
+ #include "config.h"
++#include "wine/tgmux_paths.h"
+ 
+ #include <fcntl.h>
+ #include <string.h>
+@@ -266,7 +267,6 @@ static ULONG_PTR system_cpu_mask;
+ 
+ static pthread_mutex_t timezone_mutex = PTHREAD_MUTEX_INITIALIZER;
+ 
+-static const char default_tzinfo_dir[] = "/usr/share/zoneinfo";
+ static const WCHAR Time_ZonesW[] = { '\\','R','e','g','i','s','t','r','y','\\',
+     'M','a','c','h','i','n','e','\\',
+     'S','o','f','t','w','a','r','e','\\',
+@@ -2530,7 +2530,7 @@ static GUID *get_system_uuid( GUID *uuid )
+     int fd;
+ 
+     memset( uuid, 0xff, sizeof(*uuid) );
+-    if ((fd = open( "/var/lib/dbus/machine-id", O_RDONLY )) != -1)
++    if ((fd = open( tgmux_machine_id(), O_RDONLY )) != -1)
+     {
+         unsigned char buf[32], *p = buf;
+         if (read( fd, buf, sizeof(buf) ) == sizeof(buf))
+@@ -3317,11 +3317,11 @@ static BOOL get_tz_info_from_zoneinfo_name( RTL_DYNAMIC_TIME_ZONE_INFORMATION *t
+         'T','Z',' ','M','a','p','p','i','n','g',
+         0 };
+ 
+-    const char *tzinfo_dir = getenv( "TZDIR" );
++    const char *tzinfo_dir = tgmux_zonedir();
+     UNICODE_STRING key_name, win_name;
+     WCHAR nameW[64], win_nameW[64];
+     OBJECT_ATTRIBUTES attr;
+-    char buf[MAX_PATH];
++    char buf[PATH_MAX];
+     HANDLE key;
+     BOOL ret;
+     FILE *f;
+@@ -3330,8 +3330,7 @@ static BOOL get_tz_info_from_zoneinfo_name( RTL_DYNAMIC_TIME_ZONE_INFORMATION *t
+ 
+     if (strlen(name) >= ARRAY_SIZE(nameW)) return FALSE;
+ 
+-    if (!tzinfo_dir) tzinfo_dir = default_tzinfo_dir;
+-    snprintf( buf, sizeof(buf), "%s/%s", tzinfo_dir, name );
++    if (snprintf( buf, sizeof(buf), "%s/%s", tzinfo_dir, name ) >= sizeof(buf)) return FALSE;
+ 
+     if (!(f = fopen( buf, "r" )))
+     {
+@@ -3360,9 +3359,9 @@ static BOOL get_tz_info_from_zoneinfo_name( RTL_DYNAMIC_TIME_ZONE_INFORMATION *t
+ 
+ static BOOL get_system_config_tz_info( RTL_DYNAMIC_TIME_ZONE_INFORMATION *tzi, int year )
+ {
+-    char path[PATH_MAX];
++    char path[PATH_MAX], tzinfo_dir[PATH_MAX], localtime_path[PATH_MAX];
+     const char *str;
+-    int len;
++    size_t len;
+ 
+     if ((str = getenv( "TZ" )))
+     {
+@@ -3370,9 +3369,13 @@ static BOOL get_system_config_tz_info( RTL_DYNAMIC_TIME_ZONE_INFORMATION *tzi, i
+         return get_tz_info_from_zoneinfo_name( tzi, str, year );
+     }
+ 
+-    if (!realpath( "/etc/localtime", path )) return FALSE;
+-    len = sizeof( default_tzinfo_dir ) - 1;
+-    if (strncmp( path, default_tzinfo_dir, len )) return FALSE;
++    if (snprintf( localtime_path, sizeof(localtime_path), "%s/localtime", tgmux_sysconfdir() )
++        >= sizeof(localtime_path)) return FALSE;
++    /* Resolve both paths so a relocated or symlinked zoneinfo tree also matches. */
++    if (!realpath( localtime_path, path ) || !realpath( tgmux_zonedir(), tzinfo_dir )) return FALSE;
++    len = strlen( tzinfo_dir );
++    while (len && tzinfo_dir[len - 1] == '/') len--;
++    if (strncmp( path, tzinfo_dir, len )) return FALSE;
+     if (path[len] != '/') return FALSE;
+     return get_tz_info_from_zoneinfo_name( tzi, path + len + 1, year );
+ }
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index 3499847..e564a2e 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -38,6 +38,7 @@
+ #include <stdio.h>
+ #include <limits.h>
+ #include <unistd.h>
++#include "wine/tgmux_paths.h"
+ #ifdef HAVE_MNTENT_H
+ #include <mntent.h>
+ #endif
+@@ -907,6 +908,12 @@ static char *get_default_drive_device( const char *root )
+         fclose( f );
+     }
+     /* look through fstab too in case it's not mounted (for instance if it's an audio CD) */
++    if (!device && (f = fopen( WINE_TGMUX_PATH( "/etc/fstab" ), "r" )))
++    {
++        device = parse_mount_entries( f, st.st_dev, st.st_ino );
++        fclose( f );
++    }
++    /* Termux keeps its own fstab inside the glibc prefix. */
+     if (!device && (f = fopen( "/etc/fstab", "r" )))
+     {
+         device = parse_mount_entries( f, st.st_dev, st.st_ino );
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index 6cf894f..d00869a 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -24,6 +24,8 @@
+ 
+ #include "config.h"
+ 
++#include "wine/tgmux_paths.h"
++
+ #include <assert.h>
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -482,22 +484,10 @@ char *get_alternate_wineloader( WORD machine )
+ }
+ 
+ 
+-static void preloader_exec( char **argv, WORD machine )
++static void preloader_exec( char **argv )
+ {
+ #ifdef HAVE_WINE_PRELOADER
+-#if !defined(__arm__) && !defined(__aarch64__)
+-    const char *p;
+-
+-    if (machine == IMAGE_FILE_MACHINE_AMD64
+-        && ((p = remove_tail( argv[1], "x86_64-unix/wine" )) || (p = remove_tail( argv[1], "i386-unix/wine64" ))))
+-    {
+-        asprintf( &argv[0], "%si386-unix/wine64-preloader", p );
+-        asprintf( &argv[1], "%si386-unix/wine64", p );
+-    }
+-    else
+-#endif
+-        asprintf( &argv[0], "%s-preloader", argv[1] );
+-
++    asprintf( &argv[0], "%s-preloader", argv[1] );
+ #ifdef __APPLE__
+     {
+         posix_spawnattr_t attr;
+@@ -520,10 +510,14 @@ static NTSTATUS loader_exec( char **argv, WORD machine )
+ 
+     putenv( noexec );
+ 
+-    if (((argv[1] = get_alternate_wineloader( machine )))) preloader_exec( argv, machine );
++    if (((argv[1] = get_alternate_wineloader( machine )))) preloader_exec( argv );
+ 
+     argv[1] = strdup( wineloader );
+-    preloader_exec( argv, machine );
++    preloader_exec( argv );
++    {
++        int err = errno;
++        ERR( "failed to execute loader %s: %s\n", debugstr_a(argv[1]), strerror(err) );
++    }
+     return STATUS_INVALID_IMAGE_FORMAT;
+ }
+ 
+@@ -1651,8 +1645,13 @@ NTSTATUS load_builtin( const struct pe_image_info *image_info, UNICODE_STRING *n
+         loadorder = LO_BUILTIN;  /* builtin with no fallback since mapping a fake dll is not useful */
+     }
+ 
+-    if (is_arm64ec() && image_info->is_hybrid && search_machine == IMAGE_FILE_MACHINE_AMD64)
+-        search_machine = current_machine;
++    if (current_machine == IMAGE_FILE_MACHINE_ARM64 && search_machine == IMAGE_FILE_MACHINE_AMD64)
++    {
++        /* Force the x64 view when replacing a non-hybrid x64 image. */
++        if (!image_info->is_hybrid && !machine) machine = IMAGE_FILE_MACHINE_AMD64;
++        /* The ARM64X builtin lives in the aarch64 directory. */
++        search_machine = IMAGE_FILE_MACHINE_ARM64;
++    }
+ 
+     switch (loadorder)
+     {
+@@ -2200,6 +2199,31 @@ static void load_wow64_ntdll( USHORT machine )
+     TRACE("loaded %s at %p\n", debugstr_w(path), module );
+     free( path );
+ }
++/***********************************************************************
++ *           init_dns_config
++ *
++ * Termux glibc reads resolv.conf under its own prefix, not the regular
++ * Termux etc directory. Use the same path for checking and creating it.
++ */
++static void init_dns_config(void)
++{
++    const char *resolv_path = WINE_TGMUX_PATH( "/etc/resolv.conf" );
++    const char *dns_server;
++    FILE *f;
++
++    if (!access( resolv_path, R_OK )) return;
++
++    /* Limit resolver delays even if the config cannot be created. */
++    setenv( "RES_OPTIONS", "timeout:1 attempts:1", 0 );
++    if (!(dns_server = getenv( "WINE_DNS_SERVER" ))) dns_server = "8.8.8.8";
++    if (!(f = fopen( resolv_path, "w" ))) return;
++
++    fprintf( f, "# Auto-generated by Wine for Termux\n" );
++    fprintf( f, "nameserver %s\n", dns_server );
++    fprintf( f, "nameserver 1.1.1.1\n" );
++    fclose( f );
++}
++
+ 
+ 
+ /***********************************************************************
+@@ -2368,11 +2392,26 @@ static void hacks_init(void)
+     }
+ 
+     if ((env_str = getenv( "WINE_KERNEL_STACK_SIZE" )))
+-        kernel_stack_size = atoll( env_str ) * 1024;
++    {
++        SIZE_T min_size = min_kernel_stack + kernel_stack_guard_size;
++        long pthread_min = PTHREAD_STACK_MIN;
++        long long size_kb;
++        char *end;
++
++        if (pthread_min > 0) min_size = max( min_size, (SIZE_T)pthread_min );
++        errno = 0;
++        size_kb = strtoll( env_str, &end, 10 );
++        /* Leave room for virtual_alloc_thread_stack() to round up to 64 KiB. */
++        if (errno || end == env_str || *end || size_kb <= 0 ||
++            (unsigned long long)size_kb > ((SIZE_T)-1 - 0xffff) / 1024 ||
++            (SIZE_T)size_kb * 1024 < min_size)
++            WARN( "Invalid WINE_KERNEL_STACK_SIZE %s, using the default.\n", debugstr_a( env_str ) );
++        else kernel_stack_size = (SIZE_T)size_kb * 1024;
++    }
+     else if (sgi && !strcmp( sgi, "702700" ))
+         kernel_stack_size = 200 * 1024;
+     if (kernel_stack_size != 0x100000)
+-        ERR( "HACK: setting kernel_stack_size to %luKB.\n", (long)(kernel_stack_size / 1024) );
++        ERR( "HACK: setting kernel_stack_size to %luKB.\n", (unsigned long)(kernel_stack_size / 1024) );
+ 
+     if (sgi && (0
+         || !strcmp(sgi, "1364780") || !strcmp(sgi, "1952120") || !strcmp(sgi, "2154900") /* Street Fighter 6 */
+@@ -2811,6 +2850,7 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
+ 
+     virtual_init();
+     init_environment();
++    init_dns_config();
+ 
+ #ifdef __APPLE__
+     apple_main_thread();
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index c270d50..95fbffa 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -23,6 +23,7 @@
+ 
+ #include <pthread.h>
+ #include <signal.h>
++#include "wine/tgmux_emulator.h"
+ #include "unixlib.h"
+ #include "wine/unixlib.h"
+ #include "wine/server.h"
+@@ -432,9 +433,8 @@ extern void call_raise_user_exception_dispatcher(void);
+ #define IMAGE_DLLCHARACTERISTICS_PREFER_NATIVE 0x0010 /* Wine extension */
+ 
+ extern const char * wine_debuginfostr_pc(void *pc);
+-
+ #define TICKSPERSEC 10000000
+-#define NSECPERSEC 1000000000
++#define NSECPERSEC ((LONG64)1000000000)
+ #define SECS_1601_TO_1970  ((369 * 365 + 89) * (ULONGLONG)86400)
+ 
+ static inline ULONGLONG ticks_from_time_t( time_t time )
+diff --git a/include/Makefile.in b/include/Makefile.in
+index 4351581..cf9111c 100644
+--- a/include/Makefile.in
++++ b/include/Makefile.in
+@@ -761,6 +761,7 @@ SOURCES = \
+ 	socketapi.h \
+ 	softpub.h \
+ 	spatialaudioclient.idl \
++	intsafe.h \
+ 	specstrings.h \
+ 	specstrings_strict.h \
+ 	sperror.h \
+@@ -993,6 +994,9 @@ SOURCES = \
+ 	wine/strmbase.h \
+ 	wine/svcctl.idl \
+ 	wine/test.h \
++	wine/tgmux_emulator.h \
++	wine/tgmux_fsync.h \
++	wine/tgmux_paths.h \
+ 	wine/unixlib.h \
+ 	wine/vulkan.h \
+ 	wine/vulkan_driver.h \
