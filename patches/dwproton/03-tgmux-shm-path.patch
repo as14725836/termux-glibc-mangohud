@@ -1,0 +1,256 @@
+diff --git a/include/wine/tgmux_paths.h b/include/wine/tgmux_paths.h
+new file mode 100644
+index 0000000..c765689
+--- /dev/null
++++ b/include/wine/tgmux_paths.h
+@@ -0,0 +1,114 @@
++/*
++ * Wine for Termux glibc
++ *
++ * Centralised host path policy for a private Termux-glibc prefix.
++ *
++ * Wine normally takes its host paths from FHS defaults (/usr, /etc, /tmp).
++ * On Termux those locations either do not exist or are the Bionic rootfs,
++ * while the whole glibc toolchain lives in a private prefix such as
++ * /data/data/com.termux/files/usr/glibc. Route every such path through this
++ * header so the prefix can be changed at build time or overridden per run.
++ *
++ * Resolution order, highest priority first:
++ *   1. environment variable (runtime override)
++ *   2. value baked in from WINE_TGMUX_PREFIX, or WINE_TGMUX_DEFAULT_TMPDIR
++ *      for the temp directory, which lives in $PREFIX/tmp rather than in
++ *      the glibc prefix. The machine-id default is fixed independently of
++ *      WINE_TGMUX_PREFIX.
++ *
++ * WINE_TGMUX_PREFIX can be overridden at configure time, e.g.
++ *   CPPFLAGS='-DWINE_TGMUX_PREFIX="/data/data/com.termux/files/usr/glibc"'
++ */
++
++#ifndef __WINE_TGMUX_PATHS_H
++#define __WINE_TGMUX_PATHS_H
++
++#ifndef __WINE_CONFIG_H
++#error This header must be included after config.h
++#endif
++
++#include <stdlib.h>
++
++#ifndef WINE_TGMUX_PREFIX
++#define WINE_TGMUX_PREFIX "/data/data/com.termux/files/usr/glibc"
++#endif
++
++/* Compile-time concatenation of a literal suffix onto the prefix. */
++#define WINE_TGMUX_PATH( suffix ) WINE_TGMUX_PREFIX suffix
++
++/*
++ * Termux keeps its scratch space in $PREFIX/tmp, which lives outside the
++ * glibc prefix and is the only reliably writable temp directory on Android.
++ */
++#ifndef WINE_TGMUX_DEFAULT_TMPDIR
++#define WINE_TGMUX_DEFAULT_TMPDIR "/data/data/com.termux/files/usr/tmp"
++#endif
++
++/* Return `name` from the environment when set and non-empty, else `fallback`. */
++static inline const char *tgmux_env( const char *name, const char *fallback )
++{
++    const char *value = getenv( name );
++    return (value && *value) ? value : fallback;
++}
++
++/* $WINE_TMP_DIR, then $TMPDIR, then the Termux tmp directory. */
++static inline const char *tgmux_tmpdir(void)
++{
++    const char *value = getenv( "WINE_TMP_DIR" );
++    if (value && *value) return value;
++    value = getenv( "TMPDIR" );
++    if (value && *value) return value;
++    return WINE_TGMUX_DEFAULT_TMPDIR;
++}
++
++static inline const char *tgmux_sysconfdir(void)
++{
++    return tgmux_env( "WINE_SYSCONF_DIR", WINE_TGMUX_PATH( "/etc" ) );
++}
++
++/*
++ * All machine-id readers share this single default, independent of
++ * WINE_TGMUX_PREFIX and WINE_SYSCONF_DIR. Do not probe other host paths.
++ * WINE_MACHINE_ID remains an explicit runtime override.
++ */
++static inline const char *tgmux_machine_id(void)
++{
++    return tgmux_env( "WINE_MACHINE_ID", "/data/data/com.termux/files/usr/glibc/etc/machine-id" );
++}
++
++static inline const char *tgmux_datadir(void)
++{
++    return tgmux_env( "WINE_DATA_DIR", WINE_TGMUX_PATH( "/share" ) );
++}
++
++static inline const char *tgmux_localstatedir(void)
++{
++    return tgmux_env( "WINE_LOCALSTATE_DIR", WINE_TGMUX_PATH( "/var" ) );
++}
++
++/* $WINE_TZDIR, then the standard $TZDIR, then the Termux glibc zoneinfo tree. */
++static inline const char *tgmux_zonedir(void)
++{
++    return tgmux_env( "WINE_TZDIR", tgmux_env( "TZDIR", WINE_TGMUX_PATH( "/share/zoneinfo" ) ) );
++}
++
++/*
++ * Root exported as the Z: drive. Exposing the whole host root inside a
++ * Windows prefix is not desirable on Android, so keep it inside the
++ * Termux private tree by default.
++ */
++static inline const char *tgmux_zdrive_root(void)
++{
++    return tgmux_env( "WINE_ZDRIVE_ROOT", "/data/data/com.termux/files" );
++}
++
++/* The host font directory shipped with the glibc prefix. Overridable at
++ * runtime so the font set can be relocated without rebuilding Wine.
++ * Used by the freetype font loader to scan the Termux glibc font tree
++ * directly, independent of fontconfig's own configuration. */
++static inline const char *tgmux_fontdir(void)
++{
++    return tgmux_env( "WINE_FONT_DIR", WINE_TGMUX_PATH( "/share/fonts" ) );
++}
++
++#endif /* __WINE_TGMUX_PATHS_H */
+diff --git a/include/wine/tgmux_fsync.h b/include/wine/tgmux_fsync.h
+new file mode 100644
+index 0000000..b29a813
+--- /dev/null
++++ b/include/wine/tgmux_fsync.h
+@@ -0,0 +1,66 @@
++/*
++ * Termux glibc backing files for the fsync shared-memory region.
++ *
++ * The region is a plain file inside the Termux temp directory. POSIX
++ * shm_open() is never used: /dev/shm is neither dependable nor in the
++ * same mount namespace as the Termux glibc prefix on Android.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ */
++
++#ifndef __WINE_TGMUX_FSYNC_H
++#define __WINE_TGMUX_FSYNC_H
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++
++#include "wine/tgmux_paths.h"
++
++#define TGMUX_FSYNC_NAME_SIZE 64
++
++/* Match the server directory identity; inode numbers alone are not unique across devices. */
++static inline void tgmux_fsync_name( char *name, unsigned long long device, unsigned long long inode )
++{
++    snprintf( name, TGMUX_FSYNC_NAME_SIZE, "/wine-%llx-%llx-fsync", device, inode );
++}
++
++/*
++ * Backing directory for the fsync shared-memory region.
++ *
++ * Always the Termux temp directory: $WINE_FSYNC_SHM_DIR, then $WINE_TMP_DIR,
++ * then $TMPDIR, then /data/data/com.termux/files/usr/tmp. There is no
++ * /dev/shm fallback because Bionic /dev/shm is a separate mount and is
++ * frequently absent or read-only. wineserver and every client must agree,
++ * so the override is read here rather than at each call site.
++ */
++static inline const char *tgmux_fsync_dir(void)
++{
++    return tgmux_env( "WINE_FSYNC_SHM_DIR", tgmux_tmpdir() );
++}
++
++/* Use negative flags for unlink. `dir` must be an absolute path. */
++static inline int tgmux_fsync_shm( const char *dir, const char *name, int flags, mode_t mode )
++{
++    int ret, err;
++    char *path;
++
++    if (!dir || dir[0] != '/')
++    {
++        errno = EINVAL;
++        return -1;
++    }
++    if (asprintf( &path, "%s%s", dir, name ) < 0) return -1;
++    ret = flags < 0 ? unlink( path ) : open( path, flags | O_NOFOLLOW, mode );
++    err = errno;
++    free( path );
++    errno = err;
++    return ret;
++}
++
++#endif /* __WINE_TGMUX_FSYNC_H */
+diff --git a/include/wine/tgmux_emulator.h b/include/wine/tgmux_emulator.h
+new file mode 100644
+index 0000000..7932ba7
+--- /dev/null
++++ b/include/wine/tgmux_emulator.h
+@@ -0,0 +1,58 @@
++#ifndef __WINE_TGMUX_EMULATOR_H
++#define __WINE_TGMUX_EMULATOR_H
++
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++/*
++ * Detect whether wine runs under an x86 emulator (box64 / box86 / FEX / qemu).
++ * Such emulators translate the guest code and execute it inside their own
++ * (host) address space, so wine assumptions based on native layout break:
++ * the preloader's 47-bit high address area, seccomp decisions of the form
++ * "native libs live in high addresses", and the 64KB alignment those
++ * emulators impose on wine's own mappings.
++ *   WINE_EMULATOR=<name>     force on
++ *   WINE_EMULATOR=0          force off (escape hatch)
++ */
++static inline int wine_emulator_detected(void)
++{
++    static int cached = -1;
++    const char *env;
++
++    if (cached >= 0) return cached;
++    cached = 0;
++
++    if ((env = getenv( "WINE_EMULATOR" )) && *env)
++    {
++        cached = (env[0] == '0' && !env[1]) ? 0 : 1;
++        return cached;
++    }
++
++    if (getenv( "BOX64_VERSION" ) || getenv( "BOX64_LD_LIBRARY_PATH" ) || getenv( "BOX64_LOG" ) ||
++        getenv( "BOX86_VERSION" ) || getenv( "BOX86_LD_LIBRARY_PATH" ) ||
++        getenv( "FEX_TSOENABLED" ) || getenv( "FEX_ROOTFS" ) || getenv( "FEX_APP_CONFIG" ) ||
++        getenv( "QEMU_LD_PREFIX" ) || getenv( "QEMU_CPU" ))
++        cached = 1;
++
++#ifdef __linux__
++    if (!cached)
++    {
++        /* box64/box86/FEX keep the guest binary mapped in their own process,
++         * so /proc/self/exe points at the emulator itself. */
++        char buf[256];
++        ssize_t len = readlink( "/proc/self/exe", buf, sizeof(buf) - 1 );
++
++        if (len > 0)
++        {
++            buf[len] = 0;
++            if (strstr( buf, "box64" ) || strstr( buf, "box86" ) ||
++                strstr( buf, "FEXInterpreter" ) || strstr( buf, "qemu-" ))
++                cached = 1;
++        }
++    }
++#endif
++    return cached;
++}
++
++#endif /* __WINE_TGMUX_EMULATOR_H */
