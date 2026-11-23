@@ -449,36 +449,6 @@ jobs:
             command -v python3 >/dev/null 2>&1 || PY=python
             "${PY}" "$GITHUB_WORKSPACE/patches/termux-env/termux_env_tweaks.py" "$PWD" || true
           fi
-          # === dwproton: 应用 esync / fsync / tgmux(/dev/shm) 补丁集 ===
-          # 仅在构建 dawn.wine/dawn-winery/wine-dwproton 时应用。
-          # 补丁以 dwproton 上游 11.0-17 为基准，必须按 01..05 顺序：
-          #   01 esync 实现 / 02 fsync 的 /dev/shm 改造 / 03 tgmux 路径实现
-          #   04 esync 集成点 / 05 tgmux 集成点
-          # 放在下方 /tmp 批量 sed 改写之前，避免补丁上下文被 sed 破坏。
-          if [ "$PROTON_REPO" = "dawn.wine/dawn-winery/wine-dwproton" ]; then
-            echo "=== dwproton: 应用 esync/fsync/tgmux 补丁集 ==="
-            _dw_dir="$GITHUB_WORKSPACE/patches/dwproton"
-            if [ -d "$_dw_dir" ]; then
-              for _p in 01-esync 02-fsync 03-tgmux-shm-path 04-esync-integration 05-tgmux-integration; do
-                _pf="$_dw_dir/${_p}.patch"
-                if [ ! -f "$_pf" ]; then
-                  echo "SKIP: 缺少 $_pf"; continue
-                fi
-                if git apply --check -p1 "$_pf" >/dev/null 2>&1; then
-                  git apply -p1 "$_pf" && echo "OK(git apply): ${_p}.patch" \
-                    || echo "WARN: ${_p}.patch git apply 失败"
-                elif patch -p1 --batch --forward --dry-run --no-backup-if-mismatch < "$_pf" >/dev/null 2>&1; then
-                  patch -p1 --batch --forward --no-backup-if-mismatch < "$_pf" >/dev/null \
-                    && echo "OK(patch): ${_p}.patch" \
-                    || echo "WARN: ${_p}.patch 应用失败"
-                else
-                  echo "SKIP: ${_p}.patch 不适用于当前源码（可能已包含）"
-                fi
-              done
-            else
-              echo "WARN: 未找到 $_dw_dir"
-            fi
-          fi
           # Termux / Android /tmp 路径修复
           echo "修复 Termux 路径问题..."
           find . \
