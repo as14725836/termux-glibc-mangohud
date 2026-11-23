@@ -1,0 +1,361 @@
+diff --git a/server/Makefile.in b/server/Makefile.in
+index d9ac607..233a6d7 100644
+--- a/server/Makefile.in
++++ b/server/Makefile.in
+@@ -15,6 +15,7 @@ SOURCES = \
+ 	event.c \
+ 	fd.c \
+ 	file.c \
++	esync.c \
+ 	fsync.c \
+ 	handle.c \
+ 	hook.c \
+diff --git a/server/main.c b/server/main.c
+index 7f6912b..9606bad 100644
+--- a/server/main.c
++++ b/server/main.c
+@@ -42,6 +42,7 @@
+ #include "unicode.h"
+ #include "security.h"
+ 
++#include "esync.h"
+ #include "fsync.h"
+ 
+ /* command-line options */
+@@ -264,6 +265,8 @@ int main( int argc, char *argv[] )
+ 
+     if (do_fsync())
+         fsync_init();
++    else if (do_esync())
++        esync_init();
+ 
+     if (debug_level) fprintf( stderr, "wineserver: starting (pid=%ld)\n", (long) getpid() );
+     set_current_time();
+diff --git a/server/thread.c b/server/thread.c
+index e8b61e1..0368b0e 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -61,6 +61,7 @@
+ #include "user.h"
+ #include "security.h"
+ 
++#include "esync.h"
+ #include "fsync.h"
+ 
+ /* thread queues */
+@@ -1854,6 +1855,11 @@ DECL_HANDLER(init_first_thread)
+     {
+         reply->inproc_device = FSYNC_USED_BY_SERVER;
+     }
++    else if (do_esync())
++    {
++        reply->inproc_device = ESYNC_USED_BY_SERVER;
++        send_client_fd( process, esync_get_shm_fd(), reply->inproc_device );
++    }
+     else if ((fd = get_inproc_device_fd()) >= 0)
+     {
+         reply->inproc_device = get_process_id( process ) | 1;
+diff --git a/server/inproc_sync.c b/server/inproc_sync.c
+index a7020ef..726363f 100644
+--- a/server/inproc_sync.c
++++ b/server/inproc_sync.c
+@@ -34,10 +34,15 @@
+ #include "thread.h"
+ #include "user.h"
+ 
++#include "esync.h"
+ #include "fsync.h"
+ 
+ #include "ntsync_tmp.h"
+ 
++#ifdef HAVE_SYS_EVENTFD_H
++# include <sys/eventfd.h>
++#endif
++
+ #ifdef NTSYNC_IOC_EVENT_READ
+ 
+ #include <fcntl.h>
+@@ -60,6 +65,7 @@ int get_inproc_device_fd(void)
+             fprintf( stderr, "ntsync: up and running.\n" );
+         }
+         else if (do_fsync()) fd = FSYNC_USED_BY_SERVER;
++        else if (do_esync()) fd = ESYNC_USED_BY_SERVER;
+         else fprintf( stderr, "wineserver: using server-side synchronization.\n" );
+     }
+     return fd;
+@@ -70,6 +76,7 @@ struct inproc_sync
+     struct object          obj;  /* object header */
+     enum inproc_sync_type  type;
+     int                    fd;
++    unsigned int           esync_shm_idx;  /* ESYNC SHM INDEX */
+     struct list            entry;
+ };
+ 
+@@ -121,6 +128,13 @@ struct inproc_sync *create_inproc_internal_sync( int manual, int signaled )
+         event->type = manual ? FSYNC_MANUAL_SERVER : FSYNC_AUTO_SERVER;
+         event->fd = fsync_alloc_shm( signaled, 0xdeadbeef );
+     }
++    else if (do_esync())
++    {
++        event->type = manual ? ESYNC_MANUAL_SERVER : ESYNC_AUTO_SERVER;
++        event->fd = eventfd( signaled ? 1 : 0, EFD_CLOEXEC | EFD_NONBLOCK );
++        if (event->fd != -1)
++            event->esync_shm_idx = esync_alloc_shm( event->fd, event->type, signaled, 0 );
++    }
+     else
+     {
+         event->type = INPROC_SYNC_INTERNAL;
+@@ -148,6 +162,13 @@ struct inproc_sync *create_inproc_event_sync( int manual, int signaled )
+         event->type = manual ? FSYNC_MANUAL_EVENT : FSYNC_AUTO_EVENT;
+         event->fd = fsync_alloc_shm( signaled, 0xdeadbeef );
+     }
++    else if (do_esync())
++    {
++        event->type = manual ? ESYNC_MANUAL_EVENT : ESYNC_AUTO_EVENT;
++        event->fd = eventfd( signaled ? 1 : 0, EFD_CLOEXEC | EFD_NONBLOCK );
++        if (event->fd != -1)
++            event->esync_shm_idx = esync_alloc_shm( event->fd, event->type, signaled, 0 );
++    }
+     else
+     {
+         event->type = INPROC_SYNC_EVENT;
+@@ -175,6 +196,13 @@ struct inproc_sync *create_inproc_mutex_sync( thread_id_t owner, unsigned int co
+         mutex->type = FSYNC_MUTEX;
+         mutex->fd = fsync_alloc_shm( owner, count );
+     }
++    else if (do_esync())
++    {
++        mutex->type = ESYNC_MUTEX;
++        mutex->fd = eventfd( owner == 0 ? 1 : 0, EFD_CLOEXEC | EFD_NONBLOCK );
++        if (mutex->fd != -1)
++            mutex->esync_shm_idx = esync_alloc_shm( mutex->fd, mutex->type, owner == 0 ? 1 : 0, 0 );
++    }
+     else
+     {
+         mutex->type = INPROC_SYNC_MUTEX;
+@@ -203,6 +231,13 @@ struct inproc_sync *create_inproc_semaphore_sync( unsigned int initial, unsigned
+         sem->type = FSYNC_SEMAPHORE;
+         sem->fd = fsync_alloc_shm( initial, max );
+     }
++    else if (do_esync())
++    {
++        sem->type = ESYNC_SEMAPHORE;
++        sem->fd = eventfd( initial, EFD_CLOEXEC | EFD_NONBLOCK | EFD_SEMAPHORE );
++        if (sem->fd != -1)
++            sem->esync_shm_idx = esync_alloc_shm( sem->fd, sem->type, initial, max );
++    }
+     else
+     {
+         sem->type = INPROC_SYNC_SEMAPHORE;
+@@ -231,6 +266,7 @@ void signal_inproc_sync( struct inproc_sync *sync )
+     __u32 count;
+     if (debug_level) fprintf( stderr, "set_inproc_event %d\n", sync->fd );
+     if (do_fsync()) fsync_set_event( sync->fd );
++    else if (do_esync()) esync_set_event( sync->fd, sync->esync_shm_idx, sync->type );
+     else            ioctl( sync->fd, NTSYNC_IOC_EVENT_SET, &count );
+ }
+ 
+@@ -239,6 +275,7 @@ void reset_inproc_sync( struct inproc_sync *sync )
+     __u32 count;
+     if (debug_level) fprintf( stderr, "reset_inproc_event %d\n", sync->fd );
+     if (do_fsync()) fsync_reset_event( sync->fd );
++    else if (do_esync()) esync_reset_event( sync->fd, sync->esync_shm_idx, sync->type );
+     else            ioctl( sync->fd, NTSYNC_IOC_EVENT_RESET, &count );
+ }
+ 
+@@ -247,7 +284,7 @@ static int inproc_sync_signal( struct object *obj, unsigned int access, int sign
+     struct inproc_sync *sync = (struct inproc_sync *)obj;
+     assert( obj->ops == &inproc_sync_ops );
+ 
+-    if (!do_fsync())
++    if (!do_fsync() && !do_esync())
+         assert( sync->type == INPROC_SYNC_INTERNAL || sync->type == INPROC_SYNC_EVENT ); /* never called for mutex / semaphore */
+     assert( signal == 0 || signal == 1 ); /* never called from signal_object */
+ 
+@@ -275,12 +312,18 @@ void abandon_inproc_mutexes( thread_id_t tid )
+             fsync_abandon_mutex( mutex->fd, tid );
+         return;
+     }
++    else if (do_esync())
++    {
++        LIST_FOR_EACH_ENTRY( mutex, &inproc_mutexes, struct inproc_sync, entry )
++            esync_abandon_mutex( mutex->fd, mutex->esync_shm_idx, tid );
++        return;
++    }
+ 
+     LIST_FOR_EACH_ENTRY( mutex, &inproc_mutexes, struct inproc_sync, entry )
+         ioctl( mutex->fd, NTSYNC_IOC_MUTEX_KILL, &tid );
+ }
+ 
+-static int get_obj_inproc_sync( struct object *obj, int *type )
++static int get_obj_inproc_sync( struct object *obj, int *type, unsigned int *esync_shm_idx )
+ {
+     struct object *sync;
+     int fd = -1;
+@@ -290,6 +333,7 @@ static int get_obj_inproc_sync( struct object *obj, int *type )
+     {
+         struct inproc_sync *inproc = (struct inproc_sync *)sync;
+         *type = inproc->type;
++        if (esync_shm_idx) *esync_shm_idx = inproc->esync_shm_idx;
+         fd = inproc->fd;
+     }
+ 
+@@ -341,7 +385,7 @@ void abandon_inproc_mutexes( thread_id_t tid )
+ {
+ }
+ 
+-static int get_obj_inproc_sync( struct object *obj, int *type )
++static int get_obj_inproc_sync( struct object *obj, int *type, unsigned int *esync_shm_idx )
+ {
+     return -1;
+ }
+@@ -352,13 +396,19 @@ DECL_HANDLER(get_inproc_sync_fd)
+ {
+     struct object *obj;
+     int fd;
++    unsigned int esync_shm_idx = 0;
+ 
+     if (!(obj = get_handle_obj( current->process, req->handle, 0, NULL ))) return;
+ 
+     reply->access = get_handle_access( current->process, req->handle );
+ 
+-    if ((fd = get_obj_inproc_sync( obj, &reply->type )) < 0) set_error( STATUS_NOT_IMPLEMENTED );
++    if ((fd = get_obj_inproc_sync( obj, &reply->type, &esync_shm_idx )) < 0) set_error( STATUS_NOT_IMPLEMENTED );
+     else if (do_fsync()) reply->fsync_shm_idx = fsync_grab_shm_idx( fd );
++    else if (do_esync())
++    {
++        reply->fsync_shm_idx = esync_shm_idx;
++        send_client_fd( current->process, fd, req->handle );
++    }
+     else send_client_fd( current->process, fd, req->handle );
+ 
+     release_object( obj );
+diff --git a/dlls/ntdll/Makefile.in b/dlls/ntdll/Makefile.in
+index 1469e3a..bafacaa 100644
+--- a/dlls/ntdll/Makefile.in
++++ b/dlls/ntdll/Makefile.in
+@@ -50,6 +50,7 @@ SOURCES = \
+ 	unix/debug.c \
+ 	unix/env.c \
+ 	unix/file.c \
++	unix/esync.c \
+ 	unix/fsync.c \
+ 	unix/loader.c \
+ 	unix/loadorder.c \
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index f8d0a95..99bb396 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -72,6 +72,7 @@
+ #include "wine/debug.h"
+ #include "unix_private.h"
+ 
++#include "esync.h"
+ #include "fsync.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(sync);
+@@ -770,6 +771,11 @@ void close_inproc_sync( HANDLE handle )
+         fsync_close( handle );
+         return;
+     }
++    else if (do_esync())
++    {
++        esync_close ( handle );
++        return;
++    }
+     if (inproc_device_fd < 0) return;
+     if ((cache = get_cached_inproc_sync( handle )))
+     {
+@@ -786,6 +792,7 @@ static NTSTATUS inproc_release_semaphore( HANDLE handle, ULONG count, ULONG *pre
+     NTSTATUS ret;
+ 
+     if (do_fsync()) return fsync_release_semaphore( handle, count, prev_count );
++    if (do_esync()) return esync_release_semaphore( handle, count, prev_count );
+ 
+     if (inproc_device_fd < 0) return STATUS_NOT_IMPLEMENTED;
+     if ((ret = get_inproc_sync( handle, INPROC_SYNC_SEMAPHORE, SEMAPHORE_MODIFY_STATE, &stack, &sync ))) return ret;
+@@ -800,6 +807,7 @@ static NTSTATUS inproc_query_semaphore( HANDLE handle, SEMAPHORE_BASIC_INFORMATI
+     NTSTATUS ret;
+ 
+     if (do_fsync()) return fsync_query_semaphore( handle, info );
++    if (do_esync()) return esync_query_semaphore( handle, info, NULL );
+ 
+     if (inproc_device_fd < 0) return STATUS_NOT_IMPLEMENTED;
+     if ((ret = get_inproc_sync( handle, INPROC_SYNC_SEMAPHORE, SEMAPHORE_QUERY_STATE, &stack, &sync ))) return ret;
+@@ -814,6 +822,7 @@ static NTSTATUS inproc_set_event( HANDLE handle, LONG *prev_state )
+     NTSTATUS ret;
+ 
+     if (do_fsync()) return fsync_set_event( handle, prev_state );
++    if (do_esync()) return esync_set_event( handle );
+ 
+     if (inproc_device_fd < 0) return STATUS_NOT_IMPLEMENTED;
+     if ((ret = get_inproc_sync( handle, INPROC_SYNC_EVENT, EVENT_MODIFY_STATE, &stack, &sync ))) return ret;
+@@ -828,6 +837,7 @@ static NTSTATUS inproc_reset_event( HANDLE handle, LONG *prev_state )
+     NTSTATUS ret;
+ 
+     if (do_fsync()) return fsync_reset_event( handle, prev_state );
++    if (do_esync()) return esync_reset_event( handle );
+ 
+     if (inproc_device_fd < 0) return STATUS_NOT_IMPLEMENTED;
+     if ((ret = get_inproc_sync( handle, INPROC_SYNC_EVENT, EVENT_MODIFY_STATE, &stack, &sync ))) return ret;
+@@ -842,6 +852,7 @@ static NTSTATUS inproc_pulse_event( HANDLE handle, LONG *prev_state )
+     NTSTATUS ret;
+ 
+     if (do_fsync()) return fsync_pulse_event( handle, prev_state );
++    if (do_esync()) return esync_pulse_event( handle );
+ 
+     if (inproc_device_fd < 0) return STATUS_NOT_IMPLEMENTED;
+     if ((ret = get_inproc_sync( handle, INPROC_SYNC_EVENT, EVENT_MODIFY_STATE, &stack, &sync ))) return ret;
+@@ -856,6 +867,7 @@ static NTSTATUS inproc_query_event( HANDLE handle, EVENT_BASIC_INFORMATION *info
+     NTSTATUS ret;
+ 
+     if (do_fsync()) return fsync_query_event( handle, info );
++    if (do_esync()) return esync_query_event( handle, info, NULL );
+ 
+     if (inproc_device_fd < 0) return STATUS_NOT_IMPLEMENTED;
+     if ((ret = get_inproc_sync( handle, INPROC_SYNC_EVENT, EVENT_QUERY_STATE, &stack, &sync ))) return ret;
+@@ -870,6 +882,7 @@ static NTSTATUS inproc_release_mutex( HANDLE handle, LONG *prev_count )
+     NTSTATUS ret;
+ 
+     if (do_fsync()) return fsync_release_mutex( handle, prev_count );
++    if (do_esync()) return esync_release_mutex( handle, prev_count );
+ 
+     if (inproc_device_fd < 0) return STATUS_NOT_IMPLEMENTED;
+     if ((ret = get_inproc_sync( handle, INPROC_SYNC_MUTEX, 0, &stack, &sync ))) return ret;
+@@ -884,6 +897,7 @@ static NTSTATUS inproc_query_mutex( HANDLE handle, MUTANT_BASIC_INFORMATION *inf
+     NTSTATUS ret;
+ 
+     if (do_fsync()) return fsync_query_mutex( handle, info );
++    if (do_esync()) return esync_query_mutex( handle, info, NULL );
+ 
+     if (inproc_device_fd < 0) return STATUS_NOT_IMPLEMENTED;
+     if ((ret = get_inproc_sync( handle, INPROC_SYNC_MUTEX, MUTANT_QUERY_STATE, &stack, &sync ))) return ret;
+@@ -931,6 +945,7 @@ static NTSTATUS inproc_wait( DWORD count, const HANDLE *handles, WAIT_TYPE type,
+     NTSTATUS ret;
+ 
+     if (do_fsync()) return fsync_wait_objects( count, handles, type != WaitAll, alertable, timeout );
++    if (do_esync()) return esync_wait_objects( count, handles, type != WaitAll, alertable, timeout );
+ 
+     if (inproc_device_fd < 0) return STATUS_NOT_IMPLEMENTED;
+ 
+@@ -961,6 +976,7 @@ static NTSTATUS inproc_signal_and_wait( HANDLE signal, HANDLE wait,
+     NTSTATUS ret;
+ 
+     if (do_fsync()) return fsync_signal_and_wait( signal, wait, alertable, timeout );
++    if (do_esync()) return esync_signal_and_wait( signal, wait, alertable, timeout );
+ 
+     if (inproc_device_fd < 0) return STATUS_NOT_IMPLEMENTED;
+ 
+@@ -2461,6 +2477,12 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
+             if (ret != STATUS_NOT_IMPLEMENTED)
+                 return ret;
+         }
++        else if (do_esync())
++        {
++            NTSTATUS ret = esync_wait_objects( 0, NULL, TRUE, TRUE, timeout );
++            if (ret != STATUS_NOT_IMPLEMENTED)
++                return ret;
++        }
+         /* Since server_wait will result in an unconditional implicit yield,
+            we never return STATUS_NO_YIELD_PERFORMED */
+         if ((status = server_wait( NULL, 0, SELECT_INTERRUPTIBLE | SELECT_ALERTABLE, timeout )) == STATUS_TIMEOUT)
