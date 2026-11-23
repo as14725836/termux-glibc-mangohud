@@ -449,6 +449,16 @@ jobs:
             command -v python3 >/dev/null 2>&1 || PY=python
             "${PY}" "$GITHUB_WORKSPACE/patches/termux-env/termux_env_tweaks.py" "$PWD" || true
           fi
+          # dwproton: esync/fsync/tgmux 补丁（须在下方 /tmp sed 前）
+          if [ "$PROTON_REPO" = "dawn.wine/dawn-winery/wine-dwproton" ] && [ -d "$GITHUB_WORKSPACE/patches/dwproton" ]; then
+            for _p in 01-esync 02-fsync 03-tgmux-shm-path 04-esync-integration 05-tgmux-integration; do
+              _f="$GITHUB_WORKSPACE/patches/dwproton/${_p}.patch"; [ -f "$_f" ] || continue
+              if git apply --check -p1 "$_f" >/dev/null 2>&1; then git apply -p1 "$_f" && echo "OK: $_p"
+              elif patch -p1 --batch --forward --dry-run --no-backup-if-mismatch < "$_f" >/dev/null 2>&1; then patch -p1 --batch --forward --no-backup-if-mismatch < "$_f" >/dev/null && echo "OK: $_p"
+              else echo "SKIP: $_p"; fi
+            done
+          fi
+
           # Termux / Android /tmp 路径修复
           echo "修复 Termux 路径问题..."
           find . \
