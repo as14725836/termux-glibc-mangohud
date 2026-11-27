@@ -918,6 +918,67 @@ jobs:
           echo "BUILD_TYPE=${BUILD_TYPE}"
 
       # ============================================================
+      # 6.0.1 DWProton 独立函数补丁（仅 proton；顺序及内容均校验）
+      # ============================================================
+      - name: 应用已审查的 DWProton 函数补丁
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PATCH_DIR="${GITHUB_WORKSPACE}/patches/dwproton-functions"
+          REVIEWED_BASE="e6a370ff7db61c230df94996f00131e22f9165cf"
+          SOURCE_COMMIT="df3e063cd10d98a007c33312acf4dda684a6be30"
+          PATCH_STATUS="not-applicable"
+          PATCHSET_SHA256="none"
+
+          cd "${WINE_SOURCE_DIR}/source"
+          BASE_COMMIT="$(git rev-parse HEAD)"
+
+          if [ "${BUILD_TYPE}" = "proton" ]; then
+            (
+              cd "${PATCH_DIR}"
+              sha256sum --check --strict SHA256SUMS
+            )
+            PATCHSET_SHA256="$(sha256sum "${PATCH_DIR}/SHA256SUMS" | cut -d' ' -f1)"
+
+            if [ "${BASE_COMMIT}" != "${REVIEWED_BASE}" ]; then
+              echo "::warning::函数补丁审查基线为 ${REVIEWED_BASE}，当前为 ${BASE_COMMIT}；所有补丁仍须顺序通过应用检查。"
+            fi
+
+            applied=0
+            while IFS= read -r patch || [ -n "${patch}" ]; do
+              case "${patch}" in
+                ''|\#*) continue ;;
+                */*|*[!a-zA-Z0-9._-]*) echo "Invalid patch name: ${patch}" >&2; exit 1 ;;
+                *.patch) ;;
+                *) echo "Not a patch: ${patch}" >&2; exit 1 ;;
+              esac
+              echo "=== Applying ${patch} ==="
+              git apply --check --whitespace=error-all "${PATCH_DIR}/${patch}"
+              git apply --whitespace=error-all "${PATCH_DIR}/${patch}"
+              applied=$((applied + 1))
+            done < "${PATCH_DIR}/series"
+            [ "${applied}" -gt 0 ]
+            git diff --check
+
+            PATCH_STATUS="applied"
+            BUILD_NAME="${BUILD_NAME}-fn${PATCHSET_SHA256:0:12}"
+          else
+            echo "Skipping DWProton function patches for BUILD_TYPE=${BUILD_TYPE}"
+          fi
+
+          {
+            echo "WINE_BASE_COMMIT=${BASE_COMMIT}"
+            echo "FUNCTION_PATCHSET_STATUS=${PATCH_STATUS}"
+            echo "FUNCTION_PATCHSET_SHA256=${PATCHSET_SHA256}"
+            echo "FUNCTION_PATCHSET_SOURCE=${SOURCE_COMMIT}"
+            echo "FUNCTION_PATCHSET_REVIEWED_BASE=${REVIEWED_BASE}"
+            echo "BUILD_NAME=${BUILD_NAME}"
+          } >> "${GITHUB_ENV}"
+          echo "Function patch status: ${PATCH_STATUS}; SHA256: ${PATCHSET_SHA256}"
+          echo "BUILD_NAME=${BUILD_NAME}"
+
+      # ============================================================
       # 6.1 初始化子模块 + 剪除缺失组件的 WINE_CONFIG_MAKEFILE
       # ============================================================
       - name: 初始化子模块 + 剪除缺失的 WINE_CONFIG_MAKEFILE
@@ -3291,6 +3352,28 @@ jobs:
           Wine commit:
           ${WINE_COMMIT}
 
+          Wine base commit (full, before local patches):
+          ${WINE_BASE_COMMIT}
+
+          Function patch status:
+          ${FUNCTION_PATCHSET_STATUS}
+
+          Function patch-set SHA256 (SHA256SUMS):
+          ${FUNCTION_PATCHSET_SHA256}
+
+          Function patch source (as14725836/wine):
+          ${FUNCTION_PATCHSET_SOURCE}
+
+          Function patch reviewed base (WinNative-Emu/proton-wine):
+          ${FUNCTION_PATCHSET_REVIEWED_BASE}
+
+          Workflow repository commit:
+          ${GITHUB_SHA}
+
+          Workflow run:
+          ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          Attempt: ${GITHUB_RUN_ATTEMPT}
+
           Proton branch:
           ${{ inputs.proton_branch }}
 
@@ -3478,6 +3561,7 @@ jobs:
         with:
           tag_name: ${{ env.BUILD_NAME }}
           name: ${{ env.BUILD_NAME }}
+          target_commitish: ${{ github.sha }}
 
           body: |
             # Wine ARM64 WOW64 / ARM64EC
@@ -3489,6 +3573,9 @@ jobs:
             - Wine version: `${{ env.WINE_VERSION_ACTUAL }}`
             - Wine version (safe): `${{ env.VER_SAFE }}`
             - Wine commit: `${{ env.WINE_COMMIT }}`
+            - Wine base commit (before local patches): `${{ env.WINE_BASE_COMMIT }}`
+            - Workflow repository commit: `${{ github.sha }}`
+            - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} (attempt ${{ github.run_attempt }})
             - Host: Debian 12 amd64
             - Target: ARM64 Linux / Termux glibc
 
@@ -3502,6 +3589,17 @@ jobs:
 
             - Branch: `${{ inputs.proton_branch }}`
             - Commit: `${{ inputs.proton_commit }}`
+
+            ## DWProton function patches
+
+            - Status: `${{ env.FUNCTION_PATCHSET_STATUS }}`
+            - Patch-set SHA256 (`SHA256SUMS`): `${{ env.FUNCTION_PATCHSET_SHA256 }}`
+            - Source head (`as14725836/wine`): `${{ env.FUNCTION_PATCHSET_SOURCE }}`
+            - Reviewed base (`WinNative-Emu/proton-wine`): `${{ env.FUNCTION_PATCHSET_REVIEWED_BASE }}`
+            - Included: WinMM compatibility exports/task cleanup, D3D11 decoder creation parameters, EVR sample buffer-method forwarding (only when status is `applied`).
+            - Patch details and limitations: https://github.com/${{ github.repository }}/blob/${{ github.sha }}/patches/dwproton-functions/README.md
+            - Commit/dependency audit: https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/wine-function-patch-audit.md
+            - Cross-compilation does not constitute target-device runtime validation.
 
             ## Wine-Staging
 

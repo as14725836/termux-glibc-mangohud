@@ -1,0 +1,66 @@
+From 0e751b956e558782dfa3c9884cf929828dbf8322 Mon Sep 17 00:00:00 2001
+From: Asai <152795869+as14725836@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 08:52:39 +0800
+Subject: [PATCH] evr: implement video_sample
+ ConvertToContiguousBuffer()/CopyToBuffer().
+
+video_sample_ConvertToContiguousBuffer() returned E_NOTIMPL unconditionally.
+
+When the media session sets up a topology, it initialises the stream sink's
+sample allocator and hands those samples to the transform as its output
+buffers, so that the decoder writes straight into the EVR D3D surface. In
+that path winegstreamer's wg_sample_create_mf() starts with
+
+    if (FAILED(hr = IMFSample_ConvertToContiguousBuffer(mf_sample, &buffer)))
+        goto fail;
+
+so every ProcessOutput() call failed with E_NOTIMPL, and
+session.c:transform_node_pull_samples() discarded the freshly decoded sample.
+The result was a permanently black video window: 11943 decoded frames, zero
+video_stream_sink_ProcessSample() calls, and the session stuck in
+COMMAND_STATE_PREROLLING_SINKS because the video sink never received the
+first sample it needed to report MEStreamSinkPrerolled.
+
+Delegate both methods to the wrapped sample. Its buffer is a d3d9 surface
+buffer, which implements IMF2DBuffer2, so wg_sample_create_mf() takes the
+Lock2DSize() path and decodes directly into the surface without an extra
+copy. video_sample_CopyToBuffer() gets the same treatment since the sample
+copier uses it.
+---
+ dlls/evr/sample.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/evr/sample.c b/dlls/evr/sample.c
+index aa3f120b11..3b0ab9f489 100644
+--- a/dlls/evr/sample.c
++++ b/dlls/evr/sample.c
+@@ -1343,9 +1343,15 @@ static HRESULT WINAPI video_sample_GetBufferByIndex(IMFSample *iface, DWORD inde
+ 
+ static HRESULT WINAPI video_sample_ConvertToContiguousBuffer(IMFSample *iface, IMFMediaBuffer **buffer)
+ {
++    struct video_sample *sample = impl_from_IMFSample(iface);
++
+     TRACE("%p, %p.\n", iface, buffer);
+ 
+-    return E_NOTIMPL;
++    /* This sample wraps a D3D surface backed buffer. Callers such as
++     * wg_sample_create_mf() need the underlying buffer so that they can lock
++     * it as a 2D buffer and decode straight into the surface; returning
++     * E_NOTIMPL here made every decoded frame be dropped. */
++    return IMFSample_ConvertToContiguousBuffer(sample->sample, buffer);
+ }
+ 
+ static HRESULT WINAPI video_sample_AddBuffer(IMFSample *iface, IMFMediaBuffer *buffer)
+@@ -1386,9 +1392,11 @@ static HRESULT WINAPI video_sample_GetTotalLength(IMFSample *iface, DWORD *total
+ 
+ static HRESULT WINAPI video_sample_CopyToBuffer(IMFSample *iface, IMFMediaBuffer *buffer)
+ {
++    struct video_sample *sample = impl_from_IMFSample(iface);
++
+     TRACE("%p, %p.\n", iface, buffer);
+ 
+-    return E_NOTIMPL;
++    return IMFSample_CopyToBuffer(sample->sample, buffer);
+ }
+ 
+ static const IMFSampleVtbl video_sample_vtbl =

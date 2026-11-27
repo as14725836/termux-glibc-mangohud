@@ -1,0 +1,89 @@
+From 82cf881e82527d4c01f1c8c29f39d2259da0a1c9 Mon Sep 17 00:00:00 2001
+From: Asai <152795869+as14725836@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 21:15:33 +0000
+Subject: [PATCH] d3d11: Implement video decoder creation parameters.
+
+---
+ dlls/d3d11/d3d11_private.h |  2 ++
+ dlls/d3d11/decoder.c       | 14 ++++++++++++--
+ dlls/d3d11/tests/d3d11.c   | 15 ++++++++++++++-
+ 3 files changed, 28 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index d9cb912a03..b715a86726 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -630,6 +630,8 @@ struct d3d_video_decoder
+     struct wined3d_private_store private_store;
+     struct d3d_device *device;
+     struct wined3d_decoder *wined3d_decoder;
++    D3D11_VIDEO_DECODER_DESC desc;
++    D3D11_VIDEO_DECODER_CONFIG config;
+ };
+ 
+ HRESULT d3d_video_decoder_create(struct d3d_device *device, const D3D11_VIDEO_DECODER_DESC *desc,
+diff --git a/dlls/d3d11/decoder.c b/dlls/d3d11/decoder.c
+index cae0593f35..a8eac94860 100644
+--- a/dlls/d3d11/decoder.c
++++ b/dlls/d3d11/decoder.c
+@@ -119,8 +119,16 @@ static HRESULT STDMETHODCALLTYPE d3d11_video_decoder_SetPrivateDataInterface(ID3
+ static HRESULT STDMETHODCALLTYPE d3d11_video_decoder_GetCreationParameters(ID3D11VideoDecoder *iface,
+         D3D11_VIDEO_DECODER_DESC *desc, D3D11_VIDEO_DECODER_CONFIG *config)
+ {
+-    FIXME("iface %p, desc %p, config %p, stub!\n", iface, desc, config);
+-    return E_NOTIMPL;
++    struct d3d_video_decoder *decoder = impl_from_ID3D11VideoDecoder(iface);
++
++    TRACE("iface %p, desc %p, config %p.\n", iface, desc, config);
++
++    if (!desc || !config)
++        return E_INVALIDARG;
++
++    *desc = decoder->desc;
++    *config = decoder->config;
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE d3d11_video_decoder_GetDriverHandle(ID3D11VideoDecoder *iface, HANDLE *handle)
+@@ -206,6 +214,8 @@ HRESULT d3d_video_decoder_create(struct d3d_device *device, const D3D11_VIDEO_DE
+ 
+     wined3d_private_store_init(&object->private_store);
+     object->device = device;
++    object->desc = *desc;
++    object->config = *config;
+     ID3D11Device5_AddRef(&device->ID3D11Device5_iface);
+ 
+     TRACE("Created video decoder %p.\n", object);
+diff --git a/dlls/d3d11/tests/d3d11.c b/dlls/d3d11/tests/d3d11.c
+index 05b1134bfd..35f3e8a8a7 100644
+--- a/dlls/d3d11/tests/d3d11.c
++++ b/dlls/d3d11/tests/d3d11.c
+@@ -36887,7 +36887,8 @@ static void test_h264_decoder(void)
+     ID3D11VideoDecoderOutputView *output_views[17];
+     unsigned int count, size, bitstream_size;
+     D3D11_VIDEO_DECODER_EXTENSION extension;
+-    D3D11_VIDEO_DECODER_CONFIG config = {0};
++    D3D11_VIDEO_DECODER_CONFIG config = {0}, returned_config;
++    D3D11_VIDEO_DECODER_DESC returned_desc;
+     D3D11_TEXTURE2D_DESC texture_desc = {0};
+     struct d3d11_test_context test_context;
+     DXVA_Slice_H264_Short *h264_slice;
+@@ -37036,6 +37037,18 @@ static void test_h264_decoder(void)
+     }
+     ok(hr == S_OK, "Got hr %#lx.\n", hr);
+ 
++    hr = ID3D11VideoDecoder_GetCreationParameters(decoder, &returned_desc, &returned_config);
++    ok(hr == S_OK, "GetCreationParameters returned %#lx.\n", hr);
++    ok(IsEqualGUID(&returned_desc.Guid, &desc.Guid), "Got decoder profile %s, expected %s.\n",
++            debugstr_guid(&returned_desc.Guid), debugstr_guid(&desc.Guid));
++    ok(returned_desc.SampleWidth == desc.SampleWidth, "Got sample width %u, expected %u.\n",
++            returned_desc.SampleWidth, desc.SampleWidth);
++    ok(returned_desc.SampleHeight == desc.SampleHeight, "Got sample height %u, expected %u.\n",
++            returned_desc.SampleHeight, desc.SampleHeight);
++    ok(returned_desc.OutputFormat == desc.OutputFormat, "Got output format %#x, expected %#x.\n",
++            returned_desc.OutputFormat, desc.OutputFormat);
++    ok(!memcmp(&returned_config, &config, sizeof(config)), "Returned decoder config differs from creation config.\n");
++
+     texture_desc.Width = 320;
+     texture_desc.Height = 240;
+     texture_desc.MipLevels = 1;

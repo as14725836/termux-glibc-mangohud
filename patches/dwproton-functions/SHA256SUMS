@@ -1,0 +1,4 @@
+b4aa3104a67b17195bff9de705188b668c7ebe2f8f2de3e124c65fac5c7e9a4e  0001-winmm-legacy-multimedia-compatibility.patch
+980ea155a9d4d0384d4a99f0f6df5ebdbef607ccf10665857a8683d6cf522235  0002-d3d11-video-decoder-creation-parameters.patch
+387b23ed1572499f99d3eafb5ed16cddc91ed13de393c87af6504bfa09ccb20a  0003-evr-forward-video-sample-buffer-methods.patch
+f3d3bfc85ac1807a604a9b6e1551d9544e83834093b2a10eb541771190d12596  series
