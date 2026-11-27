@@ -16,7 +16,7 @@
 
 | 顺序 | 补丁 | 内容与边界 |
 | --- | --- | --- |
-| 1 | [WinMM 兼容导出及任务清理](0001-winmm-legacy-multimedia-compatibility.patch) | 合并、适配四个来源提交；保留目标原有的不相关导出。包含 ABI/返回值、计时器、MCI 清理回归用例。 |
+| 1 | [WinMM 兼容导出、任务清理及 WOW 回调](0001-winmm-legacy-multimedia-compatibility.patch) | 合并、适配六个来源提交；保留目标原有的不相关导出。包含 ABI/返回值、计时器、MCI 清理回归用例，并补齐 `NotifyCallbackData` / `WOW32DriverCallback` 回调环。 |
 | 2 | [D3D11 视频解码器创建参数](0002-d3d11-video-decoder-creation-parameters.patch) | 私有参数保存、创建时复制、getter 和成功路径测试作为一组引入；不改变公共 COM vtable。 |
 | 3 | [EVR sample 缓冲区方法委托](0003-evr-forward-video-sample-buffer-methods.patch) | 将两个方法转发给内部 `IMFSample`；不依赖 EVR 子窗口/GDI 系列，不补齐所有 surface buffer 方法。 |
 
@@ -26,10 +26,13 @@ WinMM 的来源提交依次为：
 2. [`661925a237a16c4667746bb7e9787fc11b119650`](https://github.com/as14725836/wine/commit/661925a237a16c4667746bb7e9787fc11b119650)：`WOWAppExit` 任务清理。
 3. [`8160abdb31761c904e8ecaefa39f06765952f970`](https://github.com/as14725836/wine/commit/8160abdb31761c904e8ecaefa39f06765952f970)：旧式多媒体导出及既有 timer API 的回归覆盖。
 4. [`df3e063cd10d98a007c33312acf4dda684a6be30`](https://github.com/as14725836/wine/commit/df3e063cd10d98a007c33312acf4dda684a6be30)：通过内部关闭路径清理其他线程所属的 MCI 设备；公开 `MCI_CLOSE` 仍检查调用线程。
+5. [`089bbb7d01c6f04655811dfe35cb3bdd9654bfa0`](https://github.com/as14725836/wine/commit/089bbb7d01c6f04655811dfe35cb3bdd9654bfa0)：`WOW32DriverCallback` 及 16 位回调数据结构（`wowmm_callback_data` / `wowmm_callback_args`、临界区保护）。
+6. [`b0e10c3ae5c59d55cd394fcc7c4e6c37b8bec1b1`](https://github.com/as14725836/wine/commit/b0e10c3ae5c59d55cd394fcc7c4e6c37b8bec1b1)：`NotifyCallbackData` 注册/注销 16 位回调数据指针。
 
 另外两个补丁保留原始提交作者、消息和 diff，来源分别是 [`82cf881e82527d4c01f1c8c29f39d2259da0a1c9`](https://github.com/as14725836/wine/commit/82cf881e82527d4c01f1c8c29f39d2259da0a1c9) 与 [`0e751b956e558782dfa3c9884cf929828dbf8322`](https://github.com/as14725836/wine/commit/0e751b956e558782dfa3c9884cf929828dbf8322)。
 
 ## 功能限制
+- `NotifyCallbackData` / `WOW32DriverCallback` 实现 16 位回调数据环的注册与写入（`DCB_WINDOW` 直接 `PostMessageA`）；它不模拟 NTVDM 中断，也不读取 16 位侧的 `wRecvCount` 推进。环满时静默丢弃回调，与 Windows WOW thunk 的行为仅作结构对齐，未做运行时对照。
 
 - `WOW32ResolveMultiMediaHandle` 为六参数、仅 i386 的失败兼容实现，返回 `FALSE` 且不修改输出；未实现 NTVDM 句柄映射。
 - 九个 `*32Message` 导出仅存在于 i386，均为五个 DWORD 参数，返回对应的失败值；未实现 16/32 位消息桥接。
