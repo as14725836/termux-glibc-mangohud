@@ -440,6 +440,8 @@ jobs:
           else
             echo "无 .gitmodules —— 跳过 submodule 初始化"
           fi
+          # DWProton 函数补丁（所有源码分支统一尝试，仅兼容者应用）
+          bash "${GITHUB_WORKSPACE}/patches/apply_dwproton_functions.sh" "$PWD" || echo "WARN: function patches skipped"
           # winedmo BSF 适配 FFmpeg 8.x ABI（幂等；无该文件自动 SKIP）
           python3 "${GITHUB_WORKSPACE}/patches/fix_winedmo_ffmpeg8.py" . \
             || echo "WARN: winedmo fix skipped"
@@ -1654,6 +1656,8 @@ jobs:
 
           echo "构建名称: $BUILD_NAME"
 
+          # DWProton 函数补丁（所有源码分支统一尝试，仅兼容者应用）
+          bash "${GITHUB_WORKSPACE}/patches/apply_dwproton_functions.sh" "$PWD" || echo "WARN: function patches skipped"
           # Custom patches
 
           echo "应用自定义补丁"
