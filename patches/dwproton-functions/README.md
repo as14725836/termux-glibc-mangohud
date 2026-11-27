@@ -12,13 +12,11 @@
 
 ## 补丁及顺序
 
-[`series`](series) 是唯一应用顺序；[`SHA256SUMS`](SHA256SUMS) 同时校验三个补丁和 `series`。补丁集标识为 `SHA256(SHA256SUMS)`，因此补丁内容和应用顺序都会影响标识。
+[`series`](series) 是唯一应用顺序；[`SHA256SUMS`](SHA256SUMS) 校验补丁和 `series`。补丁集标识为 `SHA256(SHA256SUMS)`，因此补丁内容和应用顺序都会影响标识。
 
 | 顺序 | 补丁 | 内容与边界 |
 | --- | --- | --- |
 | 1 | [WinMM 兼容导出、任务清理及 WOW 回调](0001-winmm-legacy-multimedia-compatibility.patch) | 合并、适配六个来源提交；保留目标原有的不相关导出。包含 ABI/返回值、计时器、MCI 清理回归用例，并补齐 `NotifyCallbackData` / `WOW32DriverCallback` 回调环。 |
-| 2 | [D3D11 视频解码器创建参数](0002-d3d11-video-decoder-creation-parameters.patch) | 私有参数保存、创建时复制、getter 和成功路径测试作为一组引入；不改变公共 COM vtable。 |
-| 3 | [EVR sample 缓冲区方法委托](0003-evr-forward-video-sample-buffer-methods.patch) | 将两个方法转发给内部 `IMFSample`；不依赖 EVR 子窗口/GDI 系列，不补齐所有 surface buffer 方法。 |
 
 WinMM 的来源提交依次为：
 
@@ -29,7 +27,6 @@ WinMM 的来源提交依次为：
 5. [`089bbb7d01c6f04655811dfe35cb3bdd9654bfa0`](https://github.com/as14725836/wine/commit/089bbb7d01c6f04655811dfe35cb3bdd9654bfa0)：`WOW32DriverCallback` 及 16 位回调数据结构（`wowmm_callback_data` / `wowmm_callback_args`、临界区保护）。
 6. [`b0e10c3ae5c59d55cd394fcc7c4e6c37b8bec1b1`](https://github.com/as14725836/wine/commit/b0e10c3ae5c59d55cd394fcc7c4e6c37b8bec1b1)：`NotifyCallbackData` 注册/注销 16 位回调数据指针。
 
-另外两个补丁保留原始提交作者、消息和 diff，来源分别是 [`82cf881e82527d4c01f1c8c29f39d2259da0a1c9`](https://github.com/as14725836/wine/commit/82cf881e82527d4c01f1c8c29f39d2259da0a1c9) 与 [`0e751b956e558782dfa3c9884cf929828dbf8322`](https://github.com/as14725836/wine/commit/0e751b956e558782dfa3c9884cf929828dbf8322)。
 
 ## 功能限制
 - `NotifyCallbackData` / `WOW32DriverCallback` 实现 16 位回调数据环的注册与写入（`DCB_WINDOW` 直接 `PostMessageA`）；它不模拟 NTVDM 中断，也不读取 16 位侧的 `wRecvCount` 推进。环满时静默丢弃回调，与 Windows WOW thunk 的行为仅作结构对齐，未做运行时对照。
@@ -39,8 +36,6 @@ WinMM 的来源提交依次为：
 - `mmDrvInstall` 为四参数、`UINT` 返回值，返回 0；未实现动态多媒体驱动安装。
 - `WOWAppExit` 的 MCI 清理比较完整任务值，timer 清理使用低 DWORD；timer 任务 0 不清理。退出任务必须已停止访问所属设备。既有 MCI 裸指针/并发关闭和 timer ID 回绕风险仍存在。
 - `timeBeginPeriod`、`timeEndPeriod`、`timeGetDevCaps`、`timeGetSystemTime` 和 `timeGetTime` 已存在于目标基线，本补丁只为其增加回归覆盖。
-- D3D11 getter 的空输出参数返回 `E_INVALIDARG` 属于本候选实现的策略，尚无 Windows 对照验证；附带测试只覆盖成功路径。
-- EVR 的结果、锁及引用计数由内部 sample 决定。直接 non-NULL surface 路径仍有 `Lock`/`Unlock` 未实现、缺少 2D 接口等限制；不能由本补丁推导出所有视频路径均已修复或实现零拷贝。
 
 ## 工作流与验证
 
@@ -51,6 +46,6 @@ WinMM 的来源提交依次为：
 3. 执行 `git diff --check`。任何校验或应用失败均终止构建，不跳过冲突，不把“已应用”当作成功。
 4. 为产物和 Release 名追加 `-fn<补丁集 SHA256 前 12 位>`，并在构建信息及 Release 中记录完整标识、源码提交、审查基线和应用状态。
 
-整合阶段已在精确目标基线文件组成的独立工作树中，顺序应用全部三个补丁并通过应用检查及 `git diff --check`。本地没有编译、语法编译、运行 Wine 或执行测试。补丁携带的回归用例不等于已执行通过；远程交叉编译成功也不等于在目标设备上完成运行时验证。远程构建结论应以对应 GitHub Actions run、日志及产物为准。
+整合阶段已在精确目标基线文件组成的独立工作树中，顺序应用 `series` 中的补丁并通过应用检查及 `git diff --check`。本地没有编译、语法编译、运行 Wine 或执行测试。补丁携带的回归用例不等于已执行通过；远程交叉编译成功也不等于在目标设备上完成运行时验证。远程构建结论应以对应 GitHub Actions run、日志及产物为准。
 
 维护补丁时须同步更新 `SHA256SUMS`；改变顺序还须同步更新 `series` 及其校验值。
