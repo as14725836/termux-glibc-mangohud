@@ -359,3 +359,25 @@ index f8d0a95..99bb396 100644
          /* Since server_wait will result in an unconditional implicit yield,
             we never return STATUS_NO_YIELD_PERFORMED */
          if ((status = server_wait( NULL, 0, SELECT_INTERRUPTIBLE | SELECT_ALERTABLE, timeout )) == STATUS_TIMEOUT)
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -81,4 +81,5 @@
+ #include "unix_private.h"
+ #include "ddk/wdm.h"
+-
++#include "esync.h"
++
+ #include "fsync.h"
+@@ -1748,6 +1749,11 @@ size_t server_init_process(void)
+                 inproc_device_fd = FSYNC_USED_BY_SERVER;
+                 fsync_init( pid );
+             }
++            else if (reply->inproc_device == ESYNC_USED_BY_SERVER)
++            {
++                int shm_fd = wine_server_receive_fd( &handle );
++                esync_init( shm_fd );
++            }
+             else if (reply->inproc_device)
+             {
+                 inproc_device_fd = wine_server_receive_fd( &handle );

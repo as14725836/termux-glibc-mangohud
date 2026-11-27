@@ -114,6 +114,15 @@ on:
           - dawn.wine/dawn-winery/wine-dwproton
           - ValveSoftware/Proton
 
+      apply_dwproton_termux:
+        description: 'DWProton Termux 补丁（仅 Valve Proton；兼容无 esync、保留原同步后端，独立 -dwtermux 产物）'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
       gst_decoders_version:
         description: 'GStreamer(decoders)版本：作为编译依赖头文件/版本，替代 apt 自带的 1.22.0（来源：termux-glibc-GStreamer Releases）'
         required: false
@@ -453,6 +462,33 @@ jobs:
             echo "无 .gitmodules —— 跳过 submodule 初始化"
           fi
 
+      - name: 应用 Proton Wine 补丁
+        env:
+          APPLY_DWPROTON_TERMUX: ${{ github.event.inputs.apply_dwproton_termux || 'false' }}
+        run: |
+          set -e
+          cd "$WINE_SOURCE_DIR"
+          # 函数补丁先执行；其旧回滚路径不得抹除后面的通用路径策略。
+          bash "${GITHUB_WORKSPACE}/patches/apply_dwproton_functions.sh" "$PWD" || echo "WARN: function patches skipped"
+          echo "DWPROTON_TERMUX_STATUS=disabled" >> "$GITHUB_ENV"
+          echo "DWPROTON_FSYNC_STATUS=unchanged" >> "$GITHUB_ENV"
+          echo "DWPROTON_ESYNC_STATUS=unchanged" >> "$GITHUB_ENV"
+          if [ "$APPLY_DWPROTON_TERMUX" = "true" ]; then
+            if [ "$PROTON_REPO" != "ValveSoftware/Proton" ]; then
+              echo "ERROR: DWProton Termux patch integration is currently validated for ValveSoftware/Proton only" >&2
+              exit 1
+            fi
+            # 在旧路径/loader 注入器和全局 /tmp 替换前应用；必需组失败即停止。
+            bash "${GITHUB_WORKSPACE}/patches/dwproton/apply.sh" "$PWD"
+            PATCHSET_SHA256=$(
+              cd "${GITHUB_WORKSPACE}/patches/dwproton"
+              sha256sum apply.sh verify.py 02-fsync.patch 03-tgmux-shm-path.patch 05-tgmux-integration.patch \
+                ../wow64/inject_preloader_wow64_guard.py | sha256sum | cut -d' ' -f1
+            )
+            echo "DWPROTON_PATCHSET_SHA256=$PATCHSET_SHA256" >> "$GITHUB_ENV"
+            echo "DWProton Termux patchset: $PATCHSET_SHA256 (esync backport skipped; native sync preserved)"
+          fi
+
       - name: 构建 Proton WOW64
         run: |
           set -e
@@ -460,8 +496,6 @@ jobs:
           export LC_ALL=zh_CN.UTF-8
           export LANGUAGE=zh_CN:zh:en_US:en
           cd "$WINE_SOURCE_DIR"
-          # DWProton 函数补丁（所有源码分支统一尝试，仅兼容者应用）
-          bash "${GITHUB_WORKSPACE}/patches/apply_dwproton_functions.sh" "$PWD" || echo "WARN: function patches skipped"
           # winedmo BSF 适配 FFmpeg 8.x ABI（幂等；无该文件自动 SKIP）
           python3 "${GITHUB_WORKSPACE}/patches/fix_winedmo_ffmpeg8.py" . \
             || echo "WARN: winedmo fix skipped"
@@ -535,15 +569,13 @@ jobs:
           # Build directory
           mkdir -p build-wow64
           cd build-wow64
-          # machine-id：/etc/machine-id 与 /var/lib/dbus/machine-id 在 Termux 上读不到，
-          # 导致 SID 退化、系统 UUID 全 FF；改指 Termux glibc 路径。
-          python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
-          # zoneinfo：Wine 默认读 /usr/share/zoneinfo 与 /etc/localtime，
-          # Termux 上两者都不存在，导致反复告警
-          #   warn:ntdll:get_tz_info_from_zoneinfo_name Could not open
-          #   "/usr/share/zoneinfo/Asia/Shanghai"
-          # 且 TZ 未设置时 get_system_config_tz_info() 直接失败；改指 glibc 路径。
-          python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_zoneinfo.py" ..
+          # machine-id / zoneinfo 已由可选 dwproton 通用补丁统一处理，避免对同一文件叠加路径策略。
+          if [ "${DWPROTON_TERMUX_STATUS:-disabled}" != "applied" ]; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_machine_id.py" ..
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/fix_termux_zoneinfo.py" ..
+          else
+            echo "DWProton Termux patchset already handles machine-id and zoneinfo"
+          fi
           # WINEVMEMMAXSIZE (Pipetto f9224d6b): idempotent anchor inject
           if [ -f ../dlls/ntdll/unix/virtual.c ] && ! grep -q WINEVMEMMAXSIZE ../dlls/ntdll/unix/virtual.c; then
             python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_vmem_max_size.py" .. || echo "WARN: vmem inject"
@@ -616,7 +648,11 @@ jobs:
           # 修法：host_is_foreign_arch() 判定 box64/FEX 时跳过外部 i386-unix/wine，
           # 改由 64 位 wineloader 的内部 WoW64 跑 32 位 PE；原生平台行为不变。
           # 逐行根因链与 preloader_exec 细节见 patches/wow64/inject_preloader_wow64_guard.py
-          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"
+          if [ "${DWPROTON_TERMUX_STATUS:-disabled}" = "applied" ]; then
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" ..
+          else
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_preloader_wow64_guard.py" .. || echo "WARN: wow64-preloader guard inject"
+          fi
           # ★ syswow64 为空：wineboot 把 Wow64Install 循环嵌在 PreInstall 成功判断内，
           # PreInstall 的 CreateProcessW 一失败，Wow64Install 永不执行且 .update-timestamp
           # 仍被写入，wineboot -u 也不再重试。此处解耦并给每步失败补 ERR 日志。
@@ -747,6 +783,12 @@ jobs:
           else
             echo "SKIP: 未找到 wine 源码树"
           fi
+          # 后续注入器可能重写同一文件；在 configure 前核实真正用于编译的源码。
+          if [ "${DWPROTON_TERMUX_STATUS:-disabled}" = "applied" ]; then
+            python3 "${GITHUB_WORKSPACE}/patches/dwproton/verify.py" .. \
+              --fsync-status "$DWPROTON_FSYNC_STATUS" \
+              --manifest "$RUNNER_TEMP/dwproton-final-source.sha256"
+          fi
           ../configure --enable-win64 --enable-archs=i386,x86_64 --prefix=/tmp/wine-install-proton $WINE_FFMPEG_ARG $WINE_GSTREAMER_ARG --with-x --with-vulkan --with-alsa --with-pulse --with-freetype --with-fontconfig --with-gettext --with-sdl --enable-nls --disable-winemenubuilder --disable-win16 --disable-tests --without-ldap --without-capi --without-oss --without-cups --without-dbus --without-coreaudio --without-gphoto --without-osmesa --without-sane --without-pcap --without-pcsclite --without-udev --without-unwind --without-usb --without-v4l2 --without-wayland
           # Build
           echo "开始构建 Proton WOW64..."
@@ -819,8 +861,19 @@ jobs:
           fi
           echo "SAFE_PROTON_BRANCH=$SAFE_PROTON_BRANCH" >> "$GITHUB_ENV"
           BUILD_NAME="Proton-${SAFE_PROTON_BRANCH}-WoW64"
+          PROTON_RELEASE_TAG="proton-${SAFE_PROTON_BRANCH}-wow64"
+          if [ "${DWPROTON_TERMUX_STATUS:-disabled}" = "applied" ]; then
+            BUILD_NAME="${BUILD_NAME}-dwtermux"
+            PROTON_RELEASE_TAG="${PROTON_RELEASE_TAG}-dwtermux"
+          fi
           echo "BUILD_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
+          echo "PROTON_RELEASE_TAG=$PROTON_RELEASE_TAG" >> "$GITHUB_ENV"
           # 将超级项目与实际 Wine 的独立提交一起写入安装包，方便追溯。
+          if [ "${DWPROTON_TERMUX_STATUS:-disabled}" = "applied" ]; then
+            test "${DWPROTON_FINAL_SOURCE_STATUS:-}" = "verified"
+            echo "$DWPROTON_FINAL_SOURCE_SHA256  $RUNNER_TEMP/dwproton-final-source.sha256" | sha256sum --check
+            cp "$RUNNER_TEMP/dwproton-final-source.sha256" /tmp/wine-install-proton/DWPROTON_SOURCE_SHA256SUMS
+          fi
           {
             echo "Build name: $BUILD_NAME"
             echo "Build scope: Wine component with Termux patches (x86_64/i386 WoW64)"
@@ -828,6 +881,12 @@ jobs:
             echo "Source branch: $PROTON_BRANCH"
             echo "Source commit: $PROTON_SOURCE_COMMIT"
             echo "Wine commit: $WINE_SOURCE_COMMIT"
+            echo "Termux patch status: ${DWPROTON_TERMUX_STATUS:-disabled}"
+            echo "Termux fsync status: ${DWPROTON_FSYNC_STATUS:-unchanged}"
+            echo "Termux esync status: ${DWPROTON_ESYNC_STATUS:-unchanged}"
+            echo "Termux patchset SHA256: ${DWPROTON_PATCHSET_SHA256:-not-applied}"
+            echo "Termux final source status: ${DWPROTON_FINAL_SOURCE_STATUS:-not-checked}"
+            echo "Termux final source manifest SHA256: ${DWPROTON_FINAL_SOURCE_SHA256:-not-applied}"
             echo "Workflow commit: $GITHUB_SHA"
             echo "Workflow run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           } > /tmp/wine-install-proton/BUILD_INFO.txt
@@ -837,6 +896,12 @@ jobs:
             echo "- Branch: $PROTON_BRANCH"
             echo "- Source commit: $PROTON_SOURCE_COMMIT"
             echo "- Wine commit: $WINE_SOURCE_COMMIT"
+            echo "- Termux patch status: ${DWPROTON_TERMUX_STATUS:-disabled}"
+            echo "- Termux fsync status: ${DWPROTON_FSYNC_STATUS:-unchanged}"
+            echo "- Termux esync status: ${DWPROTON_ESYNC_STATUS:-unchanged}"
+            echo "- Termux patchset SHA256: ${DWPROTON_PATCHSET_SHA256:-not-applied}"
+            echo "- Termux final source status: ${DWPROTON_FINAL_SOURCE_STATUS:-not-checked}"
+            echo "- Termux final source manifest SHA256: ${DWPROTON_FINAL_SOURCE_SHA256:-not-applied}"
             echo "- Package: $BUILD_NAME"
             echo "- Scope: Wine component with Termux patches (x86_64/i386 WoW64)"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -1075,7 +1140,7 @@ jobs:
 
         with:
           # 分支名可能含 '/'（如 dwproton/11.0-14），GitHub artifact 名禁止斜杠
-          name: Proton-${{ env.SAFE_PROTON_BRANCH || github.event.inputs.proton_branch || 'proton_10.0' }}-WoW64
+          name: ${{ env.BUILD_NAME || format('Proton-{0}-WoW64', env.SAFE_PROTON_BRANCH || github.event.inputs.proton_branch || 'proton_10.0') }}
 
           path: |
             ${{ github.workspace }}/*.tar.xz
@@ -1097,10 +1162,10 @@ jobs:
 
         with:
 
-          tag_name: proton-${{ env.SAFE_PROTON_BRANCH || github.event.inputs.proton_branch || 'proton_10.0' }}-wow64
+          tag_name: ${{ env.PROTON_RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
 
-          name: Proton ${{ env.SAFE_PROTON_BRANCH || github.event.inputs.proton_branch || 'proton_10.0' }} (WOW64 with Vulkan & GStreamer for Termux)
+          name: ${{ env.BUILD_NAME }} (Vulkan & GStreamer for Termux)
 
           body: |
 
@@ -1112,6 +1177,12 @@ jobs:
             - Proton 分支: `${{ env.PROTON_SOURCE_BRANCH }}`
             - 源码提交: `${{ env.PROTON_SOURCE_COMMIT }}`
             - Wine 提交: `${{ env.WINE_SOURCE_COMMIT }}`
+            - DWProton Termux 补丁: `${{ env.DWPROTON_TERMUX_STATUS }}`
+            - Termux fsync 路径适配: `${{ env.DWPROTON_FSYNC_STATUS }}`
+            - esync backport: `${{ env.DWPROTON_ESYNC_STATUS }}`（保留源码原同步后端）
+            - 补丁集 SHA256: `${{ env.DWPROTON_PATCHSET_SHA256 }}`
+            - 构建前最终源码检查: `${{ env.DWPROTON_FINAL_SOURCE_STATUS || 'not-checked' }}`
+            - 最终源码清单 SHA256: `${{ env.DWPROTON_FINAL_SOURCE_SHA256 || 'not-applied' }}`
             - 构建范围: Wine 组件与 Termux 补丁（x86_64/i386 WoW64）
             - 构建记录: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
             - 架构: True WOW64

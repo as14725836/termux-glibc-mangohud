@@ -123,6 +123,19 @@ NEW_EXEC = """    /* TERMUX_WOW64_HOSTGUARD: x86_64 Wine 在 box64/FEX 上时，
 
     argv[1] = strdup( wineloader );"""
 
+SINGLE_EXEC = """    if (((argv[1] = get_alternate_wineloader( machine )))) preloader_exec( argv );
+
+    argv[1] = strdup( wineloader );"""
+
+SINGLE_EXEC_GUARDED = """    /* TERMUX_WOW64_HOSTGUARD: x86_64 Wine on a foreign host cannot exec
+     * the external i386-unix/wine loader; fall back to internal WoW64. */
+    if (!(machine == IMAGE_FILE_MACHINE_I386 && host_is_foreign_arch()))
+    {
+        if (((argv[1] = get_alternate_wineloader( machine )))) preloader_exec( argv );
+    }
+
+    argv[1] = strdup( wineloader );"""
+
 OLD_PRE = """    if (machine == IMAGE_FILE_MACHINE_AMD64
         && ((p = remove_tail( argv[1], "x86_64-unix/wine" )) || (p = remove_tail( argv[1], "i386-unix/wine64" ))))
     {
@@ -158,41 +171,47 @@ def patch_loader(path):
         print("  [skip] loader.c already patched")
         return True
 
-    changed = False
+    # Validate the complete edit set before changing/writing anything. The 05
+    # integration patch changes preloader_exec() from two arguments to one.
+    helper_anchor = "char *get_alternate_wineloader( WORD machine )"
+    if src.count(helper_anchor) != 1:
+        print("  [WARN] get_alternate_wineloader anchor missing or duplicated")
+        return False
 
-    # 0) 确保 <sys/utsname.h> 可用（uname / struct utsname）
+    if OLD_EXEC in src and OLD_PRE in src and "static void preloader_exec( char **argv, WORD machine )" in src:
+        signature = "two-argument"
+        if src.count(OLD_EXEC) != 1 or src.count(OLD_PRE) != 1:
+            print("  [WARN] two-argument loader blocks missing or duplicated")
+            return False
+    elif SINGLE_EXEC in src and "static void preloader_exec( char **argv )" in src:
+        signature = "one-argument"
+        if src.count(SINGLE_EXEC) != 1:
+            print("  [WARN] one-argument loader block missing or duplicated")
+            return False
+    else:
+        print("  [WARN] unsupported preloader_exec / loader_exec shape")
+        return False
+
+    # Ensure uname / struct utsname declarations are available.
     if "#include <sys/utsname.h>" not in src:
         inc_anchor = "#include <unistd.h>"
-        if inc_anchor in src:
-            src = src.replace(inc_anchor, inc_anchor + "\n#include <sys/utsname.h>", 1)
-        else:
-            src = src.replace("#include <sys/mman.h>",
-                              "#include <sys/mman.h>\n#include <sys/utsname.h>", 1)
+        if inc_anchor not in src:
+            inc_anchor = "#include <sys/mman.h>"
+        if inc_anchor not in src:
+            print("  [WARN] no include anchor for <sys/utsname.h>")
+            return False
+        src = src.replace(inc_anchor, inc_anchor + "\n#include <sys/utsname.h>", 1)
 
-    # 1) 插入 helper（放在 get_alternate_wineloader 的定义之前）
-    anchor = "char *get_alternate_wineloader( WORD machine )"
-    if anchor not in src:
-        print("  [WARN] get_alternate_wineloader anchor not found")
-        return False
-    src = src.replace(anchor, HELPER + "\n" + anchor, 1)
-    changed = True
+    src = src.replace(helper_anchor, HELPER + "\n" + helper_anchor, 1)
+    if signature == "two-argument":
+        src = src.replace(OLD_EXEC, NEW_EXEC, 1)
+        src = src.replace(OLD_PRE, NEW_PRE, 1)
+    else:
+        src = src.replace(SINGLE_EXEC, SINGLE_EXEC_GUARDED, 1)
 
-    # 2) loader_exec: foreign-arch 宿主上跳过外部 32 位 loader
-    if OLD_EXEC not in src:
-        print("  [WARN] loader_exec block not found")
-        return False
-    src = src.replace(OLD_EXEC, NEW_EXEC, 1)
-
-    # 3) preloader_exec: 修 AMD64 切换条件
-    if OLD_PRE not in src:
-        print("  [WARN] preloader_exec block not found")
-        return False
-    src = src.replace(OLD_PRE, NEW_PRE, 1)
-
-    if changed:
-        with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
-            f.write(src)
-        print("  [ok] patched loader.c (host_is_foreign_arch + loader_exec + preloader_exec)")
+    with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write(src)
+    print("  [ok] patched loader.c (%s preloader_exec + foreign-host guard)" % signature)
     return True
 
 
@@ -200,10 +219,9 @@ def main():
     root = sys.argv[1] if len(sys.argv) > 1 else ".."
     target = os.path.join(root, "dlls", "ntdll", "unix", "loader.c")
     if not os.path.isfile(target):
-        print("  [skip] %s not found" % target)
-        return 0
-    patch_loader(target)
-    return 0
+        print("  [WARN] %s not found" % target)
+        return 1
+    return 0 if patch_loader(target) else 1
 
 
 if __name__ == "__main__":

@@ -106,7 +106,6 @@ index bb39b55..51271cf 100644
          's','y','s','t','e','m','3','2','\\','l','_','i','n','t','l','.','n','l','s',0};
      static const struct unicode_str nt_name = { nt_pathW, sizeof(nt_pathW) };
 diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
-index 30c7895..def6e10 100644
 --- a/dlls/ntdll/unix/server.c
 +++ b/dlls/ntdll/unix/server.c
 @@ -67,6 +67,7 @@
@@ -117,15 +116,7 @@ index 30c7895..def6e10 100644
  #ifdef __APPLE__
  #include <crt_externs.h>
  #include <spawn.h>
-@@ -85,6 +86,7 @@
- #include "unix_private.h"
- #include "ddk/wdm.h"
- 
-+#include "esync.h"
- #include "fsync.h"
- 
- WINE_DEFAULT_DEBUG_CHANNEL(server);
-@@ -1339,7 +1341,8 @@ static const char *init_server_dir( dev_t dev, ino_t ino )
+@@ -1339,7 +1340,8 @@ static const char *init_server_dir( dev_t dev, ino_t ino )
  #ifdef __ANDROID__  /* there's no /tmp dir on Android */
      asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
  #else
@@ -135,9 +126,7 @@ index 30c7895..def6e10 100644
  #endif
      return dir;
  }
-@@ -1405,7 +1408,8 @@ static int setup_config_dir(void)
-         mkdir( "drive_c", 0777 );
-         set_case_insensitive( "drive_c" );
+@@ -1407,5 +1409,6 @@ static int setup_config_dir(void)
          symlink( "../drive_c", "dosdevices/c:" );
 -        symlink( "/", "dosdevices/z:" );
 +        /* Keep Z: inside the Termux private tree instead of exposing "/" to Windows apps. */
@@ -145,18 +134,6 @@ index 30c7895..def6e10 100644
      }
      else if (errno != EEXIST) fatal_perror( "cannot create %s/dosdevices", config_dir );
  
-@@ -1748,6 +1752,11 @@ size_t server_init_process(void)
-                 inproc_device_fd = FSYNC_USED_BY_SERVER;
-                 fsync_init( pid );
-             }
-+            else if (reply->inproc_device == ESYNC_USED_BY_SERVER)
-+            {
-+                int shm_fd = wine_server_receive_fd( &handle );
-+                esync_init( shm_fd );
-+            }
-             else if (reply->inproc_device)
-             {
-                 inproc_device_fd = wine_server_receive_fd( &handle );
 diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
 index a63a769..a9c4b34 100644
 --- a/dlls/ntdll/unix/system.c
@@ -431,15 +408,7 @@ diff --git a/include/Makefile.in b/include/Makefile.in
 index 4351581..cf9111c 100644
 --- a/include/Makefile.in
 +++ b/include/Makefile.in
-@@ -761,6 +761,7 @@ SOURCES = \
- 	socketapi.h \
- 	softpub.h \
- 	spatialaudioclient.idl \
-+	intsafe.h \
- 	specstrings.h \
- 	specstrings_strict.h \
- 	sperror.h \
-@@ -993,6 +994,9 @@ SOURCES = \
+@@ -993,6 +993,9 @@ SOURCES = \
  	wine/strmbase.h \
  	wine/svcctl.idl \
  	wine/test.h \
