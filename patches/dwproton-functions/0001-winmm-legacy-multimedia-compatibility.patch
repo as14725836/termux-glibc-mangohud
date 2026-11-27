@@ -83,7 +83,7 @@ index 3a20aab..60a1cee 100644
 +DWORD WINAPI NotifyCallbackData( UINT uDevID, UINT uMsg, DWORD dwInstance,
 +                                 DWORD dwParam1, DWORD parg16 )
 +{
-+    TRACE( "(%u, %u, %08x, %08x, %08x)\n", uDevID, uMsg, dwInstance, dwParam1, parg16 );
++    TRACE( "(%u, %u, %08lx, %08lx, %08lx)\n", uDevID, uMsg, dwInstance, dwParam1, parg16 );
 +    if (parg16) wow_mm_callback_lock();
 +    wow_mm_callback_data = parg16;
 +    if (parg16) wow_mm_callback_unlock();
@@ -104,7 +104,7 @@ index 3a20aab..60a1cee 100644
 +    wowmm_callback_args *args;
 +    WORD next;
 +
-+    TRACE( "(%08x, %08x, %04x, %04x, %08x, %08x, %08x)\n",
++    TRACE( "(%08lx, %08lx, %04x, %04x, %08lx, %08lx, %08lx)\n",
 +           dwCallback, dwFlags, wID, wMsg, dwUser, dw1, dw2 );
 +
 +    if ((dwFlags & DCB_TYPEMASK) == DCB_WINDOW)
