@@ -392,18 +392,15 @@ jobs:
       # Proton Build
       # --------------------------------------------------------
 
-      - name: 构建 Proton WOW64
+      - name: 准备 Proton Wine 源码
         env:
           PROTON_REPO: ${{ github.event.inputs.proton_repo || 'WinNative-Emu/proton-wine' }}
           PROTON_BRANCH: ${{ github.event.inputs.proton_branch || 'proton_10.0' }}
         run: |
           set -e
           echo "=========================================="
-          echo "开始构建 Proton WOW64"
+          echo "准备 Proton Wine 源码"
           echo "=========================================="
-          export LANG=zh_CN.UTF-8
-          export LC_ALL=zh_CN.UTF-8
-          export LANGUAGE=zh_CN:zh:en_US:en
           rm -rf "$BUILD_DIR/proton"
           mkdir -p "$BUILD_DIR/proton"
           cd "$BUILD_DIR/proton"
@@ -439,6 +436,9 @@ jobs:
           PROTON_SOURCE_COMMIT="$(git -C "$PROTON_SOURCE_DIR" rev-parse HEAD)"
           WINE_SOURCE_COMMIT="$(git -C "$WINE_SOURCE_DIR" rev-parse HEAD)"
           {
+            echo "PROTON_REPO=$PROTON_REPO"
+            echo "PROTON_BRANCH=$PROTON_BRANCH"
+            echo "WINE_SOURCE_DIR=$WINE_SOURCE_DIR"
             echo "PROTON_SOURCE_REPO=$PROTON_REPO"
             echo "PROTON_SOURCE_BRANCH=$PROTON_BRANCH"
             echo "PROTON_SOURCE_COMMIT=$PROTON_SOURCE_COMMIT"
@@ -452,6 +452,14 @@ jobs:
           else
             echo "无 .gitmodules —— 跳过 submodule 初始化"
           fi
+
+      - name: 构建 Proton WOW64
+        run: |
+          set -e
+          export LANG=zh_CN.UTF-8
+          export LC_ALL=zh_CN.UTF-8
+          export LANGUAGE=zh_CN:zh:en_US:en
+          cd "$WINE_SOURCE_DIR"
           # DWProton 函数补丁（所有源码分支统一尝试，仅兼容者应用）
           bash "${GITHUB_WORKSPACE}/patches/apply_dwproton_functions.sh" "$PWD" || echo "WARN: function patches skipped"
           # winedmo BSF 适配 FFmpeg 8.x ABI（幂等；无该文件自动 SKIP）
@@ -793,6 +801,10 @@ jobs:
           find /tmp/wine-install-proton/bin -maxdepth 1 -type l -printf '  %f -> %l\n' 2>/dev/null || true
           echo "=== bin/ 内容 ==="
           ls -la /tmp/wine-install-proton/bin/ | head -30
+
+      - name: 记录 Proton 构建来源
+        run: |
+          set -e
           VERSION_PROTON=$(
             git -C "$WINE_SOURCE_DIR" describe --tags --abbrev=0 2>/dev/null \
               || echo "$PROTON_BRANCH"
