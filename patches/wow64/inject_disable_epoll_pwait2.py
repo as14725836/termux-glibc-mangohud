@@ -96,7 +96,7 @@ def main():
 
     m = PROBE_RE.search(src)
     if not m:
-        note("find", "SKIP: 未找到 use_epoll_pwait2 探测段（该树不用 epoll_pwait2）")
+        note("find", "SKIP: 未找到旧版 use_epoll_pwait2 探测段（保留该树原有实现）")
         return 0
 
     indent = m.group(1)

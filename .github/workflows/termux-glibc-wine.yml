@@ -103,7 +103,7 @@ on:
           - 'true'
           - 'false'
       proton_repo:
-        description: 'Proton 源码仓库（proton_branch 必须存在于该仓库）'
+        description: 'Proton 源码仓库（ValveSoftware/Proton 自动使用该分支固定的 Wine 子模块）'
         required: false
         default: 'WinNative-Emu/proton-wine'
         type: choice
@@ -112,6 +112,7 @@ on:
           - Pipetto-crypto/wine
           - GameNative/proton-wine
           - dawn.wine/dawn-winery/wine-dwproton
+          - ValveSoftware/Proton
 
       gst_decoders_version:
         description: 'GStreamer(decoders)版本：作为编译依赖头文件/版本，替代 apt 自带的 1.22.0（来源：termux-glibc-GStreamer Releases）'
@@ -392,6 +393,9 @@ jobs:
       # --------------------------------------------------------
 
       - name: 构建 Proton WOW64
+        env:
+          PROTON_REPO: ${{ github.event.inputs.proton_repo || 'WinNative-Emu/proton-wine' }}
+          PROTON_BRANCH: ${{ github.event.inputs.proton_branch || 'proton_10.0' }}
         run: |
           set -e
           echo "=========================================="
@@ -403,38 +407,46 @@ jobs:
           rm -rf "$BUILD_DIR/proton"
           mkdir -p "$BUILD_DIR/proton"
           cd "$BUILD_DIR/proton"
-          # Clone
-          PROTON_REPO="${{ github.event.inputs.proton_repo || 'WinNative-Emu/proton-wine' }}"
+          # ValveSoftware/Proton 是超级项目；其他选项仍直接提供 Wine 源码。
           echo "Proton 源码仓库: ${PROTON_REPO}"
-          case "$PROTON_REPO" in
-            http://*|https://*)  CLONE_URL="$PROTON_REPO" ;;
-            dawn.wine/*)         CLONE_URL="https://${PROTON_REPO}.git" ;;
-            gitlab.*/*)          CLONE_URL="https://${PROTON_REPO}.git" ;;
-            *)                   CLONE_URL="https://github.com/${PROTON_REPO}.git" ;;
-          esac
-          echo "Clone URL: ${CLONE_URL}"
-          PB="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
-          echo "目标分支: $PB"
-          if git clone --depth 1 --branch "$PB" "$CLONE_URL" wine 2>/dev/null; then
-            echo "浅克隆成功: $PB"
+          echo "Proton 分支: ${PROTON_BRANCH}"
+          if [ "$PROTON_REPO" = "ValveSoftware/Proton" ]; then
+            PROTON_SOURCE_DIR="$PWD/valve-proton"
+            bash "${GITHUB_WORKSPACE}/patches/proton/prepare_valve_wine.sh" \
+              "$PROTON_BRANCH" "$PROTON_SOURCE_DIR"
+            WINE_SOURCE_DIR="$PROTON_SOURCE_DIR/wine"
           else
-            echo "浅克隆失败，回退全量克隆"; rm -rf wine
-            git clone "$CLONE_URL" wine || { echo "ERROR: 克隆失败"; exit 1; }
-            git -C wine checkout "$PB" 2>/dev/null \
-              || { echo "ERROR: 分支 $PB 不存在于 $CLONE_URL"; exit 1; }
+            case "$PROTON_REPO" in
+              http://*|https://*)  CLONE_URL="$PROTON_REPO" ;;
+              dawn.wine/*)         CLONE_URL="https://${PROTON_REPO}.git" ;;
+              gitlab.*/*)          CLONE_URL="https://${PROTON_REPO}.git" ;;
+              *)                   CLONE_URL="https://github.com/${PROTON_REPO}.git" ;;
+            esac
+            echo "Clone URL: ${CLONE_URL}"
+            if git clone --depth 1 --branch "$PROTON_BRANCH" "$CLONE_URL" wine 2>/dev/null; then
+              echo "浅克隆成功: $PROTON_BRANCH"
+            else
+              echo "浅克隆失败，回退全量克隆"; rm -rf wine
+              git clone "$CLONE_URL" wine || { echo "ERROR: 克隆失败"; exit 1; }
+              git -C wine checkout "$PROTON_BRANCH" 2>/dev/null \
+                || { echo "ERROR: 分支 $PROTON_BRANCH 不存在于 $CLONE_URL"; exit 1; }
+            fi
+            [ "$(git -C wine rev-parse --abbrev-ref HEAD)" = "$PROTON_BRANCH" ] \
+              || { echo "ERROR: 非目标分支，实际 $(git -C wine rev-parse --abbrev-ref HEAD)"; exit 1; }
+            WINE_SOURCE_DIR="$PWD/wine"
+            PROTON_SOURCE_DIR="$WINE_SOURCE_DIR"
           fi
-          [ "$(git -C wine rev-parse --abbrev-ref HEAD)" = "$PB" ] \
-            || { echo "ERROR: 非目标分支，实际 $(git -C wine rev-parse --abbrev-ref HEAD)"; exit 1; }
-          cd wine
-          PROTON_BRANCH="${{ github.event.inputs.proton_branch || 'proton_10.0' }}"
-          echo "Proton 分支: $PROTON_BRANCH"
-          # 浅克隆已 checkout 到目标分支；全量克隆才需要显式 checkout
-          if ! git rev-parse --verify -q HEAD >/dev/null; then
-            git checkout "$PROTON_BRANCH"
-          else
-            echo "当前 HEAD: $(git rev-parse --short HEAD) ($(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached))"
-          fi
-          # 无 submodule 的仓库（如 wine-dwproton）跳过，避免无谓报错
+          PROTON_SOURCE_COMMIT="$(git -C "$PROTON_SOURCE_DIR" rev-parse HEAD)"
+          WINE_SOURCE_COMMIT="$(git -C "$WINE_SOURCE_DIR" rev-parse HEAD)"
+          {
+            echo "PROTON_SOURCE_REPO=$PROTON_REPO"
+            echo "PROTON_SOURCE_BRANCH=$PROTON_BRANCH"
+            echo "PROTON_SOURCE_COMMIT=$PROTON_SOURCE_COMMIT"
+            echo "WINE_SOURCE_COMMIT=$WINE_SOURCE_COMMIT"
+          } >> "$GITHUB_ENV"
+          cd "$WINE_SOURCE_DIR"
+          echo "Wine HEAD: ${WINE_SOURCE_COMMIT}"
+          # 只初始化 Wine 自身的子模块，不拉取 Proton 的其他发行版组件。
           if [ -f .gitmodules ]; then
             git submodule update --init --recursive
           else
@@ -573,9 +585,13 @@ jobs:
           #   wineserver: using server-side synchronization.
           #   wineserver crashed ... / recvmsg: Connection reset by peer
           # 对照：wine-proton-9.0 与 wine-staging-11.18（同为 x86_64 wow64）都没有
-          # 这套框架，都能正常启动。这里在编译期注释掉 NTSYNC_IOC_EVENT_READ，
-          # 让 inproc_sync.c 选中最末尾那套安全 stub 实现（等价上游行为）。
-          python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_ntsync.py" .. || echo "WARN: no-ntsync inject"
+          # 这套框架，都能正常启动。旧版 dwproton 树可用下方编译期补丁禁用它；
+          # Valve Wine 含有不同的 inproc_sync/fsync 实现，本次不对其做该改写。
+          if [ "$PROTON_REPO" = "ValveSoftware/Proton" ]; then
+            echo "保留 Valve Proton 的 ntsync/fsync 实现；跳过旧版 dwproton workaround"
+          else
+            python3 "${GITHUB_WORKSPACE}/patches/wow64/inject_disable_ntsync.py" .. || echo "WARN: no-ntsync inject"
+          fi
           # ★ 真正的崩溃根因：Wine 10.x 起 server/fd.c 的 main_loop_epoll()
           # 会用 epoll_pwait2( -1, ... ) 探测内核是否支持该 syscall。
           # box64 v0.4.5 的 epoll_pwait2 wrapper 在 fd=-1 时解引用空指针：
@@ -777,23 +793,41 @@ jobs:
           find /tmp/wine-install-proton/bin -maxdepth 1 -type l -printf '  %f -> %l\n' 2>/dev/null || true
           echo "=== bin/ 内容 ==="
           ls -la /tmp/wine-install-proton/bin/ | head -30
-          cd ../..
           VERSION_PROTON=$(
-            cd wine
-            git describe --tags --abbrev=0 2>/dev/null \
+            git -C "$WINE_SOURCE_DIR" describe --tags --abbrev=0 2>/dev/null \
               || echo "$PROTON_BRANCH"
           )
-          COMMIT_HASH=$(
-            cd wine
-            git rev-parse --short HEAD
-          )
+          COMMIT_HASH="$(git -C "$WINE_SOURCE_DIR" rev-parse --short HEAD)"
           PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
           echo "PROTON_VERSION=$PROTON_VERSION" >> "$GITHUB_ENV"
-          # artifact 名禁止斜杠，生成安全分支名供包名/标签复用
+          # artifact 名禁止斜杠；Valve 使用独立名称，避免覆盖其他来源的同名分支。
           SAFE_PROTON_BRANCH="$(printf '%s' "$PROTON_BRANCH" | tr '/' '-')"
+          if [ "$PROTON_REPO" = "ValveSoftware/Proton" ]; then
+            SAFE_PROTON_BRANCH="valve-${SAFE_PROTON_BRANCH}"
+          fi
           echo "SAFE_PROTON_BRANCH=$SAFE_PROTON_BRANCH" >> "$GITHUB_ENV"
-          # 压缩包名与 artifact 名统一：Proton-<分支>-WoW64
-          echo "BUILD_NAME=Proton-${SAFE_PROTON_BRANCH}-WoW64" >> "$GITHUB_ENV"
+          BUILD_NAME="Proton-${SAFE_PROTON_BRANCH}-WoW64"
+          echo "BUILD_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
+          # 将超级项目与实际 Wine 的独立提交一起写入安装包，方便追溯。
+          {
+            echo "Build name: $BUILD_NAME"
+            echo "Build scope: Wine component with Termux patches (x86_64/i386 WoW64)"
+            echo "Source repository: $PROTON_REPO"
+            echo "Source branch: $PROTON_BRANCH"
+            echo "Source commit: $PROTON_SOURCE_COMMIT"
+            echo "Wine commit: $WINE_SOURCE_COMMIT"
+            echo "Workflow commit: $GITHUB_SHA"
+            echo "Workflow run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > /tmp/wine-install-proton/BUILD_INFO.txt
+          {
+            echo "### Proton Wine source"
+            echo "- Repository: $PROTON_REPO"
+            echo "- Branch: $PROTON_BRANCH"
+            echo "- Source commit: $PROTON_SOURCE_COMMIT"
+            echo "- Wine commit: $WINE_SOURCE_COMMIT"
+            echo "- Package: $BUILD_NAME"
+            echo "- Scope: Wine component with Termux patches (x86_64/i386 WoW64)"
+          } >> "$GITHUB_STEP_SUMMARY"
       # --------------------------------------------------------
       # Proton 瘦身
       # --------------------------------------------------------
@@ -1042,7 +1076,7 @@ jobs:
       # --------------------------------------------------------
 
       - name: 发布 Proton 到 GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
 
         if: >
           github.event_name == 'workflow_dispatch'
@@ -1052,6 +1086,7 @@ jobs:
         with:
 
           tag_name: proton-${{ env.SAFE_PROTON_BRANCH || github.event.inputs.proton_branch || 'proton_10.0' }}-wow64
+          target_commitish: ${{ github.sha }}
 
           name: Proton ${{ env.SAFE_PROTON_BRANCH || github.event.inputs.proton_branch || 'proton_10.0' }} (WOW64 with Vulkan & GStreamer for Termux)
 
@@ -1061,7 +1096,12 @@ jobs:
 
             ## 版本信息
 
-            - Proton 分支: `${{ github.event.inputs.proton_branch || 'proton_10.0' }}`
+            - 源码仓库: `${{ env.PROTON_SOURCE_REPO }}`
+            - Proton 分支: `${{ env.PROTON_SOURCE_BRANCH }}`
+            - 源码提交: `${{ env.PROTON_SOURCE_COMMIT }}`
+            - Wine 提交: `${{ env.WINE_SOURCE_COMMIT }}`
+            - 构建范围: Wine 组件与 Termux 补丁（x86_64/i386 WoW64）
+            - 构建记录: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
             - 架构: True WOW64
             - 平台: Termux / Android
             - Vulkan: Enabled
@@ -1085,6 +1125,8 @@ jobs:
 
             ## 注意
 
+            压缩包中的 `BUILD_INFO.txt` 记录源仓库、超级项目提交与实际 Wine 提交。
+            Valve 来源按该分支的 Wine 子模块构建；完整 Proton 发行版的 Steam Runtime、DXVK 等组件由独立构建流程提供。
             `share/wine` 等 Wine runtime 数据保持不变。
 
           files: |
@@ -2737,7 +2779,7 @@ jobs:
       # ========================================================
 
       - name: 发布 Wine 到 GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
 
         if: >
           github.event_name == 'workflow_dispatch'
