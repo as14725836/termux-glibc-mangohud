@@ -1246,6 +1246,27 @@ jobs:
           echo "cs-guard self-check: guard=$(grep -c 'cs-timeout-guard' dlls/ntdll/sync.c 2>/dev/null || echo 0) dump=$(grep -c 'cs-guard: waiter stack' dlls/ntdll/sync.c 2>/dev/null || echo 0) spin=$(grep -c '0xfa0' dlls/ntdll/heap.c 2>/dev/null || echo 0)"
 
       # ============================================================
+      # 7.8 WOW64 32-bit stack pre-commit (ARM64EC/FEX stack overflow fix)
+      # ============================================================
+      - name: WOW64 32-bit stack pre-commit (FEX stack overflow fix)
+        shell: bash
+        run: |
+          set -eux
+          cd "${WINE_SOURCE_DIR}/source"
+          _p="${GITHUB_WORKSPACE:-$PWD}/patches/wow64/stack-precommit.py"
+          # In CI GITHUB_WORKSPACE is the checkout; try that path then the raw file
+          if [ ! -f "$_p" ]; then
+            curl -fsSL --retry 2 -o /tmp/stack-precommit.py \
+              "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/stack-precommit.py" \
+              || wget -q -O /tmp/stack-precommit.py \
+              "https://raw.githubusercontent.com/as14725836/termux-glibc-mangohud/main/patches/wow64/stack-precommit.py" \
+              || { echo "WARN: stack-precommit.py 不可用，跳过"; exit 0; }
+            _p=/tmp/stack-precommit.py
+          fi
+          python3 "$_p" "$(pwd)"
+          echo "stack self-check: precommit=$(grep -c 'termux-wow64-stack' dlls/ntdll/unix/virtual.c 2>/dev/null || echo 0)"
+
+      # ============================================================
       # 8. Termux compatibility patches
       # ============================================================
       - name: Termux compatibility patches
